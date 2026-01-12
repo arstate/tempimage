@@ -4,7 +4,7 @@ import { UploadZone } from './components/UploadZone';
 import { ImageCard } from './components/ImageCard';
 import { StoredImage } from './types';
 import { getAllImagesFromDB, saveImageToDB, deleteImageFromDB } from './services/db';
-import { LayoutGrid, Image as ImageIcon, Search, Trash2, Github, X } from 'lucide-react';
+import { LayoutGrid, Image as ImageIcon, Search, Trash2, X } from 'lucide-react';
 
 const App: React.FC = () => {
   const [images, setImages] = useState<StoredImage[]>([]);
@@ -94,11 +94,6 @@ const App: React.FC = () => {
               Zombio <span className="text-blue-500">Vault</span>
             </h1>
           </div>
-          <div className="flex items-center gap-4">
-             <a href="https://github.com" className="text-slate-400 hover:text-white transition-colors">
-               <Github size={20} />
-             </a>
-          </div>
         </div>
       </header>
 
@@ -139,7 +134,7 @@ const App: React.FC = () => {
         )}
       </main>
 
-      {/* MODAL FULLSCREEN (Mirip Screenshot Anda) */}
+      {/* MODAL FULLSCREEN */}
       {previewUrl && (
         <div 
           className="fixed inset-0 z-[100] bg-black flex items-center justify-center p-4 sm:p-10 transition-all"
@@ -149,20 +144,18 @@ const App: React.FC = () => {
             <X size={32} />
           </button>
           
-          {/* Gambar ini bisa di-drag langsung seperti di fullscreen browser asli */}
           <img 
             src={previewUrl} 
             alt="Preview" 
             className="max-w-full max-h-full object-contain shadow-2xl cursor-move"
             onClick={(e) => e.stopPropagation()}
             onDragStart={(e) => {
-              // Jika ditarik dari sini, browser akan secara native menganggap ini file
               e.dataTransfer.effectAllowed = 'copy';
             }}
           />
           
-          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 text-white/40 text-xs uppercase tracking-[0.2em] pointer-events-none">
-            Klik di mana saja untuk kembali • Bisa drag gambar langsung ke WA
+          <div className="absolute bottom-6 left-1/2 -translate-x-1/2 text-white/40 text-xs uppercase tracking-[0.2em] pointer-events-none text-center">
+            Klik di mana saja untuk kembali • Bisa drag gambar langsung ke aplikasi lain
           </div>
         </div>
       )}
