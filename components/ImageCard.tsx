@@ -1,5 +1,5 @@
 
-import React, { useMemo, useRef } from 'react';
+import React, { useMemo, useRef, useEffect } from 'react';
 import { Trash2, Maximize2, Download, GripVertical } from 'lucide-react';
 import { StoredImage } from '../types';
 
@@ -11,10 +11,12 @@ interface ImageCardProps {
 
 export const ImageCard: React.FC<ImageCardProps> = ({ image, onDelete, onMaximize }) => {
   const imgRef = useRef<HTMLImageElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
   const formattedSize = (image.size / 1024 / 1024).toFixed(2) + ' MB';
   const formattedDate = new Date(image.timestamp).toLocaleDateString();
 
-  // Konversi Base64 ke File Object & Blob URL
+  // Membangun Blob URL dan File Object
   const { blobUrl, fileObject } = useMemo(() => {
     try {
       const parts = image.data.split(',');
@@ -35,6 +37,15 @@ export const ImageCard: React.FC<ImageCardProps> = ({ image, onDelete, onMaximiz
     }
   }, [image.data, image.type, image.name]);
 
+  // Cleanup Blob URL saat komponen unmount
+  useEffect(() => {
+    return () => {
+      if (blobUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(blobUrl);
+      }
+    };
+  }, [blobUrl]);
+
   const handleDownload = () => {
     const link = document.createElement('a');
     link.href = blobUrl;
@@ -47,72 +58,74 @@ export const ImageCard: React.FC<ImageCardProps> = ({ image, onDelete, onMaximiz
   const handleDragStart = (e: React.DragEvent) => {
     const dt = e.dataTransfer;
     
-    // 1. Kirim File Fisik (Sangat penting untuk WA/Telegram)
+    // Memberitahu browser bahwa ini adalah aksi pemindahan file
+    dt.effectAllowed = 'all';
+
+    // 1. Tambahkan File Fisik (Metode utama untuk aplikasi modern seperti WA/Telegram)
     if (fileObject) {
       dt.items.add(fileObject);
     }
 
-    // 2. Metadata tambahan
-    dt.setData('DownloadURL', `${image.type}:${image.name}:${blobUrl}`);
+    // 2. DownloadURL Hack (Metode klasik untuk drag ke Desktop/Folder di Chrome/Edge)
+    // Format: "mime:filename:url"
+    const downloadData = `${image.type}:${image.name}:${blobUrl}`;
+    dt.setData('DownloadURL', downloadData);
+
+    // 3. Fallback Link & Teks
     dt.setData('text/uri-list', blobUrl);
     dt.setData('text/plain', image.name);
     
-    // 3. HTML Fallback (Base64 agar tujuan bisa baca langsung)
+    // 4. HTML Fallback (Base64 agar beberapa aplikasi bisa langsung merender)
     dt.setData('text/html', `<img src="${image.data}" alt="${image.name}" />`);
 
-    dt.effectAllowed = 'copyMove';
-
-    // 4. FIX GHOST IMAGE: Gunakan gambar asli agar tidak kotak (square) saat ditarik
-    const dragIcon = new Image();
-    dragIcon.src = blobUrl;
-    
-    // Kita buat ukuran ghost image yang proporsional (max 200px) agar tidak terlalu besar di layar
-    // Namun tetap mempertahankan aspek rasio asli (seperti fullscreen)
-    dt.setDragImage(imgRef.current!, 50, 50);
+    // 5. GHOST IMAGE: Gunakan elemen gambar asli agar bayangannya tidak kotak
+    if (imgRef.current) {
+      // Kita set titik pusat tarikan di tengah gambar
+      dt.setDragImage(imgRef.current, imgRef.current.clientWidth / 2, imgRef.current.clientHeight / 2);
+    }
   };
 
   return (
     <div 
-      className="group relative bg-slate-800 rounded-xl overflow-hidden border border-slate-700 hover:border-blue-500/50 transition-all duration-300 shadow-lg hover:shadow-blue-500/10"
+      ref={containerRef}
+      draggable="true"
+      onDragStart={handleDragStart}
+      className="group relative bg-slate-800 rounded-xl overflow-hidden border border-slate-700 hover:border-blue-500/50 transition-all duration-300 shadow-lg hover:shadow-blue-500/10 cursor-grab active:cursor-grabbing"
     >
-      {/* Pegangan Drag */}
-      <div 
-        draggable="true"
-        onDragStart={handleDragStart}
-        className="absolute top-2 left-2 z-30 opacity-0 group-hover:opacity-100 transition-opacity bg-blue-600 p-1.5 rounded-lg shadow-xl cursor-grab active:cursor-grabbing border border-blue-400"
-      >
-        <GripVertical size={16} className="text-white" />
+      {/* Indikator Draggable */}
+      <div className="absolute top-2 left-2 z-30 opacity-0 group-hover:opacity-100 transition-opacity bg-blue-600/80 backdrop-blur-sm p-1 rounded border border-blue-400/50 pointer-events-none">
+        <GripVertical size={14} className="text-white" />
       </div>
 
-      <div className="aspect-square w-full overflow-hidden bg-slate-900 flex items-center justify-center">
+      <div className="aspect-square w-full overflow-hidden bg-slate-900 flex items-center justify-center pointer-events-none">
         <img
           ref={imgRef}
           src={blobUrl}
           alt={image.name}
           className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
           loading="lazy"
-          draggable="false"
+          draggable="false" // Kita handle drag via kontainer induk
         />
       </div>
       
-      {/* Tombol Aksi */}
+      {/* Overlay Aksi - Hanya muncul saat hover, dipisahkan dari area drag jika perlu */}
       <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center gap-4 z-20">
         <button
-          onClick={() => onMaximize(blobUrl)}
+          onClick={(e) => { e.stopPropagation(); onMaximize(blobUrl); }}
           className="p-3 bg-white/10 hover:bg-white/20 rounded-full transition-colors text-white"
           title="Tampilan Fullscreen"
         >
           <Maximize2 size={20} />
         </button>
         <button
-          onClick={handleDownload}
+          onClick={(e) => { e.stopPropagation(); handleDownload(); }}
           className="p-3 bg-white/10 hover:bg-white/20 rounded-full transition-colors text-white"
           title="Download"
         >
           <Download size={20} />
         </button>
         <button
-          onClick={() => onDelete(image.id)}
+          onClick={(e) => { e.stopPropagation(); onDelete(image.id); }}
           className="p-3 bg-red-500/20 hover:bg-red-500/40 rounded-full transition-colors text-red-400"
           title="Hapus"
         >
@@ -120,11 +133,12 @@ export const ImageCard: React.FC<ImageCardProps> = ({ image, onDelete, onMaximiz
         </button>
       </div>
 
-      <div className="p-3 flex flex-col bg-slate-800/90 backdrop-blur-sm pointer-events-none">
+      {/* Info File */}
+      <div className="p-3 flex flex-col bg-slate-800/90 backdrop-blur-sm pointer-events-none border-t border-slate-700/50">
         <span className="text-sm font-medium truncate text-slate-200">{image.name}</span>
         <div className="flex justify-between items-center mt-1">
-          <span className="text-[10px] text-slate-500 uppercase">{formattedSize}</span>
-          <span className="text-[10px] text-slate-500 uppercase">{formattedDate}</span>
+          <span className="text-[10px] text-slate-500 uppercase tracking-tighter">{formattedSize}</span>
+          <span className="text-[10px] text-slate-500 uppercase tracking-tighter">{formattedDate}</span>
         </div>
       </div>
     </div>
