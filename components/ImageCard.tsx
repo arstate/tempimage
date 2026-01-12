@@ -10,13 +10,13 @@ interface ImageCardProps {
 }
 
 export const ImageCard: React.FC<ImageCardProps> = ({ image, onDelete, onMaximize }) => {
-  const imgRef = useRef<HTMLImageElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const fullImageRef = useRef<HTMLImageElement>(null); // Ref untuk gambar asli (tidak terpotong)
 
   const formattedSize = (image.size / 1024 / 1024).toFixed(2) + ' MB';
   const formattedDate = new Date(image.timestamp).toLocaleDateString();
 
-  // Membangun Blob URL dan File Object
+  // Konversi Base64 ke File Object & Blob URL
   const { blobUrl, fileObject } = useMemo(() => {
     try {
       const parts = image.data.split(',');
@@ -37,7 +37,7 @@ export const ImageCard: React.FC<ImageCardProps> = ({ image, onDelete, onMaximiz
     }
   }, [image.data, image.type, image.name]);
 
-  // Cleanup Blob URL saat komponen unmount
+  // Cleanup Blob URL
   useEffect(() => {
     return () => {
       if (blobUrl.startsWith('blob:')) {
@@ -57,31 +57,27 @@ export const ImageCard: React.FC<ImageCardProps> = ({ image, onDelete, onMaximiz
 
   const handleDragStart = (e: React.DragEvent) => {
     const dt = e.dataTransfer;
-    
-    // Memberitahu browser bahwa ini adalah aksi pemindahan file
     dt.effectAllowed = 'all';
 
-    // 1. Tambahkan File Fisik (Metode utama untuk aplikasi modern seperti WA/Telegram)
+    // 1. Kirim File Fisik (Penting untuk WA/Telegram/Explorer)
     if (fileObject) {
       dt.items.add(fileObject);
     }
 
-    // 2. DownloadURL Hack (Metode klasik untuk drag ke Desktop/Folder di Chrome/Edge)
-    // Format: "mime:filename:url"
-    const downloadData = `${image.type}:${image.name}:${blobUrl}`;
-    dt.setData('DownloadURL', downloadData);
-
-    // 3. Fallback Link & Teks
+    // 2. Metadata untuk Drag to Desktop (Chrome/Edge)
+    dt.setData('DownloadURL', `${image.type}:${image.name}:${blobUrl}`);
     dt.setData('text/uri-list', blobUrl);
     dt.setData('text/plain', image.name);
     
-    // 4. HTML Fallback (Base64 agar beberapa aplikasi bisa langsung merender)
+    // 3. HTML Fallback
     dt.setData('text/html', `<img src="${image.data}" alt="${image.name}" />`);
 
-    // 5. GHOST IMAGE: Gunakan elemen gambar asli agar bayangannya tidak kotak
-    if (imgRef.current) {
-      // Kita set titik pusat tarikan di tengah gambar
-      dt.setDragImage(imgRef.current, imgRef.current.clientWidth / 2, imgRef.current.clientHeight / 2);
+    // 4. FIX GHOST IMAGE: Gunakan gambar 'fullImageRef' yang tidak terpotong
+    if (fullImageRef.current) {
+      // Kita set bayangan drag menggunakan elemen yang aslinya (aspect ratio terjaga)
+      // Titik tangkap (offset) disesuaikan agar terasa natural
+      const rect = fullImageRef.current.getBoundingClientRect();
+      dt.setDragImage(fullImageRef.current, rect.width / 2, rect.height / 2);
     }
   };
 
@@ -92,42 +88,49 @@ export const ImageCard: React.FC<ImageCardProps> = ({ image, onDelete, onMaximiz
       onDragStart={handleDragStart}
       className="group relative bg-slate-800 rounded-xl overflow-hidden border border-slate-700 hover:border-blue-500/50 transition-all duration-300 shadow-lg hover:shadow-blue-500/10 cursor-grab active:cursor-grabbing"
     >
-      {/* Indikator Draggable */}
+      {/* ELEMEN TERSEMBUNYI UNTUK GHOST IMAGE (DIPERLUKAN AGAR TIDAK TERPOTONG SAAT DRAG) */}
+      <div className="fixed -top-[9999px] -left-[9999px] pointer-events-none opacity-0">
+        <img
+          ref={fullImageRef}
+          src={blobUrl}
+          alt="drag-preview"
+          className="max-w-[300px] h-auto" // Ukuran bayangan tidak boleh terlalu raksasa
+        />
+      </div>
+
+      {/* Indikator Drag */}
       <div className="absolute top-2 left-2 z-30 opacity-0 group-hover:opacity-100 transition-opacity bg-blue-600/80 backdrop-blur-sm p-1 rounded border border-blue-400/50 pointer-events-none">
         <GripVertical size={14} className="text-white" />
       </div>
 
+      {/* Preview Galeri (Tetap Square/Terpotong demi estetika grid) */}
       <div className="aspect-square w-full overflow-hidden bg-slate-900 flex items-center justify-center pointer-events-none">
         <img
-          ref={imgRef}
           src={blobUrl}
           alt={image.name}
           className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
           loading="lazy"
-          draggable="false" // Kita handle drag via kontainer induk
+          draggable="false"
         />
       </div>
       
-      {/* Overlay Aksi - Hanya muncul saat hover, dipisahkan dari area drag jika perlu */}
+      {/* Tombol Aksi */}
       <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex items-center justify-center gap-4 z-20">
         <button
           onClick={(e) => { e.stopPropagation(); onMaximize(blobUrl); }}
           className="p-3 bg-white/10 hover:bg-white/20 rounded-full transition-colors text-white"
-          title="Tampilan Fullscreen"
         >
           <Maximize2 size={20} />
         </button>
         <button
           onClick={(e) => { e.stopPropagation(); handleDownload(); }}
           className="p-3 bg-white/10 hover:bg-white/20 rounded-full transition-colors text-white"
-          title="Download"
         >
           <Download size={20} />
         </button>
         <button
           onClick={(e) => { e.stopPropagation(); onDelete(image.id); }}
           className="p-3 bg-red-500/20 hover:bg-red-500/40 rounded-full transition-colors text-red-400"
-          title="Hapus"
         >
           <Trash2 size={20} />
         </button>
@@ -137,8 +140,8 @@ export const ImageCard: React.FC<ImageCardProps> = ({ image, onDelete, onMaximiz
       <div className="p-3 flex flex-col bg-slate-800/90 backdrop-blur-sm pointer-events-none border-t border-slate-700/50">
         <span className="text-sm font-medium truncate text-slate-200">{image.name}</span>
         <div className="flex justify-between items-center mt-1">
-          <span className="text-[10px] text-slate-500 uppercase tracking-tighter">{formattedSize}</span>
-          <span className="text-[10px] text-slate-500 uppercase tracking-tighter">{formattedDate}</span>
+          <span className="text-[10px] text-slate-500 uppercase">{formattedSize}</span>
+          <span className="text-[10px] text-slate-500 uppercase">{formattedDate}</span>
         </div>
       </div>
     </div>
