@@ -1,9 +1,16 @@
 
+export interface Gallery {
+  id: string;
+  name: string;
+  timestamp: number;
+}
+
 export interface StoredImage {
   id: string;
+  galleryId: string;
   name: string;
   type: string;
   size: number;
-  data: string; // Base64 or Blob Data URL
+  data: string;
   timestamp: number;
 }
