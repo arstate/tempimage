@@ -1,5 +1,5 @@
 {
-  "name": "Zombio Gallery Storage",
-  "description": "A high-performance image gallery with drag-and-drop, clipboard paste, and persistent IndexedDB storage.",
+  "name": "tempimg",
+  "description": "A high-performance image gallery with folders, drag-and-drop, and persistent IndexedDB storage.",
   "requestFramePermissions": []
 }

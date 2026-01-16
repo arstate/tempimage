@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { UploadZone } from './components/UploadZone';
 import { ImageCard } from './components/ImageCard';
 import { Gallery, StoredImage } from './types';
@@ -7,7 +7,19 @@ import {
   getGalleries, saveGallery, deleteGallery, 
   getImagesByGallery, saveImage, deleteImage 
 } from './services/db';
-import { Folder, Plus, ArrowLeft, Image as ImageIcon, X, Clipboard, LayoutGrid, Trash2 } from 'lucide-react';
+import { Folder, Plus, ArrowLeft, Image as ImageIcon, X, Clipboard, LayoutGrid, Trash2, AlertCircle } from 'lucide-react';
+
+type ModalType = 'input' | 'confirm' | 'alert' | null;
+
+interface ModalState {
+  type: ModalType;
+  title: string;
+  message?: string;
+  inputValue?: string;
+  onConfirm?: (value?: string) => void;
+  confirmText?: string;
+  isDanger?: boolean;
+}
 
 const App: React.FC = () => {
   const [galleries, setGalleries] = useState<Gallery[]>([]);
@@ -15,11 +27,21 @@ const App: React.FC = () => {
   const [images, setImages] = useState<StoredImage[]>([]);
   const [loading, setLoading] = useState(true);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  
+  // Custom Modal State
+  const [modal, setModal] = useState<ModalState | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
-  // Load Galleries
   useEffect(() => {
     loadGalleries();
   }, []);
+
+  // Auto-focus input when modal opens
+  useEffect(() => {
+    if (modal?.type === 'input' && inputRef.current) {
+      inputRef.current.focus();
+    }
+  }, [modal]);
 
   const loadGalleries = async () => {
     setLoading(true);
@@ -30,19 +52,28 @@ const App: React.FC = () => {
 
   const loadImages = async (galleryId: string) => {
     const stored = await getImagesByGallery(galleryId);
-    setImages(stored.sort((a, b) => a.timestamp - b.timestamp)); // Sort by oldest to keep numbering consistent
+    setImages(stored.sort((a, b) => a.timestamp - b.timestamp));
   };
 
-  const handleCreateGallery = async () => {
-    const name = prompt('Nama Galeri Baru:');
-    if (!name) return;
-    const newGallery: Gallery = {
-      id: crypto.randomUUID(),
-      name,
-      timestamp: Date.now()
-    };
-    await saveGallery(newGallery);
-    setGalleries(prev => [newGallery, ...prev]);
+  const handleCreateGalleryDialog = () => {
+    setModal({
+      type: 'input',
+      title: 'Buat Galeri Baru',
+      message: 'Masukkan nama untuk folder galeri Anda:',
+      inputValue: '',
+      confirmText: 'Buat Galeri',
+      onConfirm: async (name) => {
+        if (!name?.trim()) return;
+        const newGallery: Gallery = {
+          id: crypto.randomUUID(),
+          name: name.trim(),
+          timestamp: Date.now()
+        };
+        await saveGallery(newGallery);
+        setGalleries(prev => [newGallery, ...prev]);
+        setModal(null);
+      }
+    });
   };
 
   const selectGallery = (gallery: Gallery) => {
@@ -77,10 +108,9 @@ const App: React.FC = () => {
     setImages(prev => [...prev, ...newImages]);
   }, [currentGallery]);
 
-  // Paste Support for current gallery
   useEffect(() => {
     const handlePaste = (e: ClipboardEvent) => {
-      if (!currentGallery) return;
+      if (!currentGallery || modal) return;
       const items = e.clipboardData?.items;
       if (!items) return;
       const files: File[] = [];
@@ -94,21 +124,37 @@ const App: React.FC = () => {
     };
     window.addEventListener('paste', handlePaste);
     return () => window.removeEventListener('paste', handlePaste);
-  }, [currentGallery, processFiles]);
+  }, [currentGallery, processFiles, modal]);
 
-  const handleDeleteImage = async (id: string) => {
-    if (confirm('Hapus foto ini?')) {
-      await deleteImage(id);
-      setImages(prev => prev.filter(img => img.id !== id));
-    }
+  const handleDeleteImageDialog = (id: string) => {
+    setModal({
+      type: 'confirm',
+      title: 'Hapus Foto?',
+      message: 'Foto ini akan dihapus secara permanen dari database lokal Anda.',
+      confirmText: 'Ya, Hapus',
+      isDanger: true,
+      onConfirm: async () => {
+        await deleteImage(id);
+        setImages(prev => prev.filter(img => img.id !== id));
+        setModal(null);
+      }
+    });
   };
 
-  const handleDeleteGallery = async (id: string, e: React.MouseEvent) => {
+  const handleDeleteGalleryDialog = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (confirm('Hapus seluruh galeri dan semua foto di dalamnya?')) {
-      await deleteGallery(id);
-      setGalleries(prev => prev.filter(g => g.id !== id));
-    }
+    setModal({
+      type: 'confirm',
+      title: 'Hapus Seluruh Galeri?',
+      message: 'Semua foto di dalam galeri ini akan ikut terhapus secara permanen.',
+      confirmText: 'Hapus Galeri',
+      isDanger: true,
+      onConfirm: async () => {
+        await deleteGallery(id);
+        setGalleries(prev => prev.filter(g => g.id !== id));
+        setModal(null);
+      }
+    });
   };
 
   return (
@@ -131,14 +177,14 @@ const App: React.FC = () => {
             )}
             <h1 className="text-xl font-bold">
               {currentGallery ? currentGallery.name : (
-                <>Zombio <span className="text-blue-500">Vault</span></>
+                <>temp<span className="text-blue-500">img</span></>
               )}
             </h1>
           </div>
           
           {!currentGallery && (
             <button 
-              onClick={handleCreateGallery}
+              onClick={handleCreateGalleryDialog}
               className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-all shadow-lg"
             >
               <Plus size={18} />
@@ -154,7 +200,6 @@ const App: React.FC = () => {
             <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
           </div>
         ) : !currentGallery ? (
-          /* GALLERY LIST VIEW */
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
             {galleries.length === 0 ? (
               <div className="col-span-full py-20 text-center flex flex-col items-center gap-4 border-2 border-dashed border-slate-800 rounded-2xl">
@@ -169,8 +214,8 @@ const App: React.FC = () => {
                   className="group relative bg-slate-900 border border-slate-800 p-6 rounded-2xl hover:border-blue-500/50 cursor-pointer transition-all hover:shadow-xl hover:shadow-blue-500/5"
                 >
                   <button 
-                    onClick={(e) => handleDeleteGallery(g.id, e)}
-                    className="absolute top-4 right-4 text-slate-600 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                    onClick={(e) => handleDeleteGalleryDialog(g.id, e)}
+                    className="absolute top-4 right-4 text-slate-600 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity p-1"
                   >
                     <Trash2 size={18} />
                   </button>
@@ -186,7 +231,6 @@ const App: React.FC = () => {
             )}
           </div>
         ) : (
-          /* GALLERY DETAIL VIEW */
           <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-300">
             <UploadZone onFilesSelected={processFiles} />
             
@@ -199,16 +243,31 @@ const App: React.FC = () => {
                   onClick={async () => {
                     try {
                       const clipboardItems = await navigator.clipboard.read();
+                      let found = false;
                       for (const item of clipboardItems) {
                         const imageTypes = item.types.filter(t => t.startsWith('image/'));
                         if (imageTypes.length > 0) {
                           const blob = await item.getType(imageTypes[0]);
                           const file = new File([blob], `Pasted_${Date.now()}.png`, { type: blob.type });
                           processFiles([file]);
+                          found = true;
                         }
                       }
+                      if (!found) {
+                        setModal({
+                          type: 'alert',
+                          title: 'Clipboard Kosong',
+                          message: 'Tidak ada gambar yang ditemukan di clipboard Anda.',
+                          confirmText: 'OK'
+                        });
+                      }
                     } catch (e) {
-                      alert("Gunakan Ctrl+V atau pastikan izin clipboard aktif");
+                      setModal({
+                        type: 'alert',
+                        title: 'Akses Ditolak',
+                        message: 'Berikan izin akses clipboard atau gunakan shortcut keyboard Ctrl+V.',
+                        confirmText: 'Paham'
+                      });
                     }
                   }}
                   className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 px-4 py-2 rounded-lg text-xs font-bold transition-all border border-slate-700 text-blue-300"
@@ -226,7 +285,7 @@ const App: React.FC = () => {
                   key={img.id} 
                   image={img} 
                   index={idx}
-                  onDelete={handleDeleteImage}
+                  onDelete={handleDeleteImageDialog}
                   onMaximize={setPreviewUrl}
                 />
               ))}
@@ -240,7 +299,7 @@ const App: React.FC = () => {
         )}
       </main>
 
-      {/* MODAL FULLSCREEN */}
+      {/* FULLSCREEN PREVIEW */}
       {previewUrl && (
         <div 
           className="fixed inset-0 z-[100] bg-black/95 flex items-center justify-center p-4 backdrop-blur-sm"
@@ -258,11 +317,66 @@ const App: React.FC = () => {
         </div>
       )}
 
+      {/* CUSTOM SYSTEM MODAL */}
+      {modal && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200" onClick={() => setModal(null)} />
+          
+          <div className="relative w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
+            <div className="p-6 space-y-4">
+              <div className="flex items-center gap-3">
+                <div className={`p-2 rounded-lg ${modal.isDanger ? 'bg-red-500/10 text-red-500' : 'bg-blue-500/10 text-blue-500'}`}>
+                  {modal.type === 'confirm' ? <Trash2 size={24} /> : modal.type === 'alert' ? <AlertCircle size={24} /> : <Folder size={24} />}
+                </div>
+                <h3 className="text-xl font-bold">{modal.title}</h3>
+              </div>
+              
+              {modal.message && <p className="text-slate-400 text-sm leading-relaxed">{modal.message}</p>}
+              
+              {modal.type === 'input' && (
+                <input
+                  ref={inputRef}
+                  type="text"
+                  value={modal.inputValue}
+                  onChange={(e) => setModal({ ...modal, inputValue: e.target.value })}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') modal.onConfirm?.(modal.inputValue);
+                    if (e.key === 'Escape') setModal(null);
+                  }}
+                  placeholder="Contoh: tempimg UI"
+                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500/50 transition-all text-white"
+                />
+              )}
+            </div>
+            
+            <div className="flex border-t border-slate-800 p-4 gap-3 bg-slate-900/50">
+              {modal.type !== 'alert' && (
+                <button
+                  onClick={() => setModal(null)}
+                  className="flex-1 py-3 px-4 rounded-xl text-sm font-semibold text-slate-400 hover:bg-slate-800 transition-colors"
+                >
+                  Batal
+                </button>
+              )}
+              <button
+                onClick={() => modal.onConfirm ? modal.onConfirm(modal.inputValue) : setModal(null)}
+                className={`flex-1 py-3 px-4 rounded-xl text-sm font-semibold transition-all shadow-lg
+                  ${modal.isDanger 
+                    ? 'bg-red-600 hover:bg-red-500 text-white' 
+                    : 'bg-blue-600 hover:bg-blue-500 text-white'}`}
+              >
+                {modal.confirmText || 'OK'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Footer Info */}
       <footer className="fixed bottom-0 left-0 right-0 bg-slate-950/90 border-t border-slate-900 py-3 px-6 backdrop-blur-md z-40">
         <div className="max-w-7xl mx-auto flex justify-between items-center text-[10px] text-slate-500 uppercase tracking-widest font-mono">
           <span>Database: IndexedDB v2</span>
-          <span>{currentGallery ? `Browsing: ${currentGallery.name}` : 'Vault Overview'}</span>
+          <span>{currentGallery ? `Browsing: ${currentGallery.name}` : 'tempimg Overview'}</span>
         </div>
       </footer>
     </div>
