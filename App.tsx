@@ -2,12 +2,15 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { UploadZone } from './components/UploadZone';
 import { ImageCard } from './components/ImageCard';
-import { Gallery, StoredImage } from './types';
+import { NoteCard } from './components/NoteCard';
+import { TextEditor } from './components/TextEditor';
+import { Gallery, StoredImage, StoredNote } from './types';
 import { 
   getGalleries, saveGallery, deleteGallery, 
-  getImagesByGallery, saveImage, deleteImage 
+  getImagesByGallery, saveImage, deleteImage,
+  getNotesByGallery, saveNote, deleteNote
 } from './services/db';
-import { Folder, Plus, ArrowLeft, Image as ImageIcon, X, Clipboard, LayoutGrid, Trash2, AlertCircle } from 'lucide-react';
+import { Folder, Plus, ArrowLeft, Image as ImageIcon, X, Clipboard, LayoutGrid, Trash2, AlertCircle, FileText } from 'lucide-react';
 
 type ModalType = 'input' | 'confirm' | 'alert' | null;
 
@@ -25,8 +28,10 @@ const App: React.FC = () => {
   const [galleries, setGalleries] = useState<Gallery[]>([]);
   const [currentGallery, setCurrentGallery] = useState<Gallery | null>(null);
   const [images, setImages] = useState<StoredImage[]>([]);
+  const [notes, setNotes] = useState<StoredNote[]>([]); // State for notes
   const [loading, setLoading] = useState(true);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  const [editingNote, setEditingNote] = useState<StoredNote | null>(null); // State for editor
   
   // Custom Modal State
   const [modal, setModal] = useState<ModalState | null>(null);
@@ -50,9 +55,13 @@ const App: React.FC = () => {
     setLoading(false);
   };
 
-  const loadImages = async (galleryId: string) => {
-    const stored = await getImagesByGallery(galleryId);
-    setImages(stored.sort((a, b) => a.timestamp - b.timestamp));
+  const loadGalleryData = async (galleryId: string) => {
+    const [storedImages, storedNotes] = await Promise.all([
+      getImagesByGallery(galleryId),
+      getNotesByGallery(galleryId)
+    ]);
+    setImages(storedImages.sort((a, b) => a.timestamp - b.timestamp));
+    setNotes(storedNotes.sort((a, b) => b.timestamp - a.timestamp)); // Newest notes first
   };
 
   const handleCreateGalleryDialog = () => {
@@ -78,7 +87,7 @@ const App: React.FC = () => {
 
   const selectGallery = (gallery: Gallery) => {
     setCurrentGallery(gallery);
-    loadImages(gallery.id);
+    loadGalleryData(gallery.id);
   };
 
   const processFiles = useCallback(async (files: FileList | File[]) => {
@@ -110,7 +119,7 @@ const App: React.FC = () => {
 
   useEffect(() => {
     const handlePaste = (e: ClipboardEvent) => {
-      if (!currentGallery || modal) return;
+      if (!currentGallery || modal || editingNote) return; // Disable paste when editor is open
       const items = e.clipboardData?.items;
       if (!items) return;
       const files: File[] = [];
@@ -124,7 +133,7 @@ const App: React.FC = () => {
     };
     window.addEventListener('paste', handlePaste);
     return () => window.removeEventListener('paste', handlePaste);
-  }, [currentGallery, processFiles, modal]);
+  }, [currentGallery, processFiles, modal, editingNote]);
 
   const handleDeleteImageDialog = (id: string) => {
     setModal({
@@ -146,12 +155,65 @@ const App: React.FC = () => {
     setModal({
       type: 'confirm',
       title: 'Hapus Seluruh Galeri?',
-      message: 'Semua foto di dalam galeri ini akan ikut terhapus secara permanen.',
+      message: 'Semua foto dan catatan di dalam galeri ini akan ikut terhapus secara permanen.',
       confirmText: 'Hapus Galeri',
       isDanger: true,
       onConfirm: async () => {
         await deleteGallery(id);
         setGalleries(prev => prev.filter(g => g.id !== id));
+        setModal(null);
+      }
+    });
+  };
+
+  // --- Note Logic ---
+
+  const handleAddNote = () => {
+    if (!currentGallery) return;
+    const newNote: StoredNote = {
+      id: crypto.randomUUID(),
+      galleryId: currentGallery.id,
+      title: 'Catatan Baru',
+      content: '',
+      timestamp: Date.now()
+    };
+    setEditingNote(newNote);
+  };
+
+  const handleSaveNote = async (id: string, title: string, content: string) => {
+    if (!currentGallery) return;
+    
+    // Check if it's an update or insert for state management
+    const noteExists = notes.find(n => n.id === id);
+    
+    const updatedNote: StoredNote = {
+      id,
+      galleryId: currentGallery.id,
+      title,
+      content,
+      timestamp: noteExists ? noteExists.timestamp : Date.now()
+    };
+
+    await saveNote(updatedNote);
+
+    if (noteExists) {
+      setNotes(prev => prev.map(n => n.id === id ? updatedNote : n));
+    } else {
+      setNotes(prev => [updatedNote, ...prev]);
+    }
+    setEditingNote(null);
+  };
+
+  const handleDeleteNoteDialog = (id: string) => {
+    setModal({
+      type: 'confirm',
+      title: 'Hapus Catatan?',
+      message: 'Dokumen teks ini akan dihapus permanen.',
+      confirmText: 'Hapus',
+      isDanger: true,
+      onConfirm: async () => {
+        await deleteNote(id);
+        setNotes(prev => prev.filter(n => n.id !== id));
         setModal(null);
       }
     });
@@ -237,48 +299,78 @@ const App: React.FC = () => {
             <div className="flex flex-col sm:flex-row justify-between items-center bg-slate-900/50 p-4 rounded-xl border border-slate-800 gap-4">
               <div className="flex items-center gap-4 w-full sm:w-auto">
                 <div className="text-xs font-mono text-blue-400 bg-blue-400/10 px-3 py-1 rounded-full border border-blue-400/20">
-                  {images.length} TOTAL ASSETS
+                  {images.length} ASSETS • {notes.length} NOTES
                 </div>
-                <button 
-                  onClick={async () => {
-                    try {
-                      const clipboardItems = await navigator.clipboard.read();
-                      let found = false;
-                      for (const item of clipboardItems) {
-                        const imageTypes = item.types.filter(t => t.startsWith('image/'));
-                        if (imageTypes.length > 0) {
-                          const blob = await item.getType(imageTypes[0]);
-                          const file = new File([blob], `Pasted_${Date.now()}.png`, { type: blob.type });
-                          processFiles([file]);
-                          found = true;
+                
+                <div className="flex items-center gap-2">
+                  <button 
+                    onClick={handleAddNote}
+                    className="flex items-center gap-2 bg-amber-500/10 hover:bg-amber-500/20 px-4 py-2 rounded-lg text-xs font-bold transition-all border border-amber-500/30 text-amber-500"
+                  >
+                    <FileText size={14} />
+                    ADD NOTES
+                  </button>
+                  
+                  <button 
+                    onClick={async () => {
+                      try {
+                        const clipboardItems = await navigator.clipboard.read();
+                        let found = false;
+                        for (const item of clipboardItems) {
+                          const imageTypes = item.types.filter(t => t.startsWith('image/'));
+                          if (imageTypes.length > 0) {
+                            const blob = await item.getType(imageTypes[0]);
+                            const file = new File([blob], `Pasted_${Date.now()}.png`, { type: blob.type });
+                            processFiles([file]);
+                            found = true;
+                          }
                         }
-                      }
-                      if (!found) {
+                        if (!found) {
+                          setModal({
+                            type: 'alert',
+                            title: 'Clipboard Kosong',
+                            message: 'Tidak ada gambar yang ditemukan di clipboard Anda.',
+                            confirmText: 'OK'
+                          });
+                        }
+                      } catch (e) {
                         setModal({
                           type: 'alert',
-                          title: 'Clipboard Kosong',
-                          message: 'Tidak ada gambar yang ditemukan di clipboard Anda.',
-                          confirmText: 'OK'
+                          title: 'Akses Ditolak',
+                          message: 'Berikan izin akses clipboard atau gunakan shortcut keyboard Ctrl+V.',
+                          confirmText: 'Paham'
                         });
                       }
-                    } catch (e) {
-                      setModal({
-                        type: 'alert',
-                        title: 'Akses Ditolak',
-                        message: 'Berikan izin akses clipboard atau gunakan shortcut keyboard Ctrl+V.',
-                        confirmText: 'Paham'
-                      });
-                    }
-                  }}
-                  className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 px-4 py-2 rounded-lg text-xs font-bold transition-all border border-slate-700 text-blue-300"
-                >
-                  <Clipboard size={14} />
-                  PASTE PHOTO
-                </button>
+                    }}
+                    className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 px-4 py-2 rounded-lg text-xs font-bold transition-all border border-slate-700 text-blue-300"
+                  >
+                    <Clipboard size={14} />
+                    PASTE PHOTO
+                  </button>
+                </div>
               </div>
               <LayoutGrid size={18} className="text-slate-600 hidden sm:block" />
             </div>
 
+            {/* NOTES SECTION */}
+            {notes.length > 0 && (
+              <div className="space-y-3">
+                <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest pl-1">Documents</h2>
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+                  {notes.map((note) => (
+                    <NoteCard 
+                      key={note.id} 
+                      note={note} 
+                      onClick={setEditingNote}
+                      onDelete={handleDeleteNoteDialog}
+                    />
+                  ))}
+                </div>
+                <div className="h-px bg-slate-800 my-6"></div>
+              </div>
+            )}
+
+            {/* IMAGES SECTION */}
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
               {images.map((img, idx) => (
                 <ImageCard 
@@ -289,9 +381,9 @@ const App: React.FC = () => {
                   onMaximize={setPreviewUrl}
                 />
               ))}
-              {images.length === 0 && (
+              {images.length === 0 && notes.length === 0 && (
                 <div className="col-span-full py-20 text-center text-slate-600 border border-dashed border-slate-800 rounded-xl">
-                  Galeri kosong. Paste foto atau seret file ke atas.
+                  Galeri kosong. Tambahkan catatan atau foto.
                 </div>
               )}
             </div>
@@ -315,6 +407,15 @@ const App: React.FC = () => {
             onClick={(e) => e.stopPropagation()}
           />
         </div>
+      )}
+
+      {/* TEXT EDITOR MODAL */}
+      {editingNote && (
+        <TextEditor 
+          note={editingNote}
+          onSave={handleSaveNote}
+          onClose={() => setEditingNote(null)}
+        />
       )}
 
       {/* CUSTOM SYSTEM MODAL */}
@@ -375,7 +476,7 @@ const App: React.FC = () => {
       {/* Footer Info */}
       <footer className="fixed bottom-0 left-0 right-0 bg-slate-950/90 border-t border-slate-900 py-3 px-6 backdrop-blur-md z-40">
         <div className="max-w-7xl mx-auto flex justify-between items-center text-[10px] text-slate-500 uppercase tracking-widest font-mono">
-          <span>Database: IndexedDB v2</span>
+          <span>Database: IndexedDB v3</span>
           <span>{currentGallery ? `Browsing: ${currentGallery.name}` : 'tempimg Overview'}</span>
         </div>
       </footer>

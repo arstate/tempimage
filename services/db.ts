@@ -1,10 +1,11 @@
 
-import { Gallery, StoredImage } from '../types';
+import { Gallery, StoredImage, StoredNote } from '../types';
 
 const DB_NAME = 'ZombioGalleryDB_V2';
 const STORE_GALLERIES = 'galleries';
 const STORE_IMAGES = 'images';
-const DB_VERSION = 2;
+const STORE_NOTES = 'notes';
+const DB_VERSION = 3;
 
 export const initDB = (): Promise<IDBDatabase> => {
   return new Promise((resolve, reject) => {
@@ -18,6 +19,10 @@ export const initDB = (): Promise<IDBDatabase> => {
       if (!db.objectStoreNames.contains(STORE_IMAGES)) {
         const imageStore = db.createObjectStore(STORE_IMAGES, { keyPath: 'id' });
         imageStore.createIndex('galleryId', 'galleryId', { unique: false });
+      }
+      if (!db.objectStoreNames.contains(STORE_NOTES)) {
+        const noteStore = db.createObjectStore(STORE_NOTES, { keyPath: 'id' });
+        noteStore.createIndex('galleryId', 'galleryId', { unique: false });
       }
     };
 
@@ -44,15 +49,27 @@ export const getGalleries = async (): Promise<Gallery[]> => {
 
 export const deleteGallery = async (id: string): Promise<void> => {
   const db = await initDB();
-  // Delete gallery and all its images
-  const tx = db.transaction([STORE_GALLERIES, STORE_IMAGES], 'readwrite');
+  const tx = db.transaction([STORE_GALLERIES, STORE_IMAGES, STORE_NOTES], 'readwrite');
+  
+  // Delete Gallery
   tx.objectStore(STORE_GALLERIES).delete(id);
+  
+  // Delete Images
   const imageStore = tx.objectStore(STORE_IMAGES);
-  const index = imageStore.index('galleryId');
-  const request = index.getAllKeys(id);
-  request.onsuccess = () => {
-    request.result.forEach(key => imageStore.delete(key));
+  const imageIndex = imageStore.index('galleryId');
+  const imgRequest = imageIndex.getAllKeys(id);
+  imgRequest.onsuccess = () => {
+    imgRequest.result.forEach(key => imageStore.delete(key));
   };
+
+  // Delete Notes
+  const noteStore = tx.objectStore(STORE_NOTES);
+  const noteIndex = noteStore.index('galleryId');
+  const noteRequest = noteIndex.getAllKeys(id);
+  noteRequest.onsuccess = () => {
+    noteRequest.result.forEach(key => noteStore.delete(key));
+  };
+
   return new Promise((res) => (tx.oncomplete = () => res()));
 };
 
@@ -77,5 +94,29 @@ export const deleteImage = async (id: string): Promise<void> => {
   const db = await initDB();
   const tx = db.transaction(STORE_IMAGES, 'readwrite');
   tx.objectStore(STORE_IMAGES).delete(id);
+  return new Promise((res) => (tx.oncomplete = () => res()));
+};
+
+// Note Actions
+export const saveNote = async (note: StoredNote): Promise<void> => {
+  const db = await initDB();
+  const tx = db.transaction(STORE_NOTES, 'readwrite');
+  tx.objectStore(STORE_NOTES).put(note);
+  return new Promise((res) => (tx.oncomplete = () => res()));
+};
+
+export const getNotesByGallery = async (galleryId: string): Promise<StoredNote[]> => {
+  const db = await initDB();
+  return new Promise((res) => {
+    const index = db.transaction(STORE_NOTES, 'readonly').objectStore(STORE_NOTES).index('galleryId');
+    const request = index.getAll(galleryId);
+    request.onsuccess = () => res(request.result);
+  });
+};
+
+export const deleteNote = async (id: string): Promise<void> => {
+  const db = await initDB();
+  const tx = db.transaction(STORE_NOTES, 'readwrite');
+  tx.objectStore(STORE_NOTES).delete(id);
   return new Promise((res) => (tx.oncomplete = () => res()));
 };
