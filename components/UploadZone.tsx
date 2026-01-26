@@ -1,6 +1,6 @@
 
 import React, { useCallback, useState, useRef } from 'react';
-import { Upload, Image as ImageIcon, Loader2 } from 'lucide-react';
+import { Upload, Image as ImageIcon, Loader2, Minimize2, Maximize2, Plus } from 'lucide-react';
 
 interface UploadZoneProps {
   onFilesSelected: (files: FileList | File[]) => void;
@@ -9,6 +9,7 @@ interface UploadZoneProps {
 export const UploadZone: React.FC<UploadZoneProps> = ({ onFilesSelected }) => {
   const [isDragging, setIsDragging] = useState(false);
   const [isProcessingInput, setIsProcessingInput] = useState(false);
+  const [isMinimized, setIsMinimized] = useState(false); // Default expanded
   const inputRef = useRef<HTMLInputElement>(null);
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -32,48 +33,109 @@ export const UploadZone: React.FC<UploadZoneProps> = ({ onFilesSelected }) => {
   }, [onFilesSelected]);
 
   const handleFileInput = (e: React.ChangeEvent<HTMLInputElement>) => {
-    // 1. Ambil referensi files segera
     const files = e.target.files;
-    
     if (!files || files.length === 0) return;
 
-    // 2. Tampilkan loading state agar user tahu klik berhasil
     setIsProcessingInput(true);
 
-    // 3. OPTIMASI IOS/ANDROID:
-    // Beri jeda 500ms agar "Native File Picker" (Popup Galeri) punya waktu untuk close/menutup
-    // dan melepaskan resource UI Thread sebelum React mulai memproses data file yang berat.
+    // Optimasi UI Thread (setTimeout)
     setTimeout(() => {
-      // Convert ke Array agar aman jika input di-reset
       const fileArray = Array.from(files);
-      
-      // Kirim ke App.tsx
       onFilesSelected(fileArray);
       
-      // Reset input value agar bisa pilih file yang sama lagi & lepas memori reference
       if (inputRef.current) {
         inputRef.current.value = '';
       }
-      
       setIsProcessingInput(false);
     }, 500); 
   };
 
+  const triggerInput = () => {
+    inputRef.current?.click();
+  };
+
+  // --- TAMPILAN MINIMIZED (KECIL) ---
+  if (isMinimized) {
+    return (
+      <div 
+        onDragOver={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+        className={`relative bg-slate-900 border border-slate-700 rounded-xl p-3 flex items-center justify-between transition-all duration-300 shadow-sm
+          ${isDragging ? 'border-blue-500 bg-blue-500/10' : 'hover:border-slate-500'}
+        `}
+      >
+        <input
+          ref={inputRef}
+          type="file"
+          multiple
+          accept="image/*"
+          onChange={handleFileInput}
+          className="hidden"
+        />
+
+        <div className="flex items-center gap-3 w-full">
+            {/* Tombol Upload Kecil */}
+            <button 
+                onClick={triggerInput}
+                disabled={isProcessingInput}
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors shadow-lg active:scale-95"
+            >
+                {isProcessingInput ? (
+                    <Loader2 size={16} className="animate-spin" />
+                ) : (
+                    <Plus size={16} />
+                )}
+                <span>Upload</span>
+            </button>
+
+            <span className="text-xs text-slate-500 hidden sm:inline-block">
+                {isProcessingInput ? 'Memproses...' : 'atau drag gambar kesini'}
+            </span>
+        </div>
+
+        {/* Tombol Maximize */}
+        <button 
+            onClick={() => setIsMinimized(false)}
+            className="p-2 text-slate-500 hover:text-white hover:bg-slate-800 rounded-lg transition-colors ml-2"
+            title="Tampilkan Full UI"
+        >
+            <Maximize2 size={18} />
+        </button>
+      </div>
+    );
+  }
+
+  // --- TAMPILAN FULL UI (EXPANDED) ---
   return (
     <div
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
-      className={`relative group cursor-pointer border-2 border-dashed rounded-2xl p-8 transition-all duration-300 flex flex-col items-center justify-center gap-4 text-center
+      className={`relative group cursor-pointer border-2 border-dashed rounded-2xl p-8 transition-all duration-300 flex flex-col items-center justify-center gap-4 text-center animate-in fade-in zoom-in-95
         ${isDragging 
           ? 'border-blue-500 bg-blue-500/10 scale-[1.02]' 
           : 'border-slate-700 bg-slate-800/50 hover:border-slate-500 hover:bg-slate-800'}`}
     >
+      {/* Tombol Minimize di Kanan Atas */}
+      <div className="absolute top-4 right-4 z-20">
+          <button 
+            onClick={(e) => {
+                e.stopPropagation(); // Mencegah trigger input file
+                setIsMinimized(true);
+            }}
+            className="p-2 text-slate-500 hover:text-white hover:bg-slate-700 rounded-full transition-colors opacity-0 group-hover:opacity-100"
+            title="Minimize UI"
+          >
+              <Minimize2 size={20} />
+          </button>
+      </div>
+
       <input
         ref={inputRef}
         type="file"
         multiple
-        accept="image/*" // Menerima semua jenis gambar
+        accept="image/*" 
         onChange={handleFileInput}
         className="absolute inset-0 opacity-0 cursor-pointer z-10"
         disabled={isProcessingInput}

@@ -2,7 +2,7 @@
 import { StoredImage, StoredNote } from '../types';
 
 // URL Final dari User
-const API_URL = "https://script.google.com/macros/s/AKfycbw2E5jnioIjzWMaJ5fp_Q_bOGEJOB0DGd-AgiElevw6PpdtCUaANdzXHMrZaIR8KJdv4g/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbziuE1X6G9JMd0zC5j9L78YWvsX2GjRcBNp8MXCk2BOPJL4zZ-bJTkkS61Kld_0ML49tA/exec";
 
 interface ApiResponse {
   status: 'success' | 'error';
