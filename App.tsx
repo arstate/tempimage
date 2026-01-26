@@ -9,7 +9,7 @@ import {
   getGalleries, saveGallery, deleteGallery 
 } from './services/db'; // Keep DB for Gallery List ONLY
 import { 
-  uploadToDrive, loadGallery, deleteFromDrive, uploadNoteToDrive 
+  uploadToDrive, loadGallery, deleteFromDrive, uploadNoteToDrive, createFolderInDrive
 } from './services/api'; // New API Service
 import { Folder, Plus, ArrowLeft, Image as ImageIcon, X, Clipboard, LayoutGrid, Trash2, AlertCircle, FileText, Cloud, CloudLightning } from 'lucide-react';
 
@@ -80,20 +80,41 @@ const App: React.FC = () => {
     setModal({
       type: 'input',
       title: 'Buat Folder Baru',
-      message: 'Folder ini akan dibuat di Google Drive saat Anda mengunggah file pertama.',
+      message: 'Folder ini akan dibuat di Google Drive sekarang juga.',
       inputValue: '',
       confirmText: 'Buat Folder',
       onConfirm: async (name) => {
         if (!name?.trim()) return;
-        const newGallery: Gallery = {
-          id: crypto.randomUUID(),
-          name: name.trim(),
-          timestamp: Date.now()
-        };
-        // Save local reference only
-        await saveGallery(newGallery);
-        setGalleries(prev => [newGallery, ...prev]);
-        setModal(null);
+        
+        const cleanName = name.trim();
+        setModal(null); // Close modal first
+        setProcessing(true); // Show spinner
+
+        try {
+          // 1. Create Folder in Google Drive
+          await createFolderInDrive(cleanName);
+
+          // 2. Save local reference
+          const newGallery: Gallery = {
+            id: crypto.randomUUID(),
+            name: cleanName,
+            timestamp: Date.now()
+          };
+          
+          await saveGallery(newGallery);
+          setGalleries(prev => [newGallery, ...prev]);
+          
+        } catch (error) {
+          console.error("Create folder error:", error);
+          setModal({
+            type: 'alert',
+            title: 'Gagal Membuat Folder',
+            message: 'Gagal menghubungkan ke Google Drive API. Periksa koneksi internet.',
+            confirmText: 'OK'
+          });
+        } finally {
+          setProcessing(false);
+        }
       }
     });
   };
