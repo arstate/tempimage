@@ -1,6 +1,6 @@
 
-import React from 'react';
-import { FileText, Trash2, Edit3 } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { FileText, Trash2, Edit3, ExternalLink } from 'lucide-react';
 import { StoredNote } from '../types';
 
 interface NoteCardProps {
@@ -10,8 +10,22 @@ interface NoteCardProps {
 }
 
 export const NoteCard: React.FC<NoteCardProps> = ({ note, onClick, onDelete }) => {
-  // Remove HTML tags for preview
-  const plainText = note.content.replace(/<[^>]+>/g, ' ').substring(0, 150) + '...';
+  const [previewText, setPreviewText] = useState<string>("Loading content...");
+  const [isExternal, setIsExternal] = useState(false);
+
+  useEffect(() => {
+    // Check if content is a URL (Drive Integration)
+    if (note.content.startsWith('http')) {
+      setIsExternal(true);
+      setPreviewText("Note stored in Drive. Click to view/download.");
+      
+      // Optional: Attempt to fetch if CORS allows (often blocked by Google Drive)
+      // fetch(note.content).then(r => r.text()).then(t => setPreviewText(t)).catch(() => {});
+    } else {
+      // Local content
+      setPreviewText(note.content.replace(/<[^>]+>/g, ' '));
+    }
+  }, [note.content]);
 
   return (
     <div 
@@ -35,15 +49,16 @@ export const NoteCard: React.FC<NoteCardProps> = ({ note, onClick, onDelete }) =
         </div>
         <div className="flex-1 overflow-hidden">
           <p className="text-[11px] text-slate-600 leading-relaxed font-serif break-words">
-            {note.content ? plainText : <span className="italic text-slate-400">Kosong...</span>}
+            {previewText.substring(0, 150)}...
           </p>
         </div>
       </div>
       
       <div className="bg-amber-100/50 px-4 py-2 border-t border-amber-200/50 flex justify-between items-center text-[10px] text-amber-700/60 font-medium">
-        <span>NOTE</span>
+        <span>{isExternal ? 'DRIVE FILE' : 'LOCAL'}</span>
         <span className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
-          <Edit3 size={10} /> Edit
+          {isExternal ? <ExternalLink size={10} /> : <Edit3 size={10} />} 
+          {isExternal ? 'Open' : 'Edit'}
         </span>
       </div>
     </div>
