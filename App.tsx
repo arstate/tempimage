@@ -70,6 +70,7 @@ const App: React.FC = () => {
   // --- QUEUE PROCESSOR EFFECT ---
   useEffect(() => {
     const processNext = async () => {
+      // Logic barrier to ensure one file at a time
       if (isProcessingQueue || uploadQueue.length === 0) return;
 
       setIsProcessingQueue(true);
@@ -77,7 +78,7 @@ const App: React.FC = () => {
       setCurrentUploadItem(item);
 
       try {
-        // Perform Upload
+        // Perform Upload (Compression removed as per request - Original Quality)
         const uploadedFile = await uploadToDrive(item.file, item.galleryName);
         
         // 1. Save to Local Cache (DB)
@@ -99,7 +100,6 @@ const App: React.FC = () => {
 
       } catch (e) {
         console.error("Background upload failed for", item.file.name, e);
-        // Optional: Add to a "failed uploads" list or toast error
       } finally {
         // Remove processed item from queue
         setUploadQueue(prev => prev.slice(1));
@@ -230,26 +230,30 @@ const App: React.FC = () => {
     loadGalleryData(gallery.name); 
   };
 
-  // --- NEW: Add files to Queue instead of blocking loop ---
+  // --- OPTIMIZATION: Async Process Files for Mobile Lag Prevention ---
   const processFiles = useCallback((files: FileList | File[]) => {
     if (!currentGallery) return;
     
-    const fileArray = Array.from(files);
-    if (fileArray.length === 0) return;
+    // Gunakan setTimeout di sini juga untuk memastikan React tidak memblokir UI thread
+    // saat menerima array file yang besar dari UploadZone
+    setTimeout(() => {
+      const fileArray = Array.from(files);
+      if (fileArray.length === 0) return;
 
-    const newQueueItems: UploadItem[] = fileArray
-      .filter(f => f.type.startsWith('image/'))
-      .map(f => ({
+      const validFiles = fileArray.filter(f => f.type.startsWith('image/'));
+      if (validFiles.length === 0) return;
+
+      const newQueueItems: UploadItem[] = validFiles.map(f => ({
         id: Math.random().toString(36).substr(2, 9),
         file: f,
         galleryName: currentGallery.name
       }));
 
-    if (newQueueItems.length === 0) return;
-
-    // Show widget when adding files
-    setUploadWidgetOpen(true);
-    setUploadQueue(prev => [...prev, ...newQueueItems]);
+      if (newQueueItems.length > 0) {
+        setUploadWidgetOpen(true);
+        setUploadQueue(prev => [...prev, ...newQueueItems]);
+      }
+    }, 0);
     
   }, [currentGallery]);
 

@@ -1,7 +1,7 @@
 
 import { StoredImage, StoredNote } from '../types';
 
-// URL Final dari User (Deployment Terbaru - Support Snippet & Delete Folder)
+// URL Final dari User
 const API_URL = "https://script.google.com/macros/s/AKfycbynMPCuZWGKCDwlkLPUypk4k5HPMDU-tQS97C_tzYhMMyZAzV7hWSBkaBrtwSme3mSuCQ/exec";
 
 interface ApiResponse {
@@ -17,7 +17,7 @@ interface DriveFile {
   thumbnail: string;
   type: string;
   date: string;
-  snippet?: string; // New field from backend
+  snippet?: string;
 }
 
 export interface CloudFolder {
@@ -26,7 +26,6 @@ export interface CloudFolder {
   url: string;
 }
 
-// --- CORE HELPER: THE SILVER BULLET ---
 const callGoogleScript = async (payload: any): Promise<ApiResponse> => {
   try {
     const response = await fetch(API_URL, {
@@ -43,7 +42,7 @@ const callGoogleScript = async (payload: any): Promise<ApiResponse> => {
       return JSON.parse(textResult);
     } catch (e) {
       console.error("Non-JSON Response received:", textResult);
-      throw new Error("Server merespon dengan format yang salah. Cek console.");
+      throw new Error("Server merespon dengan format yang salah.");
     }
 
   } catch (error) {
@@ -52,7 +51,63 @@ const callGoogleScript = async (payload: any): Promise<ApiResponse> => {
   }
 };
 
-// Helper: Convert File/Blob to Base64
+// --- OPTIMIZATION: IMAGE COMPRESSION ---
+// Mobile photos are huge (5-10MB). Converting to Base64 creates massive strings that crash browsers.
+// We compress client-side to max 1920px width/height and 0.8 quality.
+const compressImage = (file: File): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    // If not an image or very small, just return raw base64
+    if (!file.type.startsWith('image/') || file.size < 500 * 1024) { 
+       fileToBase64(file).then(resolve).catch(reject);
+       return;
+    }
+
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = (event) => {
+      const img = new Image();
+      img.src = event.target?.result as string;
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let width = img.width;
+        let height = img.height;
+        const MAX_WIDTH = 1920;
+        const MAX_HEIGHT = 1920;
+
+        // Calculate new dimensions
+        if (width > height) {
+          if (width > MAX_WIDTH) {
+            height *= MAX_WIDTH / width;
+            width = MAX_WIDTH;
+          }
+        } else {
+          if (height > MAX_HEIGHT) {
+            width *= MAX_HEIGHT / height;
+            height = MAX_HEIGHT;
+          }
+        }
+
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+           fileToBase64(file).then(resolve).catch(reject); // Fallback
+           return;
+        }
+
+        ctx.drawImage(img, 0, 0, width, height);
+        
+        // Compress to JPEG with 0.8 quality
+        // This drastically reduces Base64 string length
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+        resolve(dataUrl);
+      };
+      img.onerror = (err) => reject(err);
+    };
+    reader.onerror = (err) => reject(err);
+  });
+};
+
 export const fileToBase64 = (file: File | Blob): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -62,7 +117,6 @@ export const fileToBase64 = (file: File | Blob): Promise<string> => {
   });
 };
 
-// --- CDN URL GENERATOR ---
 const getGoogleCdnUrl = (fileId: string): string => {
   return `https://lh3.googleusercontent.com/d/${fileId}`;
 };
@@ -76,7 +130,6 @@ export const fetchAllCloudGalleries = async (): Promise<CloudFolder[]> => {
   if (result.status === "success" && Array.isArray(result.data)) {
     return result.data;
   } else {
-    console.warn("Gagal load folder cloud:", result.message);
     return [];
   }
 };
@@ -116,15 +169,16 @@ export const deleteFolderInDrive = async (folderId: string): Promise<void> => {
   if (result.status === 'error') throw new Error(result.message);
 };
 
-// 2. Upload Image / File
+// 2. Upload Image / File (WITH COMPRESSION)
 export const uploadToDrive = async (file: File, folderName: string): Promise<DriveFile> => {
-  const base64 = await fileToBase64(file);
+  // Use compressed base64
+  const base64 = await compressImage(file);
   
   const result = await callGoogleScript({
     action: "uploadImage",
     folderName: folderName,
     fileName: file.name,
-    mimeType: file.type || "application/octet-stream", 
+    mimeType: "image/jpeg", // Always send as JPEG if compressed, handles png transparency poorly but stable for photos
     base64: base64
   });
 
@@ -144,7 +198,7 @@ export const uploadToDrive = async (file: File, folderName: string): Promise<Dri
     name: data.name || file.name,
     url: cdnUrl, 
     thumbnail: cdnUrl,
-    type: file.type || "image/png",
+    type: file.type || "image/jpeg",
     date: new Date().toISOString(),
     snippet: ""
   };
@@ -171,7 +225,7 @@ export const uploadNoteToDrive = async (noteTitle: string, content: string, fold
     thumbnail: "",
     type: 'text/plain',
     date: new Date().toISOString(),
-    snippet: content.substring(0, 100) // Fallback snippet local
+    snippet: content.substring(0, 100) 
   };
 };
 
@@ -190,7 +244,6 @@ export const loadGallery = async (folderName: string): Promise<{ images: StoredI
   const notes: StoredNote[] = [];
 
   rawFiles.forEach((file) => {
-    // --- SAFE MODE ---
     const rawMime = file.mimeType || file.type;
     const mime = (rawMime || "").toLowerCase();
     const name = (file.name || "").toLowerCase();
@@ -221,7 +274,7 @@ export const loadGallery = async (folderName: string): Promise<{ images: StoredI
         galleryId: folderName,
         title: (file.name || "Untitled Note").replace('.txt', ''),
         content: file.url,
-        snippet: file.snippet || "Memuat preview...", // Map snippet dari backend
+        snippet: file.snippet || "Memuat preview...", 
         timestamp: file.lastUpdated ? new Date(file.lastUpdated).getTime() : Date.now()
       });
     }
