@@ -2,7 +2,7 @@
 import { StoredImage, StoredNote } from '../types';
 
 // URL Final dari User (Deployment Terbaru - Support Snippet & Delete Folder)
-const API_URL = "https://script.google.com/macros/s/AKfycby3afXbF5wBwlfxl7ns0kaLgjjhANqSa9qtT7bW2Y2W5lMh06L2CelB9iarknmTLd0ZDQ/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbynMPCuZWGKCDwlkLPUypk4k5HPMDU-tQS97C_tzYhMMyZAzV7hWSBkaBrtwSme3mSuCQ/exec";
 
 interface ApiResponse {
   status: 'success' | 'error';

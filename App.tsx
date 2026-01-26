@@ -81,6 +81,11 @@ const App: React.FC = () => {
       const { images: apiImages, notes: apiNotes } = await loadGallery(galleryName);
       setImages(apiImages);
       setNotes(apiNotes);
+      
+      // --- BACKGROUND PREFETCH ---
+      // Trigger download konten notes secara diam-diam agar saat diklik langsung terbuka
+      prefetchNotesBackground(apiNotes);
+
     } catch (error) {
       console.error(error);
       setModal({
@@ -91,6 +96,26 @@ const App: React.FC = () => {
       });
     } finally {
       setLoading(false);
+    }
+  };
+
+  // Fungsi untuk download isi notes di background satu per satu
+  const prefetchNotesBackground = async (initialNotes: StoredNote[]) => {
+    // Filter notes yang kontennya masih berupa URL (belum di-cache)
+    const notesToFetch = initialNotes.filter(n => n.content.startsWith('http'));
+    
+    // Loop satu per satu untuk menghindari rate limit API Google
+    for (const note of notesToFetch) {
+      try {
+        const textContent = await getFileContent(note.id);
+        
+        // Update state secara diam-diam (re-render komponen tapi user tidak sadar)
+        setNotes(prev => prev.map(n => 
+          n.id === note.id ? { ...n, content: textContent } : n
+        ));
+      } catch (e) {
+        console.warn(`Background prefetch failed for note ${note.id}`, e);
+      }
     }
   };
 
@@ -107,7 +132,6 @@ const App: React.FC = () => {
         const cleanName = name.trim();
         setModal(null); 
         
-        // Use generic saving loading state since we don't have isCreatingFolder
         setIsSaving(true); 
 
         try {
@@ -148,7 +172,6 @@ const App: React.FC = () => {
     for (let i = 0; i < fileArray.length; i++) {
       const file = fileArray[i];
       
-      // Update UI Status
       setUploadStatus({
         current: i + 1,
         total: fileArray.length,
@@ -168,7 +191,6 @@ const App: React.FC = () => {
 
     setUploadStatus({ current: fileArray.length, total: fileArray.length, percent: 100 });
     
-    // Refresh gallery content
     await loadGalleryData(currentGallery.name);
     
     setIsUploading(false);
@@ -228,7 +250,6 @@ const App: React.FC = () => {
     });
   };
 
-  // --- REFACTORED: REAL DELETE FOLDER ---
   const handleDeleteGalleryDialog = (gallery: Gallery, e: React.MouseEvent) => {
     e.stopPropagation();
     setModal({
@@ -242,7 +263,7 @@ const App: React.FC = () => {
         setIsDeleting(true);
         try {
            await deleteFolderInDrive(gallery.id);
-           await syncGalleries(); // Refresh list folder
+           await syncGalleries(); 
         } catch (error) {
            console.error(error);
            setModal({
@@ -272,7 +293,6 @@ const App: React.FC = () => {
     setEditingNote(newNote);
   };
 
-  // --- REFACTORED: SAVE WITHOUT CLOSING ---
   const handleSaveNote = async (id: string, title: string, content: string) => {
     if (!currentGallery) return;
     
@@ -283,20 +303,19 @@ const App: React.FC = () => {
 
       const driveFile = await uploadNoteToDrive(title, content, currentGallery.name, fileIdToUpdate);
       
-      // Update local state without closing editor
       const savedNote: StoredNote = {
         id: driveFile.id,
         galleryId: currentGallery.name,
         title: title,
-        content: driveFile.url,
-        snippet: content.substring(0, 100), // temp update snippet
+        // PENTING: Simpan konten teks ASLI, bukan URL dari driveFile.url
+        // Agar saat dibuka kembali tidak perlu loading/fetch lagi
+        content: content, 
+        snippet: content.substring(0, 100), 
         timestamp: Date.now()
       };
       
-      // Update Notes List in Background
       if (isNew) {
         setNotes(prev => [savedNote, ...prev]);
-        // Update editing ID so next save is an update, not create
         setEditingNote(prev => prev ? { ...prev, id: driveFile.id, title, content } : null);
       } else {
         setNotes(prev => prev.map(n => n.id === id ? savedNote : n));
@@ -304,8 +323,6 @@ const App: React.FC = () => {
       }
       
       alert("Catatan berhasil disimpan!");
-      // Background refresh to get snippet/data from server if needed
-      // loadGalleryData(currentGallery.name); 
 
     } catch (e) {
       console.error(e);
@@ -338,12 +355,16 @@ const App: React.FC = () => {
   };
 
   const handleNoteClick = async (note: StoredNote) => {
+     // Cek apakah konten masih berupa URL (prefetching belum selesai)
      if (note.content && note.content.startsWith('http')) {
-       // Just generic loading for fetch
+       // Jika masih URL, terpaksa tampilkan loading
        setIsSaving(true); 
        try {
          const content = await getFileContent(note.id);
          setEditingNote({ ...note, content: content || "" });
+         
+         // Sekalian update cache biar next time instan
+         setNotes(prev => prev.map(n => n.id === note.id ? { ...n, content: content } : n));
        } catch (e) {
          setModal({
            type: 'alert',
@@ -355,6 +376,7 @@ const App: React.FC = () => {
          setIsSaving(false);
        }
      } else {
+       // Jika sudah teks biasa (sudah di-prefetch), langsung buka
        setEditingNote(note);
      }
   };
