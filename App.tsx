@@ -7,13 +7,13 @@ import { TextEditor } from './components/TextEditor';
 import { UploadWidget } from './components/UploadWidget';
 import { Gallery, StoredImage, StoredNote } from './types';
 import { 
-  uploadToDrive, loadGallery, deleteFromDrive, uploadNoteToDrive, createFolderInDrive, fetchAllCloudGalleries, getFileContent, deleteFolderInDrive
+  uploadToDrive, loadGallery, deleteFromDrive, uploadNoteToDrive, createFolderInDrive, fetchAllCloudGalleries, getFileContent, deleteFolderInDrive, renameFolderInDrive
 } from './services/api'; 
 // Import DB Functions
 import { 
   getImagesByGallery, getNotesByGallery, clearGalleryCache, saveBulkImages, saveBulkNotes, saveNote, saveImage, deleteImage, deleteNote
 } from './services/db.ts';
-import { Folder, Plus, ArrowLeft, X, Clipboard, LayoutGrid, Trash2, AlertCircle, FileText, Cloud, CloudLightning, RefreshCw, Loader2 } from 'lucide-react';
+import { Folder, Plus, ArrowLeft, X, Clipboard, LayoutGrid, Trash2, AlertCircle, FileText, Cloud, CloudLightning, RefreshCw, Loader2, Edit } from 'lucide-react';
 
 type ModalType = 'input' | 'confirm' | 'alert' | null;
 
@@ -216,6 +216,40 @@ const App: React.FC = () => {
             type: 'alert',
             title: 'Gagal Membuat Folder',
             message: 'Gagal menghubungkan ke Google Drive API.',
+            confirmText: 'OK'
+          });
+        } finally {
+          setIsSaving(false);
+        }
+      }
+    });
+  };
+
+  const handleRenameGalleryDialog = (gallery: Gallery, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setModal({
+      type: 'input',
+      title: 'Ubah Nama Folder',
+      message: `Masukkan nama baru untuk folder "${gallery.name}"`,
+      inputValue: gallery.name,
+      confirmText: 'Simpan',
+      onConfirm: async (newName) => {
+        if (!newName?.trim() || newName === gallery.name) {
+             setModal(null);
+             return;
+        }
+        const cleanName = newName.trim();
+        setModal(null);
+        setIsSaving(true);
+        try {
+          await renameFolderInDrive(gallery.id, cleanName);
+          await syncGalleries();
+        } catch (error) {
+          console.error(error);
+          setModal({
+            type: 'alert',
+            title: 'Gagal Mengubah Nama',
+            message: 'Gagal menghubungi server Google Drive.',
             confirmText: 'OK'
           });
         } finally {
@@ -501,12 +535,22 @@ const App: React.FC = () => {
                   onClick={() => selectGallery(g)}
                   className="group relative bg-slate-900 border border-slate-800 p-6 rounded-2xl hover:border-blue-500/50 cursor-pointer transition-all hover:shadow-xl hover:shadow-blue-500/5"
                 >
-                  <button 
-                    onClick={(e) => handleDeleteGalleryDialog(g, e)}
-                    className="absolute top-4 right-4 text-slate-600 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity p-1 z-10"
-                  >
-                    <Trash2 size={18} />
-                  </button>
+                  <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
+                    <button 
+                      onClick={(e) => handleRenameGalleryDialog(g, e)}
+                      className="p-1.5 bg-slate-800/80 hover:bg-blue-600 text-slate-400 hover:text-white rounded-lg transition-colors backdrop-blur-sm"
+                      title="Ubah Nama"
+                    >
+                      <Edit size={16} />
+                    </button>
+                    <button 
+                      onClick={(e) => handleDeleteGalleryDialog(g, e)}
+                      className="p-1.5 bg-slate-800/80 hover:bg-red-600 text-slate-400 hover:text-white rounded-lg transition-colors backdrop-blur-sm"
+                      title="Hapus Folder"
+                    >
+                      <Trash2 size={16} />
+                    </button>
+                  </div>
                   <div className="w-16 h-16 bg-blue-500/10 rounded-2xl flex items-center justify-center text-blue-500 mb-4 group-hover:scale-110 transition-transform">
                     <Folder size={32} />
                   </div>

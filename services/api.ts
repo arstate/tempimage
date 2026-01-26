@@ -2,7 +2,7 @@
 import { StoredImage, StoredNote } from '../types';
 
 // URL Final dari User
-const API_URL = "https://script.google.com/macros/s/AKfycbynMPCuZWGKCDwlkLPUypk4k5HPMDU-tQS97C_tzYhMMyZAzV7hWSBkaBrtwSme3mSuCQ/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbw2E5jnioIjzWMaJ5fp_Q_bOGEJOB0DGd-AgiElevw6PpdtCUaANdzXHMrZaIR8KJdv4g/exec";
 
 interface ApiResponse {
   status: 'success' | 'error';
@@ -164,6 +164,17 @@ export const deleteFolderInDrive = async (folderId: string): Promise<void> => {
   const result = await callGoogleScript({
     action: "deleteFolder",
     folderId: folderId
+  });
+
+  if (result.status === 'error') throw new Error(result.message);
+};
+
+// 1.6 Rename Folder
+export const renameFolderInDrive = async (folderId: string, newName: string): Promise<void> => {
+  const result = await callGoogleScript({
+    action: "renameFolder",
+    folderId: folderId,
+    newName: newName
   });
 
   if (result.status === 'error') throw new Error(result.message);
