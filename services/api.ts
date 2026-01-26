@@ -1,8 +1,8 @@
 
 import { StoredImage, StoredNote } from '../types';
 
-// URL Final dari User (Deployment Terbaru - Fix CORS & CDN)
-const API_URL = "https://script.google.com/macros/s/AKfycbzEMTU8nfFIl8wkw0nEG8ICvpEalyCJokrRV4SgzUaAtTQZPXGAAFyfI1o16f3i8AZ8Bw/exec";
+// URL Final dari User (Deployment Terbaru - Support Snippet & Delete Folder)
+const API_URL = "https://script.google.com/macros/s/AKfycby3afXbF5wBwlfxl7ns0kaLgjjhANqSa9qtT7bW2Y2W5lMh06L2CelB9iarknmTLd0ZDQ/exec";
 
 interface ApiResponse {
   status: 'success' | 'error';
@@ -17,6 +17,7 @@ interface DriveFile {
   thumbnail: string;
   type: string;
   date: string;
+  snippet?: string; // New field from backend
 }
 
 export interface CloudFolder {
@@ -62,8 +63,6 @@ export const fileToBase64 = (file: File | Blob): Promise<string> => {
 };
 
 // --- CDN URL GENERATOR ---
-// Mengubah File ID menjadi link langsung ke server CDN Google (lh3.googleusercontent.com)
-// Link ini jauh lebih cepat dan jarang kena blokir CORS dibanding drive.google.com/uc?export=view
 const getGoogleCdnUrl = (fileId: string): string => {
   return `https://lh3.googleusercontent.com/d/${fileId}`;
 };
@@ -107,6 +106,16 @@ export const createFolderInDrive = async (folderName: string): Promise<string> =
   return result.data?.folderId || "";
 };
 
+// 1.5 Delete Folder
+export const deleteFolderInDrive = async (folderId: string): Promise<void> => {
+  const result = await callGoogleScript({
+    action: "deleteFolder",
+    folderId: folderId
+  });
+
+  if (result.status === 'error') throw new Error(result.message);
+};
+
 // 2. Upload Image / File
 export const uploadToDrive = async (file: File, folderName: string): Promise<DriveFile> => {
   const base64 = await fileToBase64(file);
@@ -128,16 +137,16 @@ export const uploadToDrive = async (file: File, folderName: string): Promise<Dri
     throw new Error("Respon server tidak memiliki File ID.");
   }
 
-  // Gunakan CDN URL untuk hasil upload baru
   const cdnUrl = getGoogleCdnUrl(data.id);
 
   return {
     id: data.id,
     name: data.name || file.name,
-    url: cdnUrl, // Pakai CDN URL
+    url: cdnUrl, 
     thumbnail: cdnUrl,
     type: file.type || "image/png",
-    date: new Date().toISOString()
+    date: new Date().toISOString(),
+    snippet: ""
   };
 };
 
@@ -158,10 +167,11 @@ export const uploadNoteToDrive = async (noteTitle: string, content: string, fold
   return {
     id: data.id,
     name: data.name,
-    url: data.url, // Note tetap pakai URL asli (karena isinya text, bukan gambar)
+    url: data.url, 
     thumbnail: "",
     type: 'text/plain',
-    date: new Date().toISOString()
+    date: new Date().toISOString(),
+    snippet: content.substring(0, 100) // Fallback snippet local
   };
 };
 
@@ -194,7 +204,6 @@ export const loadGallery = async (folderName: string): Promise<{ images: StoredI
     }
 
     if (fileType === "image") {
-      // TRIK URL REDIRECT: Pakai lh3.googleusercontent.com/d/ID
       const cdnUrl = getGoogleCdnUrl(file.id);
       
       images.push({
@@ -203,7 +212,7 @@ export const loadGallery = async (folderName: string): Promise<{ images: StoredI
         name: file.name || "Untitled Image",
         type: mime || 'image/jpeg',
         size: 0, 
-        data: cdnUrl, // Gunakan CDN Link agar gambar muncul cepat & anti-broken
+        data: cdnUrl,
         timestamp: file.lastUpdated ? new Date(file.lastUpdated).getTime() : Date.now()
       });
     } else if (fileType === "note") {
@@ -212,6 +221,7 @@ export const loadGallery = async (folderName: string): Promise<{ images: StoredI
         galleryId: folderName,
         title: (file.name || "Untitled Note").replace('.txt', ''),
         content: file.url,
+        snippet: file.snippet || "Memuat preview...", // Map snippet dari backend
         timestamp: file.lastUpdated ? new Date(file.lastUpdated).getTime() : Date.now()
       });
     }

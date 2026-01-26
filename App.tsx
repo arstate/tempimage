@@ -6,12 +6,9 @@ import { NoteCard } from './components/NoteCard';
 import { TextEditor } from './components/TextEditor';
 import { Gallery, StoredImage, StoredNote } from './types';
 import { 
-  deleteGallery 
-} from './services/db'; 
-import { 
-  uploadToDrive, loadGallery, deleteFromDrive, uploadNoteToDrive, createFolderInDrive, fetchAllCloudGalleries, getFileContent
+  uploadToDrive, loadGallery, deleteFromDrive, uploadNoteToDrive, createFolderInDrive, fetchAllCloudGalleries, getFileContent, deleteFolderInDrive
 } from './services/api'; 
-import { Folder, Plus, ArrowLeft, Image as ImageIcon, X, Clipboard, LayoutGrid, Trash2, AlertCircle, FileText, Cloud, CloudLightning, RefreshCw } from 'lucide-react';
+import { Folder, Plus, ArrowLeft, X, Clipboard, LayoutGrid, Trash2, AlertCircle, FileText, Cloud, CloudLightning, RefreshCw, Loader2 } from 'lucide-react';
 
 type ModalType = 'input' | 'confirm' | 'alert' | null;
 
@@ -25,13 +22,26 @@ interface ModalState {
   isDanger?: boolean;
 }
 
+interface UploadStatus {
+  current: number;
+  total: number;
+  percent: number;
+}
+
 const App: React.FC = () => {
   const [galleries, setGalleries] = useState<Gallery[]>([]);
   const [currentGallery, setCurrentGallery] = useState<Gallery | null>(null);
   const [images, setImages] = useState<StoredImage[]>([]);
   const [notes, setNotes] = useState<StoredNote[]>([]); 
   const [loading, setLoading] = useState(true);
-  const [processing, setProcessing] = useState(false); 
+  
+  // --- NEW STATES FOR LOADING OVERLAYS ---
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadStatus, setUploadStatus] = useState<UploadStatus>({ current: 0, total: 0, percent: 0 });
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  // ---------------------------------------
+
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [editingNote, setEditingNote] = useState<StoredNote | null>(null);
   
@@ -48,27 +58,23 @@ const App: React.FC = () => {
     }
   }, [modal]);
 
-  // --- NEW: Load Folders directly from Drive ---
   const syncGalleries = async () => {
     setLoading(true);
     try {
       const cloudFolders = await fetchAllCloudGalleries();
-      // Map CloudFolder to Gallery type
       const mappedGalleries: Gallery[] = cloudFolders.map(f => ({
         id: f.id,
         name: f.name,
-        timestamp: Date.now() // Drive folder doesn't easily give timestamp in simple list, using now
+        timestamp: Date.now() 
       }));
       setGalleries(mappedGalleries);
     } catch (error) {
       console.error("Failed to sync folders", error);
-      // Optional: Fallback to local DB if needed, but for now strictly cloud
     } finally {
       setLoading(false);
     }
   };
 
-  // Load Content from Google Drive API
   const loadGalleryData = async (galleryName: string) => {
     setLoading(true);
     try {
@@ -100,15 +106,13 @@ const App: React.FC = () => {
         
         const cleanName = name.trim();
         setModal(null); 
-        setProcessing(true); 
+        
+        // Use generic saving loading state since we don't have isCreatingFolder
+        setIsSaving(true); 
 
         try {
-          // 1. Create Folder in Google Drive
           await createFolderInDrive(cleanName);
-
-          // 2. Refresh List from Drive
           await syncGalleries();
-          
         } catch (error) {
           console.error("Create folder error:", error);
           setModal({
@@ -118,7 +122,7 @@ const App: React.FC = () => {
             confirmText: 'OK'
           });
         } finally {
-          setProcessing(false);
+          setIsSaving(false);
         }
       }
     });
@@ -129,38 +133,47 @@ const App: React.FC = () => {
     loadGalleryData(gallery.name); 
   };
 
+  // --- REFACTORED: SEQUENTIAL UPLOAD WITH PROGRESS ---
   const processFiles = useCallback(async (files: FileList | File[]) => {
     if (!currentGallery) return;
-    setProcessing(true);
     
-    const uploadPromises = Array.from(files).map(async (file) => {
-      // Safety check: ensure file type exists before checking startsWith
-      const type = file.type || "";
-      if (!type.startsWith('image/')) return null;
-      try {
-        const driveFile = await uploadToDrive(file, currentGallery.name);
-        return {
-          id: driveFile.id,
-          galleryId: currentGallery.name,
-          name: driveFile.name,
-          type: driveFile.type || file.type,
-          size: file.size,
-          data: driveFile.thumbnail || driveFile.url, 
-          timestamp: Date.now(),
-        } as StoredImage;
-      } catch (e) {
-        console.error("Upload failed", e);
-        return null;
-      }
-    });
+    const fileArray = Array.from(files);
+    if (fileArray.length === 0) return;
 
-    const results = await Promise.all(uploadPromises);
-    const successImages = results.filter((img): img is StoredImage => img !== null);
+    setIsUploading(true);
+    setUploadStatus({ current: 0, total: fileArray.length, percent: 0 });
     
-    setImages(prev => [...successImages, ...prev]); 
-    setProcessing(false);
+    let successCount = 0;
+
+    for (let i = 0; i < fileArray.length; i++) {
+      const file = fileArray[i];
+      
+      // Update UI Status
+      setUploadStatus({
+        current: i + 1,
+        total: fileArray.length,
+        percent: Math.round(((i) / fileArray.length) * 100)
+      });
+
+      const type = file.type || "";
+      if (!type.startsWith('image/')) continue;
+
+      try {
+        await uploadToDrive(file, currentGallery.name);
+        successCount++;
+      } catch (e) {
+        console.error("Upload failed for file:", file.name, e);
+      }
+    }
+
+    setUploadStatus({ current: fileArray.length, total: fileArray.length, percent: 100 });
     
-    if (successImages.length < files.length) {
+    // Refresh gallery content
+    await loadGalleryData(currentGallery.name);
+    
+    setIsUploading(false);
+    
+    if (successCount < fileArray.length) {
       setModal({
         type: 'alert',
         title: 'Upload Tidak Sempurna',
@@ -196,10 +209,11 @@ const App: React.FC = () => {
       confirmText: 'Hapus Permanen',
       isDanger: true,
       onConfirm: async () => {
+        setIsDeleting(true);
+        setModal(null);
         try {
           await deleteFromDrive(id);
           setImages(prev => prev.filter(img => img.id !== id));
-          setModal(null);
         } catch (e) {
           setModal({
             type: 'alert',
@@ -207,18 +221,40 @@ const App: React.FC = () => {
             message: 'Terjadi kesalahan saat menghubungi Google Drive.',
             confirmText: 'OK'
           });
+        } finally {
+          setIsDeleting(false);
         }
       }
     });
   };
 
-  const handleDeleteGalleryDialog = (id: string, e: React.MouseEvent) => {
+  // --- REFACTORED: REAL DELETE FOLDER ---
+  const handleDeleteGalleryDialog = (gallery: Gallery, e: React.MouseEvent) => {
     e.stopPropagation();
     setModal({
-      type: 'alert',
-      title: 'Info',
-      message: 'Untuk keamanan, silakan hapus folder langsung melalui Google Drive.',
-      confirmText: 'OK',
+      type: 'confirm',
+      title: 'Hapus Folder?',
+      message: `Yakin ingin menghapus folder "${gallery.name}" selamanya? Semua isi akan hilang.`,
+      confirmText: 'Hapus Folder',
+      isDanger: true,
+      onConfirm: async () => {
+        setModal(null);
+        setIsDeleting(true);
+        try {
+           await deleteFolderInDrive(gallery.id);
+           await syncGalleries(); // Refresh list folder
+        } catch (error) {
+           console.error(error);
+           setModal({
+            type: 'alert',
+            title: 'Gagal Hapus',
+            message: 'Gagal menghapus folder di Drive.',
+            confirmText: 'OK'
+          });
+        } finally {
+           setIsDeleting(false);
+        }
+      }
     });
   };
 
@@ -236,41 +272,46 @@ const App: React.FC = () => {
     setEditingNote(newNote);
   };
 
+  // --- REFACTORED: SAVE WITHOUT CLOSING ---
   const handleSaveNote = async (id: string, title: string, content: string) => {
     if (!currentGallery) return;
-    setProcessing(true);
+    
+    setIsSaving(true);
     try {
-      // Determine if create or update based on ID format
       const isNew = id.startsWith('temp-');
       const fileIdToUpdate = isNew ? undefined : id;
 
       const driveFile = await uploadNoteToDrive(title, content, currentGallery.name, fileIdToUpdate);
       
+      // Update local state without closing editor
       const savedNote: StoredNote = {
         id: driveFile.id,
         galleryId: currentGallery.name,
         title: title,
-        content: driveFile.url, // Store the View URL in the list
+        content: driveFile.url,
+        snippet: content.substring(0, 100), // temp update snippet
         timestamp: Date.now()
       };
-
+      
+      // Update Notes List in Background
       if (isNew) {
         setNotes(prev => [savedNote, ...prev]);
+        // Update editing ID so next save is an update, not create
+        setEditingNote(prev => prev ? { ...prev, id: driveFile.id, title, content } : null);
       } else {
         setNotes(prev => prev.map(n => n.id === id ? savedNote : n));
+        setEditingNote(prev => prev ? { ...prev, title, content } : null);
       }
       
-      setEditingNote(null);
+      alert("Catatan berhasil disimpan!");
+      // Background refresh to get snippet/data from server if needed
+      // loadGalleryData(currentGallery.name); 
+
     } catch (e) {
       console.error(e);
-      setModal({
-         type: 'alert',
-         title: 'Gagal Menyimpan',
-         message: 'Gagal menyimpan catatan ke Drive.',
-         confirmText: 'OK'
-      });
+      alert("Gagal menyimpan catatan.");
     } finally {
-      setProcessing(false);
+      setIsSaving(false);
     }
   };
 
@@ -282,25 +323,26 @@ const App: React.FC = () => {
       confirmText: 'Hapus',
       isDanger: true,
       onConfirm: async () => {
+        setModal(null);
+        setIsDeleting(true);
         try {
           await deleteFromDrive(id);
           setNotes(prev => prev.filter(n => n.id !== id));
-          setModal(null);
         } catch (e) {
           alert("Gagal menghapus note");
+        } finally {
+          setIsDeleting(false);
         }
       }
     });
   };
 
   const handleNoteClick = async (note: StoredNote) => {
-     // Check if content is a URL (which it is for Drive files)
      if (note.content && note.content.startsWith('http')) {
-       setProcessing(true);
+       // Just generic loading for fetch
+       setIsSaving(true); 
        try {
-         // Fetch actual content from backend
          const content = await getFileContent(note.id);
-         // Open editor with fetched content, ensure it's a string
          setEditingNote({ ...note, content: content || "" });
        } catch (e) {
          setModal({
@@ -310,10 +352,9 @@ const App: React.FC = () => {
            confirmText: 'Tutup'
          });
        } finally {
-         setProcessing(false);
+         setIsSaving(false);
        }
      } else {
-       // Fallback for local notes (if any)
        setEditingNote(note);
      }
   };
@@ -369,15 +410,7 @@ const App: React.FC = () => {
       </header>
 
       <main className="max-w-7xl mx-auto px-4 py-6">
-        {processing && (
-           <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center backdrop-blur-sm">
-             <div className="bg-slate-900 p-6 rounded-2xl flex flex-col items-center gap-4 shadow-2xl border border-slate-800">
-               <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-               <p className="font-semibold text-blue-400">Syncing with Drive...</p>
-             </div>
-           </div>
-        )}
-
+        
         {loading ? (
           <div className="flex justify-center py-20 flex-col items-center gap-4">
             <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
@@ -398,8 +431,8 @@ const App: React.FC = () => {
                   className="group relative bg-slate-900 border border-slate-800 p-6 rounded-2xl hover:border-blue-500/50 cursor-pointer transition-all hover:shadow-xl hover:shadow-blue-500/5"
                 >
                   <button 
-                    onClick={(e) => handleDeleteGalleryDialog(g.id, e)}
-                    className="absolute top-4 right-4 text-slate-600 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity p-1"
+                    onClick={(e) => handleDeleteGalleryDialog(g, e)}
+                    className="absolute top-4 right-4 text-slate-600 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity p-1 z-10"
                   >
                     <Trash2 size={18} />
                   </button>
@@ -431,7 +464,7 @@ const App: React.FC = () => {
                     className="flex items-center gap-2 bg-amber-500/10 hover:bg-amber-500/20 px-4 py-2 rounded-lg text-xs font-bold transition-all border border-amber-500/30 text-amber-500"
                   >
                     <FileText size={14} />
-                    ADD NOTE (TXT)
+                    ADD NOTE
                   </button>
                   
                   <button 
@@ -478,7 +511,7 @@ const App: React.FC = () => {
             {/* NOTES SECTION */}
             {notes.length > 0 && (
               <div className="space-y-3">
-                <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest pl-1">Documents (Drive)</h2>
+                <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest pl-1">Sticky Notes</h2>
                 <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
                   {notes.map((note) => (
                     <NoteCard 
@@ -504,15 +537,55 @@ const App: React.FC = () => {
                   onMaximize={setPreviewUrl}
                 />
               ))}
-              {images.length === 0 && notes.length === 0 && (
+            </div>
+            {images.length === 0 && notes.length === 0 && (
                 <div className="col-span-full py-20 text-center text-slate-600 border border-dashed border-slate-800 rounded-xl">
                   Folder Drive ini kosong.
                 </div>
               )}
-            </div>
           </div>
         )}
       </main>
+
+      {/* --- OVERLAYS --- */}
+      
+      {/* 1. UPLOAD OVERLAY */}
+      {isUploading && (
+        <div style={{
+          position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
+          background: "rgba(0,0,0,0.85)", zIndex: 9999,
+          display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", color: "white"
+        }}>
+          <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+          <h3 className="text-xl font-bold mb-2">Mengupload...</h3>
+          <p className="text-2xl font-bold mb-4">
+            File {uploadStatus.current} dari {uploadStatus.total}
+          </p>
+          <div className="w-64 h-2.5 bg-slate-700 rounded-full overflow-hidden">
+            <div 
+              className="h-full bg-blue-500 transition-all duration-300 ease-out"
+              style={{ width: `${uploadStatus.percent}%` }}
+            />
+          </div>
+          <p className="mt-2 text-sm text-slate-400">{uploadStatus.percent}%</p>
+        </div>
+      )}
+
+      {/* 2. GENERIC ACTION LOADING (Delete / Save) */}
+      {(isDeleting || isSaving) && (
+        <div style={{
+          position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
+          background: "rgba(0,0,0,0.6)", zIndex: 9999,
+          display: "flex", justifyContent: "center", alignItems: "center", backdropFilter: "blur(2px)"
+        }}>
+          <div className="bg-white text-slate-900 px-6 py-4 rounded-xl shadow-2xl flex items-center gap-3 animate-in zoom-in-95">
+            <Loader2 className="animate-spin text-blue-600" size={24} />
+            <span className="font-bold text-sm">
+              {isDeleting ? "Menghapus..." : "Menyimpan..."}
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* FULLSCREEN PREVIEW */}
       {previewUrl && (
@@ -528,7 +601,6 @@ const App: React.FC = () => {
             alt="Preview" 
             className="max-w-full max-h-full object-contain shadow-2xl animate-in zoom-in-95 duration-300"
             onClick={(e) => e.stopPropagation()}
-            // --- FIX FOR FULLSCREEN PREVIEW ---
             referrerPolicy="no-referrer"
             crossOrigin="anonymous"
           />

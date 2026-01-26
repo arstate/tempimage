@@ -19,6 +19,7 @@ export interface StoredNote {
   id: string;
   galleryId: string;
   title: string;
-  content: string; // HTML content
+  content: string; // HTML content or URL to content
+  snippet?: string; // Short preview text from backend
   timestamp: number;
 }

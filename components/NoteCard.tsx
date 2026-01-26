@@ -1,6 +1,6 @@
 
-import React, { useEffect, useState } from 'react';
-import { FileText, Trash2, Edit3, ExternalLink } from 'lucide-react';
+import React from 'react';
+import { Trash2 } from 'lucide-react';
 import { StoredNote } from '../types';
 
 interface NoteCardProps {
@@ -10,57 +10,67 @@ interface NoteCardProps {
 }
 
 export const NoteCard: React.FC<NoteCardProps> = ({ note, onClick, onDelete }) => {
-  const [previewText, setPreviewText] = useState<string>("Loading content...");
-  const [isExternal, setIsExternal] = useState(false);
-
-  useEffect(() => {
-    // Check if content is a URL (Drive Integration)
-    if (note.content.startsWith('http')) {
-      setIsExternal(true);
-      setPreviewText("Note stored in Drive. Click to view/download.");
-      
-      // Optional: Attempt to fetch if CORS allows (often blocked by Google Drive)
-      // fetch(note.content).then(r => r.text()).then(t => setPreviewText(t)).catch(() => {});
-    } else {
-      // Local content
-      setPreviewText(note.content.replace(/<[^>]+>/g, ' '));
-    }
-  }, [note.content]);
-
   return (
     <div 
-      className="group relative bg-amber-50 rounded-xl overflow-hidden border border-amber-200/50 shadow-md transition-all hover:-translate-y-1 hover:shadow-xl cursor-pointer h-48 flex flex-col"
       onClick={() => onClick(note)}
+      className="relative group transition-transform hover:-translate-y-1 hover:shadow-lg"
+      style={{
+        width: "100%",
+        height: "200px", // Fixed height for uniformity
+        backgroundColor: "#fff9c4", // Sticky Note Yellow
+        color: "#333",
+        padding: "16px",
+        borderRadius: "8px",
+        boxShadow: "2px 2px 5px rgba(0,0,0,0.1)",
+        cursor: "pointer",
+        overflow: "hidden", 
+        display: "flex",
+        flexDirection: "column"
+      }}
     >
-      <div className="absolute top-0 right-0 p-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-1 z-10">
+      {/* Delete Button (Hidden by default, shown on hover) */}
+      <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
         <button 
           onClick={(e) => { e.stopPropagation(); onDelete(note.id); }}
-          className="p-1.5 bg-white/80 hover:bg-red-50 text-red-400 rounded-lg shadow-sm border border-red-100"
-          title="Delete Note"
+          className="p-1.5 bg-white/50 hover:bg-red-500 hover:text-white text-red-500 rounded-full shadow-sm transition-colors"
+          title="Hapus Catatan"
         >
           <Trash2 size={14} />
         </button>
       </div>
 
-      <div className="p-4 flex-1 flex flex-col">
-        <div className="flex items-center gap-2 text-amber-600 mb-2">
-          <FileText size={16} />
-          <h3 className="font-bold text-slate-800 truncate text-sm">{note.title || 'Tanpa Judul'}</h3>
-        </div>
-        <div className="flex-1 overflow-hidden">
-          <p className="text-[11px] text-slate-600 leading-relaxed font-serif break-words">
-            {previewText.substring(0, 150)}...
-          </p>
-        </div>
-      </div>
+      <h4 style={{ 
+        margin: "0 0 10px 0", 
+        borderBottom: "1px solid rgba(0,0,0,0.1)", 
+        paddingBottom: "8px",
+        fontWeight: "bold",
+        fontSize: "0.9rem",
+        whiteSpace: "nowrap",
+        overflow: "hidden",
+        textOverflow: "ellipsis"
+      }}>
+        📝 {note.title || "Tanpa Judul"}
+      </h4>
       
-      <div className="bg-amber-100/50 px-4 py-2 border-t border-amber-200/50 flex justify-between items-center text-[10px] text-amber-700/60 font-medium">
-        <span>{isExternal ? 'DRIVE FILE' : 'LOCAL'}</span>
-        <span className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
-          {isExternal ? <ExternalLink size={10} /> : <Edit3 size={10} />} 
-          {isExternal ? 'Open' : 'Edit'}
-        </span>
-      </div>
+      {/* Snippet Content */}
+      <p style={{ 
+        fontSize: "0.8rem", 
+        whiteSpace: "pre-wrap", 
+        lineHeight: "1.4",
+        color: "#4b5563",
+        flex: 1,
+        overflow: "hidden"
+      }}>
+        {note.snippet || note.content || "Memuat preview..."}
+      </p>
+      
+      {/* Fade effect at bottom */}
+      <div style={{
+        position: "absolute", bottom: 0, left: 0, right: 0, 
+        height: "40px", 
+        background: "linear-gradient(transparent, #fff9c4)",
+        pointerEvents: "none" 
+      }} />
     </div>
   );
 };
