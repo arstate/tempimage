@@ -1,8 +1,8 @@
 
 import { StoredImage, StoredNote } from '../types';
 
-// URL Final dari User (Deployment Terbaru - Fix Gambar & Error)
-const API_URL = "https://script.google.com/macros/s/AKfycbw0mSJvV2I2sBZib-Gga3iNITIz06BHR1B3QqfOIKcgRGqCWwll6lDeLarE50FdViG3Bg/exec";
+// URL Final dari User (Deployment Terbaru - Fix CORS & CDN)
+const API_URL = "https://script.google.com/macros/s/AKfycbzEMTU8nfFIl8wkw0nEG8ICvpEalyCJokrRV4SgzUaAtTQZPXGAAFyfI1o16f3i8AZ8Bw/exec";
 
 interface ApiResponse {
   status: 'success' | 'error';
@@ -26,31 +26,27 @@ export interface CloudFolder {
 }
 
 // --- CORE HELPER: THE SILVER BULLET ---
-// Menggunakan 'text/plain' untuk mem-bypass preflight CORS check browser
 const callGoogleScript = async (payload: any): Promise<ApiResponse> => {
   try {
     const response = await fetch(API_URL, {
       method: "POST",
-      // HEADER KUNCI: Jangan application/json, tapi text/plain
       headers: {
         "Content-Type": "text/plain;charset=utf-8",
       },
       body: JSON.stringify(payload),
     });
 
-    // Ambil text dulu, baru parse (untuk jaga-jaga jika GAS return HTML error)
     const textResult = await response.text();
     
     try {
       return JSON.parse(textResult);
     } catch (e) {
       console.error("Non-JSON Response received:", textResult);
-      throw new Error("Server merespon dengan format yang salah (HTML/Text). Cek console.");
+      throw new Error("Server merespon dengan format yang salah. Cek console.");
     }
 
   } catch (error) {
     console.error("Fetch Error:", error);
-    // Lempar error agar bisa ditangkap UI
     throw new Error(error instanceof Error ? error.message : "Gagal menghubungi server Google.");
   }
 };
@@ -63,6 +59,13 @@ export const fileToBase64 = (file: File | Blob): Promise<string> => {
     reader.onload = () => resolve(reader.result as string);
     reader.onerror = error => reject(error);
   });
+};
+
+// --- CDN URL GENERATOR ---
+// Mengubah File ID menjadi link langsung ke server CDN Google (lh3.googleusercontent.com)
+// Link ini jauh lebih cepat dan jarang kena blokir CORS dibanding drive.google.com/uc?export=view
+const getGoogleCdnUrl = (fileId: string): string => {
+  return `https://lh3.googleusercontent.com/d/${fileId}`;
 };
 
 // 0. Fetch All Folders from Cloud
@@ -87,7 +90,6 @@ export const getFileContent = async (fileId: string): Promise<string> => {
   });
 
   if (result.status === 'success') {
-    // Pastikan return string, jangan object atau undefined
     return typeof result.data?.content === 'string' ? result.data.content : "";
   } else {
     throw new Error(result.message || "Gagal mengambil konten catatan.");
@@ -121,18 +123,19 @@ export const uploadToDrive = async (file: File, folderName: string): Promise<Dri
     throw new Error(result.message || "Upload gagal dari sisi server.");
   }
   
-  // Validasi Data Balikan
   const data = result.data;
   if (!data || !data.id) {
     throw new Error("Respon server tidak memiliki File ID.");
   }
 
+  // Gunakan CDN URL untuk hasil upload baru
+  const cdnUrl = getGoogleCdnUrl(data.id);
+
   return {
     id: data.id,
     name: data.name || file.name,
-    url: data.url || "",
-    // Use URL (HD) as primary data source, ignore thumbnail logic if HD is preferred
-    thumbnail: data.thumbnail || data.url || "", 
+    url: cdnUrl, // Pakai CDN URL
+    thumbnail: cdnUrl,
     type: file.type || "image/png",
     date: new Date().toISOString()
   };
@@ -155,7 +158,7 @@ export const uploadNoteToDrive = async (noteTitle: string, content: string, fold
   return {
     id: data.id,
     name: data.name,
-    url: data.url,
+    url: data.url, // Note tetap pakai URL asli (karena isinya text, bukan gambar)
     thumbnail: "",
     type: 'text/plain',
     date: new Date().toISOString()
@@ -177,15 +180,11 @@ export const loadGallery = async (folderName: string): Promise<{ images: StoredI
   const notes: StoredNote[] = [];
 
   rawFiles.forEach((file) => {
-    // --- SAFETY CHECK (SAFE MODE) ---
-    // Mencegah error 'cannot read property of undefined'
-    
-    // 1. Ambil mimeType atau type, fallback ke string kosong
+    // --- SAFE MODE ---
     const rawMime = file.mimeType || file.type;
     const mime = (rawMime || "").toLowerCase();
     const name = (file.name || "").toLowerCase();
     
-    // 2. Logic Deteksi
     let fileType = "unknown";
     
     if (mime.startsWith('image/') || name.match(/\.(jpg|jpeg|png|gif|webp|bmp)$/)) {
@@ -195,14 +194,16 @@ export const loadGallery = async (folderName: string): Promise<{ images: StoredI
     }
 
     if (fileType === "image") {
+      // TRIK URL REDIRECT: Pakai lh3.googleusercontent.com/d/ID
+      const cdnUrl = getGoogleCdnUrl(file.id);
+      
       images.push({
         id: file.id,
         galleryId: folderName,
         name: file.name || "Untitled Image",
         type: mime || 'image/jpeg',
         size: 0, 
-        // Menggunakan URL full resolusi (view link) alih-alih thumbnail
-        data: file.url || file.thumbnail, 
+        data: cdnUrl, // Gunakan CDN Link agar gambar muncul cepat & anti-broken
         timestamp: file.lastUpdated ? new Date(file.lastUpdated).getTime() : Date.now()
       });
     } else if (fileType === "note") {
@@ -210,11 +211,10 @@ export const loadGallery = async (folderName: string): Promise<{ images: StoredI
         id: file.id,
         galleryId: folderName,
         title: (file.name || "Untitled Note").replace('.txt', ''),
-        content: file.url, // URL disimpan di list, konten diambil on-demand
+        content: file.url,
         timestamp: file.lastUpdated ? new Date(file.lastUpdated).getTime() : Date.now()
       });
     }
-    // File tipe lain diabaikan agar tidak crash
   });
 
   return { images, notes };
