@@ -4,6 +4,7 @@ import { UploadZone } from './components/UploadZone';
 import { ImageCard } from './components/ImageCard';
 import { NoteCard } from './components/NoteCard';
 import { TextEditor } from './components/TextEditor';
+import { UploadWidget } from './components/UploadWidget';
 import { Gallery, StoredImage, StoredNote } from './types';
 import { 
   uploadToDrive, loadGallery, deleteFromDrive, uploadNoteToDrive, createFolderInDrive, fetchAllCloudGalleries, getFileContent, deleteFolderInDrive
@@ -26,10 +27,11 @@ interface ModalState {
   isDanger?: boolean;
 }
 
-interface UploadStatus {
-  current: number;
-  total: number;
-  percent: number;
+// Queue Item Type
+interface UploadItem {
+  id: string;
+  file: File;
+  galleryName: string;
 }
 
 const App: React.FC = () => {
@@ -39,12 +41,15 @@ const App: React.FC = () => {
   const [notes, setNotes] = useState<StoredNote[]>([]); 
   const [loading, setLoading] = useState(true);
   
-  // --- NEW STATES FOR LOADING OVERLAYS ---
-  const [isUploading, setIsUploading] = useState(false);
-  const [uploadStatus, setUploadStatus] = useState<UploadStatus>({ current: 0, total: 0, percent: 0 });
+  // --- STATES FOR NON-BLOCKING UPLOAD QUEUE ---
+  const [uploadQueue, setUploadQueue] = useState<UploadItem[]>([]);
+  const [isProcessingQueue, setIsProcessingQueue] = useState(false);
+  const [currentUploadItem, setCurrentUploadItem] = useState<UploadItem | null>(null);
+  const [uploadWidgetOpen, setUploadWidgetOpen] = useState(true);
+  // ---------------------------------------
+
   const [isDeleting, setIsDeleting] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  // ---------------------------------------
 
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [editingNote, setEditingNote] = useState<StoredNote | null>(null);
@@ -61,6 +66,51 @@ const App: React.FC = () => {
       inputRef.current.focus();
     }
   }, [modal]);
+
+  // --- QUEUE PROCESSOR EFFECT ---
+  useEffect(() => {
+    const processNext = async () => {
+      if (isProcessingQueue || uploadQueue.length === 0) return;
+
+      setIsProcessingQueue(true);
+      const item = uploadQueue[0];
+      setCurrentUploadItem(item);
+
+      try {
+        // Perform Upload
+        const uploadedFile = await uploadToDrive(item.file, item.galleryName);
+        
+        // 1. Save to Local Cache (DB)
+        const storedImg: StoredImage = {
+           id: uploadedFile.id,
+           galleryId: item.galleryName,
+           name: uploadedFile.name,
+           type: uploadedFile.type,
+           size: item.file.size,
+           data: uploadedFile.url,
+           timestamp: Date.now()
+        };
+        await saveImage(storedImg);
+
+        // 2. If user is currently viewing this gallery, update UI immediately
+        if (currentGallery && currentGallery.name === item.galleryName) {
+           setImages(prev => [storedImg, ...prev]);
+        }
+
+      } catch (e) {
+        console.error("Background upload failed for", item.file.name, e);
+        // Optional: Add to a "failed uploads" list or toast error
+      } finally {
+        // Remove processed item from queue
+        setUploadQueue(prev => prev.slice(1));
+        setCurrentUploadItem(null);
+        setIsProcessingQueue(false);
+      }
+    };
+
+    processNext();
+  }, [uploadQueue, isProcessingQueue, currentGallery]);
+
 
   const syncGalleries = async () => {
     setLoading(true);
@@ -79,7 +129,6 @@ const App: React.FC = () => {
     }
   };
 
-  // --- REFACTORED: CACHE-FIRST STRATEGY ---
   const loadGalleryData = async (galleryName: string) => {
     // 1. Cek Cache Lokal (IndexedDB)
     try {
@@ -91,9 +140,9 @@ const App: React.FC = () => {
       if (cachedImages.length > 0 || cachedNotes.length > 0) {
         setImages(cachedImages);
         setNotes(cachedNotes);
-        setLoading(false); // Langsung tampilkan data cache
+        setLoading(false); 
       } else {
-        setLoading(true); // Jika cache kosong, tampilkan loading
+        setLoading(true); 
       }
     } catch (e) {
       console.warn("DB Read Error:", e);
@@ -102,30 +151,24 @@ const App: React.FC = () => {
 
     // 2. Fetch Network (Background Sync)
     try {
-      // Ambil data terbaru dari cloud
       const { images: apiImages, notes: apiNotes } = await loadGallery(galleryName);
       
-      // Update UI dengan data terbaru
       setImages(apiImages);
       setNotes(apiNotes);
 
-      // 3. Update Cache (Clear old -> Save new)
+      // 3. Update Cache
       await clearGalleryCache(galleryName);
       await Promise.all([
         saveBulkImages(apiImages),
         saveBulkNotes(apiNotes)
       ]);
       
-      // Jika tadi loading masih true (karena cache kosong), matikan sekarang
       setLoading(false);
-
-      // --- BACKGROUND PREFETCH CONTENT ---
       prefetchNotesBackground(apiNotes);
 
     } catch (error) {
       console.error(error);
       if (images.length === 0 && notes.length === 0) {
-        // Hanya tampilkan error modal jika tidak ada data sama sekali (cache kosong & fetch gagal)
         setModal({
           type: 'alert',
           title: 'Gagal Memuat Data',
@@ -138,25 +181,14 @@ const App: React.FC = () => {
     }
   };
 
-  // Fungsi untuk download isi notes di background dan SIMPAN KE CACHE
   const prefetchNotesBackground = async (initialNotes: StoredNote[]) => {
     const notesToFetch = initialNotes.filter(n => n.content.startsWith('http'));
-    
     for (const note of notesToFetch) {
       try {
         const textContent = await getFileContent(note.id);
-        
-        // Buat objek note baru dengan konten teks asli
         const updatedNote = { ...note, content: textContent };
-
-        // 1. Update State (UI)
-        setNotes(prev => prev.map(n => 
-          n.id === note.id ? updatedNote : n
-        ));
-
-        // 2. Simpan ke IndexedDB (Agar next time offline bisa dibuka)
+        setNotes(prev => prev.map(n => n.id === note.id ? updatedNote : n));
         saveNote(updatedNote).catch(console.error);
-
       } catch (e) {
         console.warn(`Background prefetch failed for note ${note.id}`, e);
       }
@@ -172,12 +204,9 @@ const App: React.FC = () => {
       confirmText: 'Buat Folder',
       onConfirm: async (name) => {
         if (!name?.trim()) return;
-        
         const cleanName = name.trim();
         setModal(null); 
-        
         setIsSaving(true); 
-
         try {
           await createFolderInDrive(cleanName);
           await syncGalleries();
@@ -201,63 +230,27 @@ const App: React.FC = () => {
     loadGalleryData(gallery.name); 
   };
 
-  // --- REFACTORED: SEQUENTIAL UPLOAD WITH PROGRESS ---
-  const processFiles = useCallback(async (files: FileList | File[]) => {
+  // --- NEW: Add files to Queue instead of blocking loop ---
+  const processFiles = useCallback((files: FileList | File[]) => {
     if (!currentGallery) return;
     
     const fileArray = Array.from(files);
     if (fileArray.length === 0) return;
 
-    setIsUploading(true);
-    setUploadStatus({ current: 0, total: fileArray.length, percent: 0 });
-    
-    let successCount = 0;
+    const newQueueItems: UploadItem[] = fileArray
+      .filter(f => f.type.startsWith('image/'))
+      .map(f => ({
+        id: Math.random().toString(36).substr(2, 9),
+        file: f,
+        galleryName: currentGallery.name
+      }));
 
-    for (let i = 0; i < fileArray.length; i++) {
-      const file = fileArray[i];
-      
-      setUploadStatus({
-        current: i + 1,
-        total: fileArray.length,
-        percent: Math.round(((i) / fileArray.length) * 100)
-      });
+    if (newQueueItems.length === 0) return;
 
-      const type = file.type || "";
-      if (!type.startsWith('image/')) continue;
-
-      try {
-        const uploadedFile = await uploadToDrive(file, currentGallery.name);
-        // Simpan ke Cache IDB setiap 1 file sukses (opsional, tapi bagus untuk safety)
-        const storedImg: StoredImage = {
-           id: uploadedFile.id,
-           galleryId: currentGallery.name,
-           name: uploadedFile.name,
-           type: uploadedFile.type,
-           size: file.size,
-           data: uploadedFile.url,
-           timestamp: Date.now()
-        };
-        await saveImage(storedImg);
-        successCount++;
-      } catch (e) {
-        console.error("Upload failed for file:", file.name, e);
-      }
-    }
-
-    setUploadStatus({ current: fileArray.length, total: fileArray.length, percent: 100 });
+    // Show widget when adding files
+    setUploadWidgetOpen(true);
+    setUploadQueue(prev => [...prev, ...newQueueItems]);
     
-    await loadGalleryData(currentGallery.name);
-    
-    setIsUploading(false);
-    
-    if (successCount < fileArray.length) {
-      setModal({
-        type: 'alert',
-        title: 'Upload Tidak Sempurna',
-        message: 'Beberapa file gagal diunggah ke Google Drive.',
-        confirmText: 'OK'
-      });
-    }
   }, [currentGallery]);
 
   useEffect(() => {
@@ -290,9 +283,7 @@ const App: React.FC = () => {
         setModal(null);
         try {
           await deleteFromDrive(id);
-          // Update State
           setImages(prev => prev.filter(img => img.id !== id));
-          // Update Cache
           await deleteImage(id);
         } catch (e) {
           setModal({
@@ -370,7 +361,6 @@ const App: React.FC = () => {
         timestamp: Date.now()
       };
       
-      // Update DB Cache immediately
       await saveNote(savedNote);
 
       if (isNew) {
@@ -380,9 +370,7 @@ const App: React.FC = () => {
         setNotes(prev => prev.map(n => n.id === id ? savedNote : n));
         setEditingNote(prev => prev ? { ...prev, title, content } : null);
       }
-      
       alert("Catatan berhasil disimpan!");
-
     } catch (e) {
       console.error(e);
       alert("Gagal menyimpan catatan.");
@@ -404,7 +392,7 @@ const App: React.FC = () => {
         try {
           await deleteFromDrive(id);
           setNotes(prev => prev.filter(n => n.id !== id));
-          await deleteNote(id); // Clear from DB
+          await deleteNote(id);
         } catch (e) {
           alert("Gagal menghapus note");
         } finally {
@@ -415,18 +403,14 @@ const App: React.FC = () => {
   };
 
   const handleNoteClick = async (note: StoredNote) => {
-     // Cek apakah konten masih berupa URL (prefetching belum selesai)
      if (note.content && note.content.startsWith('http')) {
        setIsSaving(true); 
        try {
          const content = await getFileContent(note.id);
          const updatedNote = { ...note, content: content || "" };
-         
          setEditingNote(updatedNote);
-         
-         // Sekalian update cache & UI
          setNotes(prev => prev.map(n => n.id === note.id ? updatedNote : n));
-         saveNote(updatedNote); // Simpan ke DB
+         saveNote(updatedNote); 
        } catch (e) {
          setModal({
            type: 'alert',
@@ -632,27 +616,15 @@ const App: React.FC = () => {
 
       {/* --- OVERLAYS --- */}
       
-      {/* 1. UPLOAD OVERLAY */}
-      {isUploading && (
-        <div style={{
-          position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
-          background: "rgba(0,0,0,0.85)", zIndex: 9999,
-          display: "flex", flexDirection: "column", justifyContent: "center", alignItems: "center", color: "white"
-        }}>
-          <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-          <h3 className="text-xl font-bold mb-2">Mengupload...</h3>
-          <p className="text-2xl font-bold mb-4">
-            File {uploadStatus.current} dari {uploadStatus.total}
-          </p>
-          <div className="w-64 h-2.5 bg-slate-700 rounded-full overflow-hidden">
-            <div 
-              className="h-full bg-blue-500 transition-all duration-300 ease-out"
-              style={{ width: `${uploadStatus.percent}%` }}
-            />
-          </div>
-          <p className="mt-2 text-sm text-slate-400">{uploadStatus.percent}%</p>
-        </div>
-      )}
+      {/* 1. UPLOAD WIDGET (Bottom Left) */}
+      <UploadWidget 
+        isVisible={uploadWidgetOpen}
+        onToggle={() => setUploadWidgetOpen(!uploadWidgetOpen)}
+        queueLength={uploadQueue.length}
+        currentFolder={currentUploadItem?.galleryName || "..."}
+        currentFile={currentUploadItem?.file.name || "..."}
+        isProcessing={isProcessingQueue}
+      />
 
       {/* 2. GENERIC ACTION LOADING (Delete / Save) */}
       {(isDeleting || isSaving) && (

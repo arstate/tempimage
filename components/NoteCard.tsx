@@ -9,7 +9,20 @@ interface NoteCardProps {
   onDelete: (id: string) => void;
 }
 
+// Helper to remove HTML tags
+const stripHtml = (html: string) => {
+  if (!html) return "";
+  // Create a temporary element to strip HTML properly (handles encoded entities too)
+  const tmp = document.createElement("DIV");
+  tmp.innerHTML = html;
+  return tmp.textContent || tmp.innerText || "";
+};
+
 export const NoteCard: React.FC<NoteCardProps> = ({ note, onClick, onDelete }) => {
+  // Get clean snippet
+  const rawContent = note.snippet || note.content || "";
+  const cleanSnippet = stripHtml(rawContent).substring(0, 150) + (rawContent.length > 150 ? "..." : "");
+
   return (
     <div 
       onClick={() => onClick(note)}
@@ -52,16 +65,17 @@ export const NoteCard: React.FC<NoteCardProps> = ({ note, onClick, onDelete }) =
         📝 {note.title || "Tanpa Judul"}
       </h4>
       
-      {/* Snippet Content */}
+      {/* Snippet Content - Now Clean Text */}
       <p style={{ 
         fontSize: "0.8rem", 
         whiteSpace: "pre-wrap", 
         lineHeight: "1.4",
         color: "#4b5563",
         flex: 1,
-        overflow: "hidden"
+        overflow: "hidden",
+        wordBreak: "break-word"
       }}>
-        {note.snippet || note.content || "Memuat preview..."}
+        {cleanSnippet || "Catatan kosong..."}
       </p>
       
       {/* Fade effect at bottom */}
