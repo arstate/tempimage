@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Save, Bold, Italic, Type, AlignLeft } from 'lucide-react';
+import { X, Save, Bold, Italic, Type, AlignLeft, AlertCircle } from 'lucide-react';
 import { StoredNote } from '../types';
 
 interface TextEditorProps {
@@ -11,7 +11,11 @@ interface TextEditorProps {
 
 export const TextEditor: React.FC<TextEditorProps> = ({ note, onSave, onClose }) => {
   const [title, setTitle] = useState(note.title);
+  const [isDirty, setIsDirty] = useState(false);
+  const [showCloseConfirm, setShowCloseConfirm] = useState(false);
+  
   const editorRef = useRef<HTMLDivElement>(null);
+  const initialContentRef = useRef(note.content);
   
   // Set initial content
   useEffect(() => {
@@ -20,20 +24,48 @@ export const TextEditor: React.FC<TextEditorProps> = ({ note, onSave, onClose })
     }
   }, []);
 
+  // Detect content changes
+  const handleInput = () => {
+    if (editorRef.current) {
+      const currentContent = editorRef.current.innerHTML;
+      const isContentChanged = currentContent !== initialContentRef.current;
+      const isTitleChanged = title !== note.title;
+      setIsDirty(isContentChanged || isTitleChanged);
+    }
+  };
+
+  const handleTitleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setTitle(e.target.value);
+    setIsDirty(true);
+  };
+
   const handleFormat = (command: string, value?: string) => {
     document.execCommand(command, false, value);
     editorRef.current?.focus();
+    handleInput(); // Formatting is also a change
   };
 
   const handleSave = () => {
     if (editorRef.current) {
       onSave(note.id, title, editorRef.current.innerHTML);
+      // Update initial ref so subsequent edits detect changes against this new version
+      initialContentRef.current = editorRef.current.innerHTML;
+      setIsDirty(false);
+      setShowCloseConfirm(false);
+    }
+  };
+
+  const handleCloseRequest = () => {
+    if (isDirty) {
+      setShowCloseConfirm(true);
+    } else {
+      onClose();
     }
   };
 
   return (
     <div className="fixed inset-0 z-[200] bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in duration-200">
-      <div className="bg-slate-900 w-full max-w-4xl h-[85vh] rounded-2xl shadow-2xl flex flex-col border border-slate-700 overflow-hidden animate-in zoom-in-95 duration-200">
+      <div className="relative bg-slate-900 w-full max-w-4xl h-[85vh] rounded-2xl shadow-2xl flex flex-col border border-slate-700 overflow-hidden animate-in zoom-in-95 duration-200">
         
         {/* Header / Toolbar */}
         <div className="bg-slate-950 border-b border-slate-800 p-4 flex flex-col gap-4">
@@ -41,15 +73,18 @@ export const TextEditor: React.FC<TextEditorProps> = ({ note, onSave, onClose })
             <input 
               type="text" 
               value={title}
-              onChange={(e) => setTitle(e.target.value)}
+              onChange={handleTitleChange}
               className="bg-transparent text-xl font-bold text-white focus:outline-none w-full placeholder-slate-500"
               placeholder="Judul Catatan..."
             />
             <div className="flex items-center gap-2 ml-4">
-              <button onClick={handleSave} className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-white font-medium transition-colors">
-                <Save size={18} /> Simpan
+              <button 
+                onClick={handleSave} 
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-colors ${isDirty ? 'bg-amber-600 hover:bg-amber-500 text-white' : 'bg-blue-600 hover:bg-blue-500 text-white'}`}
+              >
+                <Save size={18} /> {isDirty ? 'Simpan*' : 'Simpan'}
               </button>
-              <button onClick={onClose} className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors">
+              <button onClick={handleCloseRequest} className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors">
                 <X size={24} />
               </button>
             </div>
@@ -95,6 +130,7 @@ export const TextEditor: React.FC<TextEditorProps> = ({ note, onSave, onClose })
           <div 
             ref={editorRef}
             contentEditable
+            onInput={handleInput}
             className="min-h-full p-8 md:p-12 outline-none text-slate-900 text-lg leading-relaxed max-w-3xl mx-auto wysiwyg-content"
             style={{ fontFamily: 'Inter, sans-serif' }}
           >
@@ -103,9 +139,41 @@ export const TextEditor: React.FC<TextEditorProps> = ({ note, onSave, onClose })
 
         {/* Footer Status */}
         <div className="bg-slate-950 border-t border-slate-800 px-4 py-2 text-xs text-slate-500 font-mono flex justify-between">
-          <span>WYSIWYG Mode</span>
+          <span>{isDirty ? '● Unsaved Changes' : 'All saved'}</span>
           <span>{note.id.split('-')[0]}</span>
         </div>
+
+        {/* --- UNSAVED CHANGES CONFIRMATION OVERLAY --- */}
+        {showCloseConfirm && (
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center p-4 z-50 animate-in fade-in duration-150">
+            <div className="bg-slate-900 border border-slate-700 p-6 rounded-2xl shadow-2xl max-w-sm w-full text-center space-y-4 animate-in zoom-in-95 duration-150">
+              <div className="w-12 h-12 bg-amber-500/10 text-amber-500 rounded-full flex items-center justify-center mx-auto">
+                <AlertCircle size={32} />
+              </div>
+              <div>
+                <h3 className="text-lg font-bold text-white">Belum Disimpan</h3>
+                <p className="text-slate-400 text-sm mt-1">
+                  Anda memiliki perubahan yang belum disimpan. Ingin simpan sebelum keluar?
+                </p>
+              </div>
+              <div className="flex gap-3 pt-2">
+                <button 
+                  onClick={onClose}
+                  className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-sm font-semibold transition-colors"
+                >
+                  Tutup Saja
+                </button>
+                <button 
+                  onClick={handleSave}
+                  className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-sm font-semibold transition-colors shadow-lg"
+                >
+                  Simpan
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
       </div>
     </div>
   );

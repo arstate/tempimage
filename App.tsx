@@ -8,6 +8,10 @@ import { Gallery, StoredImage, StoredNote } from './types';
 import { 
   uploadToDrive, loadGallery, deleteFromDrive, uploadNoteToDrive, createFolderInDrive, fetchAllCloudGalleries, getFileContent, deleteFolderInDrive
 } from './services/api'; 
+// Import DB Functions
+import { 
+  getImagesByGallery, getNotesByGallery, clearGalleryCache, saveBulkImages, saveBulkNotes, saveNote, saveImage, deleteImage, deleteNote
+} from './services/db.ts';
 import { Folder, Plus, ArrowLeft, X, Clipboard, LayoutGrid, Trash2, AlertCircle, FileText, Cloud, CloudLightning, RefreshCw, Loader2 } from 'lucide-react';
 
 type ModalType = 'input' | 'confirm' | 'alert' | null;
@@ -75,44 +79,84 @@ const App: React.FC = () => {
     }
   };
 
+  // --- REFACTORED: CACHE-FIRST STRATEGY ---
   const loadGalleryData = async (galleryName: string) => {
-    setLoading(true);
+    // 1. Cek Cache Lokal (IndexedDB)
     try {
+      const [cachedImages, cachedNotes] = await Promise.all([
+        getImagesByGallery(galleryName),
+        getNotesByGallery(galleryName)
+      ]);
+
+      if (cachedImages.length > 0 || cachedNotes.length > 0) {
+        setImages(cachedImages);
+        setNotes(cachedNotes);
+        setLoading(false); // Langsung tampilkan data cache
+      } else {
+        setLoading(true); // Jika cache kosong, tampilkan loading
+      }
+    } catch (e) {
+      console.warn("DB Read Error:", e);
+      setLoading(true);
+    }
+
+    // 2. Fetch Network (Background Sync)
+    try {
+      // Ambil data terbaru dari cloud
       const { images: apiImages, notes: apiNotes } = await loadGallery(galleryName);
+      
+      // Update UI dengan data terbaru
       setImages(apiImages);
       setNotes(apiNotes);
+
+      // 3. Update Cache (Clear old -> Save new)
+      await clearGalleryCache(galleryName);
+      await Promise.all([
+        saveBulkImages(apiImages),
+        saveBulkNotes(apiNotes)
+      ]);
       
-      // --- BACKGROUND PREFETCH ---
-      // Trigger download konten notes secara diam-diam agar saat diklik langsung terbuka
+      // Jika tadi loading masih true (karena cache kosong), matikan sekarang
+      setLoading(false);
+
+      // --- BACKGROUND PREFETCH CONTENT ---
       prefetchNotesBackground(apiNotes);
 
     } catch (error) {
       console.error(error);
-      setModal({
-        type: 'alert',
-        title: 'Gagal Memuat Data',
-        message: 'Tidak dapat mengambil data dari Google Drive. Pastikan API URL benar.',
-        confirmText: 'OK'
-      });
+      if (images.length === 0 && notes.length === 0) {
+        // Hanya tampilkan error modal jika tidak ada data sama sekali (cache kosong & fetch gagal)
+        setModal({
+          type: 'alert',
+          title: 'Gagal Memuat Data',
+          message: 'Gagal mengambil data dari Google Drive dan tidak ada cache tersimpan.',
+          confirmText: 'OK'
+        });
+      }
     } finally {
       setLoading(false);
     }
   };
 
-  // Fungsi untuk download isi notes di background satu per satu
+  // Fungsi untuk download isi notes di background dan SIMPAN KE CACHE
   const prefetchNotesBackground = async (initialNotes: StoredNote[]) => {
-    // Filter notes yang kontennya masih berupa URL (belum di-cache)
     const notesToFetch = initialNotes.filter(n => n.content.startsWith('http'));
     
-    // Loop satu per satu untuk menghindari rate limit API Google
     for (const note of notesToFetch) {
       try {
         const textContent = await getFileContent(note.id);
         
-        // Update state secara diam-diam (re-render komponen tapi user tidak sadar)
+        // Buat objek note baru dengan konten teks asli
+        const updatedNote = { ...note, content: textContent };
+
+        // 1. Update State (UI)
         setNotes(prev => prev.map(n => 
-          n.id === note.id ? { ...n, content: textContent } : n
+          n.id === note.id ? updatedNote : n
         ));
+
+        // 2. Simpan ke IndexedDB (Agar next time offline bisa dibuka)
+        saveNote(updatedNote).catch(console.error);
+
       } catch (e) {
         console.warn(`Background prefetch failed for note ${note.id}`, e);
       }
@@ -182,7 +226,18 @@ const App: React.FC = () => {
       if (!type.startsWith('image/')) continue;
 
       try {
-        await uploadToDrive(file, currentGallery.name);
+        const uploadedFile = await uploadToDrive(file, currentGallery.name);
+        // Simpan ke Cache IDB setiap 1 file sukses (opsional, tapi bagus untuk safety)
+        const storedImg: StoredImage = {
+           id: uploadedFile.id,
+           galleryId: currentGallery.name,
+           name: uploadedFile.name,
+           type: uploadedFile.type,
+           size: file.size,
+           data: uploadedFile.url,
+           timestamp: Date.now()
+        };
+        await saveImage(storedImg);
         successCount++;
       } catch (e) {
         console.error("Upload failed for file:", file.name, e);
@@ -235,7 +290,10 @@ const App: React.FC = () => {
         setModal(null);
         try {
           await deleteFromDrive(id);
+          // Update State
           setImages(prev => prev.filter(img => img.id !== id));
+          // Update Cache
+          await deleteImage(id);
         } catch (e) {
           setModal({
             type: 'alert',
@@ -307,13 +365,14 @@ const App: React.FC = () => {
         id: driveFile.id,
         galleryId: currentGallery.name,
         title: title,
-        // PENTING: Simpan konten teks ASLI, bukan URL dari driveFile.url
-        // Agar saat dibuka kembali tidak perlu loading/fetch lagi
         content: content, 
         snippet: content.substring(0, 100), 
         timestamp: Date.now()
       };
       
+      // Update DB Cache immediately
+      await saveNote(savedNote);
+
       if (isNew) {
         setNotes(prev => [savedNote, ...prev]);
         setEditingNote(prev => prev ? { ...prev, id: driveFile.id, title, content } : null);
@@ -345,6 +404,7 @@ const App: React.FC = () => {
         try {
           await deleteFromDrive(id);
           setNotes(prev => prev.filter(n => n.id !== id));
+          await deleteNote(id); // Clear from DB
         } catch (e) {
           alert("Gagal menghapus note");
         } finally {
@@ -357,14 +417,16 @@ const App: React.FC = () => {
   const handleNoteClick = async (note: StoredNote) => {
      // Cek apakah konten masih berupa URL (prefetching belum selesai)
      if (note.content && note.content.startsWith('http')) {
-       // Jika masih URL, terpaksa tampilkan loading
        setIsSaving(true); 
        try {
          const content = await getFileContent(note.id);
-         setEditingNote({ ...note, content: content || "" });
+         const updatedNote = { ...note, content: content || "" };
          
-         // Sekalian update cache biar next time instan
-         setNotes(prev => prev.map(n => n.id === note.id ? { ...n, content: content } : n));
+         setEditingNote(updatedNote);
+         
+         // Sekalian update cache & UI
+         setNotes(prev => prev.map(n => n.id === note.id ? updatedNote : n));
+         saveNote(updatedNote); // Simpan ke DB
        } catch (e) {
          setModal({
            type: 'alert',
@@ -376,7 +438,6 @@ const App: React.FC = () => {
          setIsSaving(false);
        }
      } else {
-       // Jika sudah teks biasa (sudah di-prefetch), langsung buka
        setEditingNote(note);
      }
   };
@@ -696,7 +757,7 @@ const App: React.FC = () => {
       {/* Footer Info */}
       <footer className="fixed bottom-0 left-0 right-0 bg-slate-950/90 border-t border-slate-900 py-3 px-6 backdrop-blur-md z-40">
         <div className="max-w-7xl mx-auto flex justify-between items-center text-[10px] text-slate-500 uppercase tracking-widest font-mono">
-          <span>Storage: Google Drive (API)</span>
+          <span>Storage: Google Drive (API) + IndexedDB Cache</span>
           <span>{currentGallery ? `Folder: ${currentGallery.name}` : 'tempimg Cloud'}</span>
         </div>
       </footer>

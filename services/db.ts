@@ -73,7 +73,50 @@ export const deleteGallery = async (id: string): Promise<void> => {
   return new Promise((res) => (tx.oncomplete = () => res()));
 };
 
-// Image Actions
+// --- Cache Management Helpers ---
+
+export const clearGalleryCache = async (galleryId: string): Promise<void> => {
+  const db = await initDB();
+  const tx = db.transaction([STORE_IMAGES, STORE_NOTES], 'readwrite');
+
+  // Clear Images for this gallery
+  const imageStore = tx.objectStore(STORE_IMAGES);
+  const imageIndex = imageStore.index('galleryId');
+  const imgRequest = imageIndex.getAllKeys(galleryId);
+  imgRequest.onsuccess = () => {
+    imgRequest.result.forEach(key => imageStore.delete(key));
+  };
+
+  // Clear Notes for this gallery
+  const noteStore = tx.objectStore(STORE_NOTES);
+  const noteIndex = noteStore.index('galleryId');
+  const noteRequest = noteIndex.getAllKeys(galleryId);
+  noteRequest.onsuccess = () => {
+    noteRequest.result.forEach(key => noteStore.delete(key));
+  };
+
+  return new Promise((res) => (tx.oncomplete = () => res()));
+};
+
+export const saveBulkImages = async (images: StoredImage[]): Promise<void> => {
+  if (images.length === 0) return;
+  const db = await initDB();
+  const tx = db.transaction(STORE_IMAGES, 'readwrite');
+  const store = tx.objectStore(STORE_IMAGES);
+  images.forEach(img => store.put(img));
+  return new Promise((res) => (tx.oncomplete = () => res()));
+};
+
+export const saveBulkNotes = async (notes: StoredNote[]): Promise<void> => {
+  if (notes.length === 0) return;
+  const db = await initDB();
+  const tx = db.transaction(STORE_NOTES, 'readwrite');
+  const store = tx.objectStore(STORE_NOTES);
+  notes.forEach(note => store.put(note));
+  return new Promise((res) => (tx.oncomplete = () => res()));
+};
+
+// Image Actions (Individual)
 export const saveImage = async (image: StoredImage): Promise<void> => {
   const db = await initDB();
   const tx = db.transaction(STORE_IMAGES, 'readwrite');
@@ -97,7 +140,7 @@ export const deleteImage = async (id: string): Promise<void> => {
   return new Promise((res) => (tx.oncomplete = () => res()));
 };
 
-// Note Actions
+// Note Actions (Individual)
 export const saveNote = async (note: StoredNote): Promise<void> => {
   const db = await initDB();
   const tx = db.transaction(STORE_NOTES, 'readwrite');
