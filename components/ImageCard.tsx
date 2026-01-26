@@ -15,6 +15,12 @@ export const ImageCard: React.FC<ImageCardProps> = ({ image, index, onDelete, on
 
   const { blobUrl, fileObject } = useMemo(() => {
     try {
+      // If image data is a URL (starts with http), use it directly
+      if (image.data.startsWith('http')) {
+        return { blobUrl: image.data, fileObject: null };
+      }
+
+      // Handle base64 logic (legacy or local uploads before sync)
       const parts = image.data.split(',');
       if (parts.length < 2) return { blobUrl: image.data, fileObject: null };
       const byteString = atob(parts[1]);
@@ -65,7 +71,25 @@ export const ImageCard: React.FC<ImageCardProps> = ({ image, index, onDelete, on
         <span className="absolute top-2 left-2 z-10 bg-blue-600 text-white text-[10px] font-bold px-2 py-0.5 rounded shadow-lg">
           #{index + 1}
         </span>
-        <img src={blobUrl} alt={image.name} className="w-full h-full object-cover" draggable="false" />
+        <img 
+          src={blobUrl} 
+          alt={image.name} 
+          className="w-full h-full object-contain"
+          draggable="false" 
+          loading="lazy"
+          // --- FIX UNTUK GAMBAR GOOGLE DRIVE (REFERRER POLICY) ---
+          referrerPolicy="no-referrer"
+          crossOrigin="anonymous"
+          style={{ 
+            display: "block",
+            borderRadius: "8px" 
+          }}
+          onError={(e) => {
+            // Sembunyikan jika gagal load agar tidak jelek
+            e.currentTarget.style.display = 'none'; 
+            console.log("Gagal load gambar (Mungkin permission drive?):", image.data);
+          }}
+        />
       </div>
 
       {/* Persistent Controls Outside */}

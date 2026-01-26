@@ -6,12 +6,12 @@ import { NoteCard } from './components/NoteCard';
 import { TextEditor } from './components/TextEditor';
 import { Gallery, StoredImage, StoredNote } from './types';
 import { 
-  getGalleries, saveGallery, deleteGallery 
-} from './services/db'; // Keep DB for Gallery List ONLY
+  deleteGallery 
+} from './services/db'; 
 import { 
-  uploadToDrive, loadGallery, deleteFromDrive, uploadNoteToDrive, createFolderInDrive
-} from './services/api'; // New API Service
-import { Folder, Plus, ArrowLeft, Image as ImageIcon, X, Clipboard, LayoutGrid, Trash2, AlertCircle, FileText, Cloud, CloudLightning } from 'lucide-react';
+  uploadToDrive, loadGallery, deleteFromDrive, uploadNoteToDrive, createFolderInDrive, fetchAllCloudGalleries, getFileContent
+} from './services/api'; 
+import { Folder, Plus, ArrowLeft, Image as ImageIcon, X, Clipboard, LayoutGrid, Trash2, AlertCircle, FileText, Cloud, CloudLightning, RefreshCw } from 'lucide-react';
 
 type ModalType = 'input' | 'confirm' | 'alert' | null;
 
@@ -31,7 +31,7 @@ const App: React.FC = () => {
   const [images, setImages] = useState<StoredImage[]>([]);
   const [notes, setNotes] = useState<StoredNote[]>([]); 
   const [loading, setLoading] = useState(true);
-  const [processing, setProcessing] = useState(false); // For upload spinners
+  const [processing, setProcessing] = useState(false); 
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [editingNote, setEditingNote] = useState<StoredNote | null>(null);
   
@@ -39,7 +39,7 @@ const App: React.FC = () => {
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    loadGalleriesLocal();
+    syncGalleries();
   }, []);
 
   useEffect(() => {
@@ -48,12 +48,24 @@ const App: React.FC = () => {
     }
   }, [modal]);
 
-  // Load Folder List from Local IndexedDB (to keep the menu fast)
-  const loadGalleriesLocal = async () => {
+  // --- NEW: Load Folders directly from Drive ---
+  const syncGalleries = async () => {
     setLoading(true);
-    const stored = await getGalleries();
-    setGalleries(stored.sort((a, b) => b.timestamp - a.timestamp));
-    setLoading(false);
+    try {
+      const cloudFolders = await fetchAllCloudGalleries();
+      // Map CloudFolder to Gallery type
+      const mappedGalleries: Gallery[] = cloudFolders.map(f => ({
+        id: f.id,
+        name: f.name,
+        timestamp: Date.now() // Drive folder doesn't easily give timestamp in simple list, using now
+      }));
+      setGalleries(mappedGalleries);
+    } catch (error) {
+      console.error("Failed to sync folders", error);
+      // Optional: Fallback to local DB if needed, but for now strictly cloud
+    } finally {
+      setLoading(false);
+    }
   };
 
   // Load Content from Google Drive API
@@ -87,29 +99,22 @@ const App: React.FC = () => {
         if (!name?.trim()) return;
         
         const cleanName = name.trim();
-        setModal(null); // Close modal first
-        setProcessing(true); // Show spinner
+        setModal(null); 
+        setProcessing(true); 
 
         try {
           // 1. Create Folder in Google Drive
           await createFolderInDrive(cleanName);
 
-          // 2. Save local reference
-          const newGallery: Gallery = {
-            id: crypto.randomUUID(),
-            name: cleanName,
-            timestamp: Date.now()
-          };
-          
-          await saveGallery(newGallery);
-          setGalleries(prev => [newGallery, ...prev]);
+          // 2. Refresh List from Drive
+          await syncGalleries();
           
         } catch (error) {
           console.error("Create folder error:", error);
           setModal({
             type: 'alert',
             title: 'Gagal Membuat Folder',
-            message: 'Gagal menghubungkan ke Google Drive API. Periksa koneksi internet.',
+            message: 'Gagal menghubungkan ke Google Drive API.',
             confirmText: 'OK'
           });
         } finally {
@@ -121,16 +126,17 @@ const App: React.FC = () => {
 
   const selectGallery = (gallery: Gallery) => {
     setCurrentGallery(gallery);
-    loadGalleryData(gallery.name); // Use Name for API Folder mapping
+    loadGalleryData(gallery.name); 
   };
 
   const processFiles = useCallback(async (files: FileList | File[]) => {
     if (!currentGallery) return;
     setProcessing(true);
     
-    // Optimistic UI updates could be hard here, so we show loading
     const uploadPromises = Array.from(files).map(async (file) => {
-      if (!file.type.startsWith('image/')) return null;
+      // Safety check: ensure file type exists before checking startsWith
+      const type = file.type || "";
+      if (!type.startsWith('image/')) return null;
       try {
         const driveFile = await uploadToDrive(file, currentGallery.name);
         return {
@@ -139,7 +145,7 @@ const App: React.FC = () => {
           name: driveFile.name,
           type: driveFile.type || file.type,
           size: file.size,
-          data: driveFile.thumbnail || driveFile.url, // Use thumbnail from API
+          data: driveFile.thumbnail || driveFile.url, 
           timestamp: Date.now(),
         } as StoredImage;
       } catch (e) {
@@ -151,7 +157,7 @@ const App: React.FC = () => {
     const results = await Promise.all(uploadPromises);
     const successImages = results.filter((img): img is StoredImage => img !== null);
     
-    setImages(prev => [...successImages, ...prev]); // Prepend new images
+    setImages(prev => [...successImages, ...prev]); 
     setProcessing(false);
     
     if (successImages.length < files.length) {
@@ -209,16 +215,10 @@ const App: React.FC = () => {
   const handleDeleteGalleryDialog = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     setModal({
-      type: 'confirm',
-      title: 'Hapus Folder (Lokal)?',
-      message: 'Ini hanya menghapus pintasan folder di aplikasi ini. File di Google Drive TIDAK akan terhapus.',
-      confirmText: 'Hapus Pintasan',
-      isDanger: true,
-      onConfirm: async () => {
-        await deleteGallery(id);
-        setGalleries(prev => prev.filter(g => g.id !== id));
-        setModal(null);
-      }
+      type: 'alert',
+      title: 'Info',
+      message: 'Untuk keamanan, silakan hapus folder langsung melalui Google Drive.',
+      confirmText: 'OK',
     });
   };
 
@@ -230,7 +230,7 @@ const App: React.FC = () => {
       id: 'temp-' + Date.now(),
       galleryId: currentGallery.name,
       title: 'Catatan Baru',
-      content: '', // Empty content for new note
+      content: '', 
       timestamp: Date.now()
     };
     setEditingNote(newNote);
@@ -238,30 +238,35 @@ const App: React.FC = () => {
 
   const handleSaveNote = async (id: string, title: string, content: string) => {
     if (!currentGallery) return;
-    
-    // We only support creating NEW notes via upload for simplicity in this version
-    // Editing existing Drive files is complex via simple web app fetch without Auth tokens
-    
     setProcessing(true);
     try {
-      const driveFile = await uploadNoteToDrive(title, content, currentGallery.name);
+      // Determine if create or update based on ID format
+      const isNew = id.startsWith('temp-');
+      const fileIdToUpdate = isNew ? undefined : id;
+
+      const driveFile = await uploadNoteToDrive(title, content, currentGallery.name, fileIdToUpdate);
       
-      const newNote: StoredNote = {
+      const savedNote: StoredNote = {
         id: driveFile.id,
         galleryId: currentGallery.name,
         title: title,
-        content: driveFile.url, // Store URL
+        content: driveFile.url, // Store the View URL in the list
         timestamp: Date.now()
       };
 
-      setNotes(prev => [newNote, ...prev]);
+      if (isNew) {
+        setNotes(prev => [savedNote, ...prev]);
+      } else {
+        setNotes(prev => prev.map(n => n.id === id ? savedNote : n));
+      }
+      
       setEditingNote(null);
     } catch (e) {
       console.error(e);
       setModal({
          type: 'alert',
          title: 'Gagal Menyimpan',
-         message: 'Gagal mengunggah catatan ke Drive.',
+         message: 'Gagal menyimpan catatan ke Drive.',
          confirmText: 'OK'
       });
     } finally {
@@ -288,11 +293,28 @@ const App: React.FC = () => {
     });
   };
 
-  const handleNoteClick = (note: StoredNote) => {
-     if (note.content.startsWith('http')) {
-         window.open(note.content, '_blank');
+  const handleNoteClick = async (note: StoredNote) => {
+     // Check if content is a URL (which it is for Drive files)
+     if (note.content && note.content.startsWith('http')) {
+       setProcessing(true);
+       try {
+         // Fetch actual content from backend
+         const content = await getFileContent(note.id);
+         // Open editor with fetched content, ensure it's a string
+         setEditingNote({ ...note, content: content || "" });
+       } catch (e) {
+         setModal({
+           type: 'alert',
+           title: 'Gagal Membuka',
+           message: 'Gagal mengambil isi catatan dari Google Drive.',
+           confirmText: 'Tutup'
+         });
+       } finally {
+         setProcessing(false);
+       }
      } else {
-         setEditingNote(note);
+       // Fallback for local notes (if any)
+       setEditingNote(note);
      }
   };
 
@@ -321,15 +343,28 @@ const App: React.FC = () => {
             </h1>
           </div>
           
-          {!currentGallery && (
-            <button 
-              onClick={handleCreateGalleryDialog}
-              className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-all shadow-lg"
-            >
-              <Plus size={18} />
-              <span className="hidden sm:inline">Folder Baru</span>
-            </button>
-          )}
+          <div className="flex gap-2">
+            {!currentGallery && (
+               <button 
+                onClick={syncGalleries}
+                disabled={loading}
+                className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 transition-colors"
+                title="Refresh Folder"
+              >
+                <RefreshCw size={20} className={loading ? "animate-spin" : ""} />
+              </button>
+            )}
+
+            {!currentGallery && (
+              <button 
+                onClick={handleCreateGalleryDialog}
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-all shadow-lg"
+              >
+                <Plus size={18} />
+                <span className="hidden sm:inline">Folder Baru</span>
+              </button>
+            )}
+          </div>
         </div>
       </header>
 
@@ -338,7 +373,7 @@ const App: React.FC = () => {
            <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center backdrop-blur-sm">
              <div className="bg-slate-900 p-6 rounded-2xl flex flex-col items-center gap-4 shadow-2xl border border-slate-800">
                <div className="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-               <p className="font-semibold text-blue-400">Syncing to Google Drive...</p>
+               <p className="font-semibold text-blue-400">Syncing with Drive...</p>
              </div>
            </div>
         )}
@@ -346,14 +381,14 @@ const App: React.FC = () => {
         {loading ? (
           <div className="flex justify-center py-20 flex-col items-center gap-4">
             <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-            <p className="text-xs text-slate-500 animate-pulse">Menghubungkan ke API...</p>
+            <p className="text-xs text-slate-500 animate-pulse">Mengambil data dari Google Drive...</p>
           </div>
         ) : !currentGallery ? (
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
             {galleries.length === 0 ? (
               <div className="col-span-full py-20 text-center flex flex-col items-center gap-4 border-2 border-dashed border-slate-800 rounded-2xl">
                 <Folder size={48} className="text-slate-700" />
-                <p className="text-slate-500">Belum ada folder. Buat folder untuk mulai upload ke Drive.</p>
+                <p className="text-slate-500">Drive Kosong. Buat folder baru.</p>
               </div>
             ) : (
               galleries.map(g => (
@@ -374,7 +409,7 @@ const App: React.FC = () => {
                   <h3 className="font-bold text-lg truncate mb-1">{g.name}</h3>
                   <div className="flex items-center gap-2 text-xs text-slate-500 uppercase tracking-widest">
                      <CloudLightning size={12} className="text-blue-500" />
-                     <span>Synced</span>
+                     <span>GDrive</span>
                   </div>
                 </div>
               ))
@@ -493,6 +528,9 @@ const App: React.FC = () => {
             alt="Preview" 
             className="max-w-full max-h-full object-contain shadow-2xl animate-in zoom-in-95 duration-300"
             onClick={(e) => e.stopPropagation()}
+            // --- FIX FOR FULLSCREEN PREVIEW ---
+            referrerPolicy="no-referrer"
+            crossOrigin="anonymous"
           />
         </div>
       )}

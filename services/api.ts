@@ -1,8 +1,8 @@
 
 import { StoredImage, StoredNote } from '../types';
 
-// URL Final dari User
-const API_URL = "https://script.google.com/macros/s/AKfycbxK6aGRAo1J6PxACZah5ZTPg425MCsBtjZR_jE4mGQA0K4VROwkgdGi_L35lPp7019sWQ/exec";
+// URL Final dari User (Deployment Terbaru - Fix Gambar & Error)
+const API_URL = "https://script.google.com/macros/s/AKfycbw0mSJvV2I2sBZib-Gga3iNITIz06BHR1B3QqfOIKcgRGqCWwll6lDeLarE50FdViG3Bg/exec";
 
 interface ApiResponse {
   status: 'success' | 'error';
@@ -17,6 +17,12 @@ interface DriveFile {
   thumbnail: string;
   type: string;
   date: string;
+}
+
+export interface CloudFolder {
+  id: string;
+  name: string;
+  url: string;
 }
 
 // --- CORE HELPER: THE SILVER BULLET ---
@@ -59,7 +65,36 @@ export const fileToBase64 = (file: File | Blob): Promise<string> => {
   });
 };
 
-// 0. Create Folder Explicitly
+// 0. Fetch All Folders from Cloud
+export const fetchAllCloudGalleries = async (): Promise<CloudFolder[]> => {
+  const result = await callGoogleScript({
+    action: "getFolders"
+  });
+  
+  if (result.status === "success" && Array.isArray(result.data)) {
+    return result.data;
+  } else {
+    console.warn("Gagal load folder cloud:", result.message);
+    return [];
+  }
+};
+
+// 0.5 Fetch File Content (For Notes)
+export const getFileContent = async (fileId: string): Promise<string> => {
+  const result = await callGoogleScript({
+    action: "getFileContent",
+    fileId: fileId
+  });
+
+  if (result.status === 'success') {
+    // Pastikan return string, jangan object atau undefined
+    return typeof result.data?.content === 'string' ? result.data.content : "";
+  } else {
+    throw new Error(result.message || "Gagal mengambil konten catatan.");
+  }
+};
+
+// 1. Create Folder Explicitly
 export const createFolderInDrive = async (folderName: string): Promise<string> => {
   const result = await callGoogleScript({
     action: "createFolder",
@@ -70,7 +105,7 @@ export const createFolderInDrive = async (folderName: string): Promise<string> =
   return result.data?.folderId || "";
 };
 
-// 1. Upload Image / File
+// 2. Upload Image / File
 export const uploadToDrive = async (file: File, folderName: string): Promise<DriveFile> => {
   const base64 = await fileToBase64(file);
   
@@ -78,7 +113,7 @@ export const uploadToDrive = async (file: File, folderName: string): Promise<Dri
     action: "uploadImage",
     folderName: folderName,
     fileName: file.name,
-    mimeType: file.type, // Dikirim untuk info, walau backend detect via blob
+    mimeType: file.type || "application/octet-stream", 
     base64: base64
   });
 
@@ -96,20 +131,21 @@ export const uploadToDrive = async (file: File, folderName: string): Promise<Dri
     id: data.id,
     name: data.name || file.name,
     url: data.url || "",
-    thumbnail: data.thumbnail || data.url || "", // Fallback
-    type: file.type,
+    // Use URL (HD) as primary data source, ignore thumbnail logic if HD is preferred
+    thumbnail: data.thumbnail || data.url || "", 
+    type: file.type || "image/png",
     date: new Date().toISOString()
   };
 };
 
-// 2. Upload Note (As Text File)
-export const uploadNoteToDrive = async (noteTitle: string, content: string, folderName: string): Promise<DriveFile> => {
+// 3. Upload Note (Create or Update)
+export const uploadNoteToDrive = async (noteTitle: string, content: string, folderName: string, fileId?: string): Promise<DriveFile> => {
   const result = await callGoogleScript({
-    action: "saveNote", // Sesuai backend baru Anda "saveNote"
+    action: "saveNote", 
     folderName: folderName,
     title: noteTitle,
     content: content,
-    fileId: null // null = new file
+    fileId: fileId || null 
   });
 
   if (result.status === 'error') throw new Error(result.message);
@@ -126,7 +162,7 @@ export const uploadNoteToDrive = async (noteTitle: string, content: string, fold
   };
 };
 
-// 3. Load Gallery (Get Files)
+// 4. Load Gallery (Get Files)
 export const loadGallery = async (folderName: string): Promise<{ images: StoredImage[], notes: StoredNote[] }> => {
   const result = await callGoogleScript({
     action: "getFiles",
@@ -141,38 +177,50 @@ export const loadGallery = async (folderName: string): Promise<{ images: StoredI
   const notes: StoredNote[] = [];
 
   rawFiles.forEach((file) => {
-    // Deteksi tipe file berdasarkan mimeType atau ekstensi
-    const mime = file.mimeType || "";
-    const name = file.name || "";
+    // --- SAFETY CHECK (SAFE MODE) ---
+    // Mencegah error 'cannot read property of undefined'
     
-    const isImage = mime.startsWith('image/') || name.match(/\.(jpg|jpeg|png|gif|webp)$/i);
-    const isText = mime === 'text/plain' || name.endsWith('.txt');
+    // 1. Ambil mimeType atau type, fallback ke string kosong
+    const rawMime = file.mimeType || file.type;
+    const mime = (rawMime || "").toLowerCase();
+    const name = (file.name || "").toLowerCase();
+    
+    // 2. Logic Deteksi
+    let fileType = "unknown";
+    
+    if (mime.startsWith('image/') || name.match(/\.(jpg|jpeg|png|gif|webp|bmp)$/)) {
+      fileType = "image";
+    } else if (mime.startsWith('text/') || name.endsWith('.txt')) {
+      fileType = "note";
+    }
 
-    if (isImage) {
+    if (fileType === "image") {
       images.push({
         id: file.id,
         galleryId: folderName,
-        name: name,
+        name: file.name || "Untitled Image",
         type: mime || 'image/jpeg',
         size: 0, 
-        data: file.thumbnail || file.url, // Prioritaskan thumbnail agar ringan
+        // Menggunakan URL full resolusi (view link) alih-alih thumbnail
+        data: file.url || file.thumbnail, 
         timestamp: file.lastUpdated ? new Date(file.lastUpdated).getTime() : Date.now()
       });
-    } else if (isText) {
+    } else if (fileType === "note") {
       notes.push({
         id: file.id,
         galleryId: folderName,
-        title: name.replace('.txt', ''),
-        content: file.url, // Simpan URL view
+        title: (file.name || "Untitled Note").replace('.txt', ''),
+        content: file.url, // URL disimpan di list, konten diambil on-demand
         timestamp: file.lastUpdated ? new Date(file.lastUpdated).getTime() : Date.now()
       });
     }
+    // File tipe lain diabaikan agar tidak crash
   });
 
   return { images, notes };
 };
 
-// 4. Delete File
+// 5. Delete File
 export const deleteFromDrive = async (fileId: string): Promise<void> => {
   const result = await callGoogleScript({
     action: "deleteFile",
