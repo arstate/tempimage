@@ -1,788 +1,764 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { UploadZone } from './components/UploadZone';
-import { ImageCard } from './components/ImageCard';
-import { NoteCard } from './components/NoteCard';
+import { 
+  Folder, FileText, Image as ImageIcon, MoreVertical, 
+  ArrowLeft, Plus, Trash2, Copy, Move, Edit, CheckSquare, 
+  Loader2, Home, Upload, ChevronRight, X, AlertCircle, Download, CornerUpLeft
+} from 'lucide-react';
+import * as API from './services/api';
+import * as DB from './services/db';
+import { Item, StoredNote } from './types';
 import { TextEditor } from './components/TextEditor';
-import { UploadWidget } from './components/UploadWidget';
-import { Gallery, StoredImage, StoredNote } from './types';
-import { 
-  uploadToDrive, loadGallery, deleteFromDrive, uploadNoteToDrive, createFolderInDrive, fetchAllCloudGalleries, getFileContent, deleteFolderInDrive, renameFolderInDrive
-} from './services/api'; 
-// Import DB Functions
-import { 
-  getImagesByGallery, getNotesByGallery, clearGalleryCache, saveBulkImages, saveBulkNotes, saveNote, saveImage, deleteImage, deleteNote
-} from './services/db.ts';
-import { Folder, Plus, ArrowLeft, X, Clipboard, LayoutGrid, Trash2, AlertCircle, FileText, Cloud, CloudLightning, RefreshCw, Loader2, Edit } from 'lucide-react';
 
-type ModalType = 'input' | 'confirm' | 'alert' | null;
-
+// --- TYPES FOR MODALS ---
+type ModalType = 'input' | 'confirm' | 'alert' | 'select' | null;
 interface ModalState {
   type: ModalType;
   title: string;
   message?: string;
   inputValue?: string;
+  options?: { label: string; value: string }[];
   onConfirm?: (value?: string) => void;
   confirmText?: string;
   isDanger?: boolean;
 }
 
-// Queue Item Type
-interface UploadItem {
-  id: string;
-  file: File;
-  galleryName: string;
-}
-
-const App: React.FC = () => {
-  const [galleries, setGalleries] = useState<Gallery[]>([]);
-  const [currentGallery, setCurrentGallery] = useState<Gallery | null>(null);
-  const [images, setImages] = useState<StoredImage[]>([]);
-  const [notes, setNotes] = useState<StoredNote[]>([]); 
-  const [loading, setLoading] = useState(true);
+const App = () => {
+  // --- CORE STATE ---
+  const [currentFolderId, setCurrentFolderId] = useState<string>(""); 
+  const [parentFolderId, setParentFolderId] = useState<string>(""); // Store parent for navigation/move
+  const [folderHistory, setFolderHistory] = useState<{id:string, name:string}[]>([]);
+  const [items, setItems] = useState<Item[]>([]);
+  const [loading, setLoading] = useState(false); 
+  const [bgProcessing, setBgProcessing] = useState(false); 
   
-  // --- STATES FOR NON-BLOCKING UPLOAD QUEUE ---
-  const [uploadQueue, setUploadQueue] = useState<UploadItem[]>([]);
-  const [isProcessingQueue, setIsProcessingQueue] = useState(false);
-  const [currentUploadItem, setCurrentUploadItem] = useState<UploadItem | null>(null);
-  const [uploadWidgetOpen, setUploadWidgetOpen] = useState(true);
-  // ---------------------------------------
-
-  const [isDeleting, setIsDeleting] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
-
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [editingNote, setEditingNote] = useState<StoredNote | null>(null);
+  // --- UI STATE ---
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [contextMenu, setContextMenu] = useState<{x:number, y:number, targetItem?: Item} | null>(null);
+  const [isDraggingFile, setIsDraggingFile] = useState(false); 
+  const [isNewDropdownOpen, setIsNewDropdownOpen] = useState(false);
   
+  // --- EDITOR & MODALS ---
   const [modal, setModal] = useState<ModalState | null>(null);
+  const [editingNote, setEditingNote] = useState<StoredNote | null>(null);
+  const [previewImage, setPreviewImage] = useState<string | null>(null);
+  
   const inputRef = useRef<HTMLInputElement>(null);
+  const selectRef = useRef<HTMLSelectElement>(null);
 
-  useEffect(() => {
-    syncGalleries();
+  // --- 1. LOAD DATA (CACHE FIRST STRATEGY) ---
+  const loadFolder = useCallback(async (folderId: string = "") => {
+    // 1. Try Load from Cache Immediate
+    try {
+        const cachedItems = await DB.getCachedFolder(folderId);
+        if (cachedItems && cachedItems.length > 0) {
+            setItems(cachedItems);
+        } else {
+            setLoading(true); // Only show spinner if cache miss
+        }
+    } catch (e) { console.warn("Cache read error", e); }
+
+    // 2. Fetch from Network (Silent Update)
+    try {
+      const res = await API.getFolderContents(folderId);
+      setLoading(false);
+      if (res.status === 'success') {
+        setItems(res.data);
+        setParentFolderId(res.parentFolderId || ""); 
+        // 3. Update Cache
+        await DB.cacheFolderContents(folderId, res.data);
+      } else {
+        console.error(res.message);
+      }
+    } catch (e) {
+      console.error(e);
+      setLoading(false);
+    }
   }, []);
 
   useEffect(() => {
-    if (modal?.type === 'input' && inputRef.current) {
-      inputRef.current.focus();
-    }
+    loadFolder(currentFolderId);
+  }, [currentFolderId, loadFolder]);
+
+  // Focus inputs in modal
+  useEffect(() => {
+    if (modal?.type === 'input' && inputRef.current) inputRef.current.focus();
+    if (modal?.type === 'select' && selectRef.current) selectRef.current.focus();
   }, [modal]);
 
-  // --- QUEUE PROCESSOR EFFECT ---
+  // Close dropdown when clicking outside
   useEffect(() => {
-    const processNext = async () => {
-      // Logic barrier to ensure one file at a time
-      if (isProcessingQueue || uploadQueue.length === 0) return;
-
-      setIsProcessingQueue(true);
-      const item = uploadQueue[0];
-      setCurrentUploadItem(item);
-
-      try {
-        // Perform Upload (Compression removed as per request - Original Quality)
-        const uploadedFile = await uploadToDrive(item.file, item.galleryName);
-        
-        // 1. Save to Local Cache (DB)
-        const storedImg: StoredImage = {
-           id: uploadedFile.id,
-           galleryId: item.galleryName,
-           name: uploadedFile.name,
-           type: uploadedFile.type,
-           size: item.file.size,
-           data: uploadedFile.url,
-           timestamp: Date.now()
-        };
-        await saveImage(storedImg);
-
-        // 2. If user is currently viewing this gallery, update UI immediately
-        if (currentGallery && currentGallery.name === item.galleryName) {
-           setImages(prev => [storedImg, ...prev]);
+    const handleClickOutside = (event: MouseEvent) => {
+        if (isNewDropdownOpen && !(event.target as Element).closest('.new-dropdown-container')) {
+            setIsNewDropdownOpen(false);
         }
-
-      } catch (e) {
-        console.error("Background upload failed for", item.file.name, e);
-      } finally {
-        // Remove processed item from queue
-        setUploadQueue(prev => prev.slice(1));
-        setCurrentUploadItem(null);
-        setIsProcessingQueue(false);
-      }
     };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isNewDropdownOpen]);
 
-    processNext();
-  }, [uploadQueue, isProcessingQueue, currentGallery]);
+  // --- 2. SELECTION LOGIC ---
+  const toggleSelection = (id: string, multi: boolean) => {
+    const newSet = new Set(multi ? selectedIds : []);
+    if (multi && newSet.has(id)) {
+        newSet.delete(id);
+    } else {
+        newSet.add(id);
+    }
+    setSelectedIds(newSet);
+  };
 
-
-  const syncGalleries = async () => {
-    setLoading(true);
-    try {
-      const cloudFolders = await fetchAllCloudGalleries();
-      const mappedGalleries: Gallery[] = cloudFolders.map(f => ({
-        id: f.id,
-        name: f.name,
-        timestamp: Date.now() 
-      }));
-      setGalleries(mappedGalleries);
-    } catch (error) {
-      console.error("Failed to sync folders", error);
-    } finally {
-      setLoading(false);
+  const handleItemClick = (e: React.MouseEvent, item: Item) => {
+    e.stopPropagation();
+    if (e.ctrlKey || e.metaKey) {
+        toggleSelection(item.id, true);
+        return;
+    }
+    if (item.type === 'folder') {
+        setFolderHistory(prev => [...prev, { id: item.id, name: item.name }]);
+        setCurrentFolderId(item.id);
+    } else if (item.type === 'note') {
+        handleOpenNote(item);
+    } else if (item.type === 'image') {
+        setPreviewImage(item.url || null);
     }
   };
 
-  const loadGalleryData = async (galleryName: string) => {
-    // 1. Cek Cache Lokal (IndexedDB)
-    try {
-      const [cachedImages, cachedNotes] = await Promise.all([
-        getImagesByGallery(galleryName),
-        getNotesByGallery(galleryName)
-      ]);
+  // --- 3. CONTEXT MENU ---
+  const handleContextMenu = (e: React.MouseEvent, item?: Item) => {
+    e.preventDefault();
+    if (item && !selectedIds.has(item.id)) {
+      setSelectedIds(new Set([item.id]));
+    }
+    setContextMenu({ x: e.pageX, y: e.pageY, targetItem: item });
+  };
 
-      if (cachedImages.length > 0 || cachedNotes.length > 0) {
-        setImages(cachedImages);
-        setNotes(cachedNotes);
-        setLoading(false); 
-      } else {
-        setLoading(true); 
-      }
+  // --- 4. ACTIONS & DOWNLOAD ---
+  const handleDownload = async (item: Item) => {
+    if (!item.url) return;
+    try {
+        const response = await fetch(item.url);
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = item.name; 
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        document.body.removeChild(a);
     } catch (e) {
-      console.warn("DB Read Error:", e);
-      setLoading(true);
+        window.open(item.url, '_blank');
     }
+  };
 
-    // 2. Fetch Network (Background Sync)
-    try {
-      const { images: apiImages, notes: apiNotes } = await loadGallery(galleryName);
-      
-      setImages(apiImages);
-      setNotes(apiNotes);
+  const executeAction = async (action: string) => {
+    const ids = Array.from(selectedIds);
+    const targetItem = contextMenu?.targetItem || (ids.length === 1 ? items.find(i => i.id === ids[0]) : null);
+    
+    setContextMenu(null);
+    setIsNewDropdownOpen(false);
 
-      // 3. Update Cache
-      await clearGalleryCache(galleryName);
-      await Promise.all([
-        saveBulkImages(apiImages),
-        saveBulkNotes(apiNotes)
-      ]);
-      
-      setLoading(false);
-      prefetchNotesBackground(apiNotes);
+    if (action === 'download' && targetItem) {
+        handleDownload(targetItem);
+    }
+    else if (action === 'delete') {
+       if (ids.length === 0) return;
+       setModal({
+         type: 'confirm',
+         title: 'Hapus Item?',
+         message: `Yakin ingin menghapus ${ids.length} item?`,
+         confirmText: 'Hapus',
+         isDanger: true,
+         onConfirm: async () => {
+            setModal(null);
+            setBgProcessing(true);
+            await API.deleteItems(ids);
+            await loadFolder(currentFolderId);
+            setBgProcessing(false);
+         }
+       });
+    } 
+    else if (action === 'duplicate') {
+        if (ids.length === 0) return;
+        setBgProcessing(true);
+        await API.duplicateItems(ids);
+        await loadFolder(currentFolderId);
+        setBgProcessing(false);
+    }
+    else if (action === 'move') {
+        if (ids.length === 0) return;
+        
+        // List folders available to move into (exclude self if folder, exclude folders being moved)
+        const availableFolders = items.filter(i => i.type === 'folder' && !ids.includes(i.id));
+        const options = [];
+        
+        // Add Parent Option
+        if (currentFolderId) {
+            options.push({ label: '📁 .. (Folder Induk)', value: parentFolderId || "" }); // Empty string = root
+        }
+        
+        availableFolders.forEach(f => options.push({ label: `📁 ${f.name}`, value: f.id }));
+        
+        if (options.length === 0) {
+            setModal({ type: 'alert', title: 'Tidak Bisa Pindah', message: 'Tidak ada folder tujuan yang tersedia disini.' });
+            return;
+        }
 
-    } catch (error) {
-      console.error(error);
-      if (images.length === 0 && notes.length === 0) {
         setModal({
-          type: 'alert',
-          title: 'Gagal Memuat Data',
-          message: 'Gagal mengambil data dari Google Drive dan tidak ada cache tersimpan.',
-          confirmText: 'OK'
+            type: 'select',
+            title: `Pindahkan ${ids.length} Item`,
+            message: 'Pilih folder tujuan:',
+            options: options,
+            confirmText: 'Pindahkan',
+            onConfirm: async (targetId) => {
+                 // Undefined target check
+                 if (targetId === undefined) return;
+                 setModal(null);
+                 setBgProcessing(true);
+                 await API.moveItems(ids, targetId);
+                 await loadFolder(currentFolderId);
+                 setBgProcessing(false);
+            }
         });
-      }
-    } finally {
-      setLoading(false);
+    }
+    else if (action === 'rename') {
+        if (!targetItem) return;
+        setModal({
+            type: 'input',
+            title: 'Ganti Nama',
+            inputValue: targetItem.name,
+            confirmText: 'Simpan',
+            onConfirm: async (newName) => {
+                if(newName && newName !== targetItem.name) {
+                    setModal(null);
+                    setBgProcessing(true);
+                    await API.renameItem(targetItem.id, newName);
+                    await loadFolder(currentFolderId);
+                    setBgProcessing(false);
+                }
+            }
+        });
+    }
+    else if (action === 'new_folder') {
+        setModal({
+            type: 'input',
+            title: 'Folder Baru',
+            inputValue: 'Folder Baru',
+            confirmText: 'Buat',
+            onConfirm: async (name) => {
+                if(name) {
+                    setModal(null);
+                    setBgProcessing(true);
+                    await API.createFolder(currentFolderId, name);
+                    await loadFolder(currentFolderId);
+                    setBgProcessing(false);
+                }
+            }
+        });
     }
   };
 
-  const prefetchNotesBackground = async (initialNotes: StoredNote[]) => {
-    const notesToFetch = initialNotes.filter(n => n.content.startsWith('http'));
-    for (const note of notesToFetch) {
+  // --- 5. DRAG & DROP UPLOAD ---
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDraggingFile(false);
+    
+    // A. External Files (Upload)
+    if (e.dataTransfer.files.length > 0) {
+      const files = Array.from(e.dataTransfer.files);
+      setBgProcessing(true);
+      for (const file of files) {
+          try { await API.uploadToDrive(file, currentFolderId); } catch(err) { console.error(err); }
+      }
+      await loadFolder(currentFolderId);
+      setBgProcessing(false);
+      return;
+    }
+
+    // B. Internal Items (Move)
+    const movedItemId = e.dataTransfer.getData("text/item-id");
+    let targetElement = e.target as HTMLElement;
+    while(targetElement && !targetElement.getAttribute("data-folder-id")) {
+       targetElement = targetElement.parentElement as HTMLElement;
+       if (!targetElement || targetElement === e.currentTarget) break;
+    }
+    const targetFolderId = targetElement?.getAttribute("data-folder-id");
+    
+    if (movedItemId && targetFolderId && movedItemId !== targetFolderId) {
+       setBgProcessing(true);
+       try {
+         await API.moveItems([movedItemId], targetFolderId);
+         await loadFolder(currentFolderId);
+       } catch(err) { console.error(err); } 
+       finally { setBgProcessing(false); }
+    }
+  };
+
+  // --- NOTE HANDLING ---
+  const handleOpenNote = async (item: Item) => {
+      setBgProcessing(true);
       try {
-        const textContent = await getFileContent(note.id);
-        const updatedNote = { ...note, content: textContent };
-        setNotes(prev => prev.map(n => n.id === note.id ? updatedNote : n));
-        saveNote(updatedNote).catch(console.error);
-      } catch (e) {
-        console.warn(`Background prefetch failed for note ${note.id}`, e);
-      }
-    }
-  };
-
-  const handleCreateGalleryDialog = () => {
-    setModal({
-      type: 'input',
-      title: 'Buat Folder Baru',
-      message: 'Folder ini akan dibuat di Google Drive sekarang juga.',
-      inputValue: '',
-      confirmText: 'Buat Folder',
-      onConfirm: async (name) => {
-        if (!name?.trim()) return;
-        const cleanName = name.trim();
-        setModal(null); 
-        setIsSaving(true); 
-        try {
-          await createFolderInDrive(cleanName);
-          await syncGalleries();
-        } catch (error) {
-          console.error("Create folder error:", error);
-          setModal({
-            type: 'alert',
-            title: 'Gagal Membuat Folder',
-            message: 'Gagal menghubungkan ke Google Drive API.',
-            confirmText: 'OK'
+          const content = await API.getFileContent(item.id);
+          setEditingNote({
+              id: item.id,
+              galleryId: currentFolderId,
+              title: item.name.replace('.txt', ''),
+              content: content,
+              timestamp: item.lastUpdated
           });
-        } finally {
-          setIsSaving(false);
-        }
-      }
-    });
+      } catch(e) { alert("Gagal membuka catatan"); } 
+      finally { setBgProcessing(false); }
   };
 
-  const handleRenameGalleryDialog = (gallery: Gallery, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setModal({
-      type: 'input',
-      title: 'Ubah Nama Folder',
-      message: `Masukkan nama baru untuk folder "${gallery.name}"`,
-      inputValue: gallery.name,
-      confirmText: 'Simpan',
-      onConfirm: async (newName) => {
-        if (!newName?.trim() || newName === gallery.name) {
-             setModal(null);
-             return;
-        }
-        const cleanName = newName.trim();
-        setModal(null);
-        setIsSaving(true);
-        try {
-          await renameFolderInDrive(gallery.id, cleanName);
-          await syncGalleries();
-        } catch (error) {
-          console.error(error);
-          setModal({
-            type: 'alert',
-            title: 'Gagal Mengubah Nama',
-            message: 'Gagal menghubungi server Google Drive.',
-            confirmText: 'OK'
-          });
-        } finally {
-          setIsSaving(false);
-        }
-      }
-    });
-  };
-
-  const selectGallery = (gallery: Gallery) => {
-    setCurrentGallery(gallery);
-    loadGalleryData(gallery.name); 
-  };
-
-  // --- OPTIMIZATION: Async Process Files for Mobile Lag Prevention ---
-  const processFiles = useCallback((files: FileList | File[]) => {
-    if (!currentGallery) return;
-    
-    // Gunakan setTimeout di sini juga untuk memastikan React tidak memblokir UI thread
-    // saat menerima array file yang besar dari UploadZone
-    setTimeout(() => {
-      const fileArray = Array.from(files);
-      if (fileArray.length === 0) return;
-
-      const validFiles = fileArray.filter(f => f.type.startsWith('image/'));
-      if (validFiles.length === 0) return;
-
-      const newQueueItems: UploadItem[] = validFiles.map(f => ({
-        id: Math.random().toString(36).substr(2, 9),
-        file: f,
-        galleryName: currentGallery.name
-      }));
-
-      if (newQueueItems.length > 0) {
-        setUploadWidgetOpen(true);
-        setUploadQueue(prev => [...prev, ...newQueueItems]);
-      }
-    }, 0);
-    
-  }, [currentGallery]);
-
-  useEffect(() => {
-    const handlePaste = (e: ClipboardEvent) => {
-      if (!currentGallery || modal || editingNote) return;
-      const items = e.clipboardData?.items;
-      if (!items) return;
-      const files: File[] = [];
-      for (let i = 0; i < items.length; i++) {
-        if (items[i].type.indexOf('image') !== -1) {
-          const blob = items[i].getAsFile();
-          if (blob) files.push(blob);
-        }
-      }
-      if (files.length > 0) processFiles(files);
-    };
-    window.addEventListener('paste', handlePaste);
-    return () => window.removeEventListener('paste', handlePaste);
-  }, [currentGallery, processFiles, modal, editingNote]);
-
-  const handleDeleteImageDialog = (id: string) => {
-    setModal({
-      type: 'confirm',
-      title: 'Hapus File Drive?',
-      message: 'File ini akan dihapus dari Google Drive Anda.',
-      confirmText: 'Hapus Permanen',
-      isDanger: true,
-      onConfirm: async () => {
-        setIsDeleting(true);
-        setModal(null);
-        try {
-          await deleteFromDrive(id);
-          setImages(prev => prev.filter(img => img.id !== id));
-          await deleteImage(id);
-        } catch (e) {
-          setModal({
-            type: 'alert',
-            title: 'Gagal Menghapus',
-            message: 'Terjadi kesalahan saat menghubungi Google Drive.',
-            confirmText: 'OK'
-          });
-        } finally {
-          setIsDeleting(false);
-        }
-      }
-    });
-  };
-
-  const handleDeleteGalleryDialog = (gallery: Gallery, e: React.MouseEvent) => {
-    e.stopPropagation();
-    setModal({
-      type: 'confirm',
-      title: 'Hapus Folder?',
-      message: `Yakin ingin menghapus folder "${gallery.name}" selamanya? Semua isi akan hilang.`,
-      confirmText: 'Hapus Folder',
-      isDanger: true,
-      onConfirm: async () => {
-        setModal(null);
-        setIsDeleting(true);
-        try {
-           await deleteFolderInDrive(gallery.id);
-           await syncGalleries(); 
-        } catch (error) {
-           console.error(error);
-           setModal({
-            type: 'alert',
-            title: 'Gagal Hapus',
-            message: 'Gagal menghapus folder di Drive.',
-            confirmText: 'OK'
-          });
-        } finally {
-           setIsDeleting(false);
-        }
-      }
-    });
-  };
-
-  // --- Note Logic ---
-
-  const handleAddNote = () => {
-    if (!currentGallery) return;
-    const newNote: StoredNote = {
-      id: 'temp-' + Date.now(),
-      galleryId: currentGallery.name,
-      title: 'Catatan Baru',
-      content: '', 
-      timestamp: Date.now()
-    };
-    setEditingNote(newNote);
+  const handleCreateNote = () => {
+      setEditingNote({
+          id: 'temp-' + Date.now(),
+          galleryId: currentFolderId,
+          title: 'Catatan Baru',
+          content: '',
+          timestamp: Date.now()
+      });
+      setIsNewDropdownOpen(false);
+      setContextMenu(null);
   };
 
   const handleSaveNote = async (id: string, title: string, content: string) => {
-    if (!currentGallery) return;
-    
-    setIsSaving(true);
-    try {
-      const isNew = id.startsWith('temp-');
-      const fileIdToUpdate = isNew ? undefined : id;
-
-      const driveFile = await uploadNoteToDrive(title, content, currentGallery.name, fileIdToUpdate);
-      
-      const savedNote: StoredNote = {
-        id: driveFile.id,
-        galleryId: currentGallery.name,
-        title: title,
-        content: content, 
-        snippet: content.substring(0, 100), 
-        timestamp: Date.now()
-      };
-      
-      await saveNote(savedNote);
-
-      if (isNew) {
-        setNotes(prev => [savedNote, ...prev]);
-        setEditingNote(prev => prev ? { ...prev, id: driveFile.id, title, content } : null);
-      } else {
-        setNotes(prev => prev.map(n => n.id === id ? savedNote : n));
-        setEditingNote(prev => prev ? { ...prev, title, content } : null);
-      }
-      alert("Catatan berhasil disimpan!");
-    } catch (e) {
-      console.error(e);
-      alert("Gagal menyimpan catatan.");
-    } finally {
-      setIsSaving(false);
-    }
+      setBgProcessing(true);
+      try {
+          const isNew = id.startsWith('temp-');
+          const fileId = isNew ? undefined : id;
+          await API.saveNoteToDrive(title, content, currentFolderId, fileId);
+          await loadFolder(currentFolderId);
+          setEditingNote(null);
+      } catch(e) { alert("Gagal menyimpan note"); } 
+      finally { setBgProcessing(false); }
   };
 
-  const handleDeleteNoteDialog = (id: string) => {
-    setModal({
-      type: 'confirm',
-      title: 'Hapus Catatan?',
-      message: 'File teks ini akan dihapus dari Google Drive.',
-      confirmText: 'Hapus',
-      isDanger: true,
-      onConfirm: async () => {
-        setModal(null);
-        setIsDeleting(true);
-        try {
-          await deleteFromDrive(id);
-          setNotes(prev => prev.filter(n => n.id !== id));
-          await deleteNote(id);
-        } catch (e) {
-          alert("Gagal menghapus note");
-        } finally {
-          setIsDeleting(false);
-        }
-      }
-    });
-  };
-
-  const handleNoteClick = async (note: StoredNote) => {
-     if (note.content && note.content.startsWith('http')) {
-       setIsSaving(true); 
-       try {
-         const content = await getFileContent(note.id);
-         const updatedNote = { ...note, content: content || "" };
-         setEditingNote(updatedNote);
-         setNotes(prev => prev.map(n => n.id === note.id ? updatedNote : n));
-         saveNote(updatedNote); 
-       } catch (e) {
-         setModal({
-           type: 'alert',
-           title: 'Gagal Membuka',
-           message: 'Gagal mengambil isi catatan dari Google Drive.',
-           confirmText: 'Tutup'
-         });
-       } finally {
-         setIsSaving(false);
-       }
+  // --- BREADCRUMB ---
+  const handleBreadcrumbClick = (index: number) => {
+     if (index === -1) {
+         setFolderHistory([]);
+         setCurrentFolderId("");
      } else {
-       setEditingNote(note);
+         const target = folderHistory[index];
+         setFolderHistory(prev => prev.slice(0, index + 1));
+         setCurrentFolderId(target.id);
      }
   };
 
-  return (
-    <div className="min-h-screen pb-20 bg-slate-950 text-slate-200">
-      {/* Header */}
-      <header className="sticky top-0 z-50 backdrop-blur-md bg-slate-950/80 border-b border-slate-800">
-        <div className="max-w-7xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            {currentGallery ? (
-              <button 
-                onClick={() => setCurrentGallery(null)}
-                className="p-2 hover:bg-slate-800 rounded-full transition-colors text-blue-400"
-              >
-                <ArrowLeft size={24} />
-              </button>
-            ) : (
-              <div className="bg-blue-600 p-2 rounded-lg">
-                <Cloud className="text-white" size={20} />
-              </div>
-            )}
-            <h1 className="text-xl font-bold">
-              {currentGallery ? currentGallery.name : (
-                <>temp<span className="text-blue-500">img</span> <span className="text-[10px] bg-slate-800 px-2 py-1 rounded text-slate-400 ml-2 align-middle">Cloud</span></>
-              )}
-            </h1>
-          </div>
-          
-          <div className="flex gap-2">
-            {!currentGallery && (
-               <button 
-                onClick={syncGalleries}
-                disabled={loading}
-                className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 transition-colors"
-                title="Refresh Folder"
-              >
-                <RefreshCw size={20} className={loading ? "animate-spin" : ""} />
-              </button>
-            )}
+  // --- HELPER: GROUP ITEMS ---
+  const groupedItems = {
+      folders: items.filter(i => i.type === 'folder'),
+      notes: items.filter(i => i.type === 'note'),
+      images: items.filter(i => i.type === 'image')
+  };
 
-            {!currentGallery && (
-              <button 
-                onClick={handleCreateGalleryDialog}
-                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-all shadow-lg"
-              >
-                <Plus size={18} />
-                <span className="hidden sm:inline">Folder Baru</span>
-              </button>
+  // --- RENDER ---
+  return (
+    <div 
+      className="min-h-screen bg-slate-950 text-slate-200 relative select-none"
+      onContextMenu={(e) => handleContextMenu(e)} 
+      onDragOver={(e) => { e.preventDefault(); setIsDraggingFile(true); }}
+      onDragLeave={() => setIsDraggingFile(false)}
+      onDrop={handleDrop}
+      onClick={() => {
+        setContextMenu(null);
+        setSelectedIds(new Set());
+      }}
+    >
+      
+      {/* HEADER */}
+      <header className="sticky top-0 z-40 bg-slate-900/90 backdrop-blur border-b border-slate-800 h-16 flex items-center px-4 justify-between shadow-sm">
+        
+        {/* Breadcrumb */}
+        <div className="flex items-center gap-1 overflow-x-auto no-scrollbar mask-gradient-right">
+           <button 
+             onClick={() => handleBreadcrumbClick(-1)}
+             className={`p-2 rounded-lg flex items-center gap-2 text-sm font-medium transition-colors ${currentFolderId === "" ? 'text-blue-400 bg-blue-500/10' : 'text-slate-400 hover:bg-slate-800'}`}
+           >
+             <Home size={18} />
+             <span className="hidden sm:inline">Drive</span>
+           </button>
+           
+           {folderHistory.map((h, idx) => (
+             <React.Fragment key={h.id}>
+               <ChevronRight size={14} className="text-slate-600 flex-shrink-0" />
+               <button 
+                 onClick={() => handleBreadcrumbClick(idx)}
+                 className={`p-2 rounded-lg text-sm font-medium transition-colors whitespace-nowrap ${idx === folderHistory.length - 1 ? 'text-blue-400 bg-blue-500/10' : 'text-slate-400 hover:bg-slate-800'}`}
+               >
+                 {h.name}
+               </button>
+             </React.Fragment>
+           ))}
+        </div>
+
+        {/* Add New Button (Toggle Dropdown) */}
+        <div className="flex items-center gap-2 new-dropdown-container">
+            {bgProcessing && (
+                <div className="flex items-center gap-2 text-xs text-blue-400 mr-4 animate-pulse">
+                    <Loader2 size={14} className="animate-spin" />
+                    Processing...
+                </div>
             )}
-          </div>
+            
+            <div className="relative">
+                <button 
+                    onClick={() => setIsNewDropdownOpen(!isNewDropdownOpen)}
+                    className={`px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold shadow-lg transition-all border border-transparent
+                    ${isNewDropdownOpen ? 'bg-slate-800 border-slate-700 text-white' : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-900/20'}`}
+                >
+                    <Plus size={18} />
+                    <span className="hidden sm:inline">Baru</span>
+                </button>
+                
+                {/* Dropdown Menu */}
+                {isNewDropdownOpen && (
+                    <div className="absolute right-0 top-full mt-2 w-56 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl z-50 p-1.5 animate-in fade-in zoom-in-95 duration-150 origin-top-right">
+                        <button onClick={(e) => { e.stopPropagation(); executeAction('new_folder'); }} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 rounded-lg flex items-center gap-3 text-sm text-slate-200 transition-colors">
+                            <Folder size={18} className="text-blue-400"/> Folder Baru
+                        </button>
+                        <button onClick={(e) => { e.stopPropagation(); handleCreateNote(); }} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 rounded-lg flex items-center gap-3 text-sm text-slate-200 transition-colors">
+                            <FileText size={18} className="text-yellow-400"/> Catatan Baru
+                        </button>
+                        <div className="h-px bg-slate-700 my-1"></div>
+                        <label className="w-full text-left px-3 py-2.5 hover:bg-slate-700 rounded-lg flex items-center gap-3 text-sm text-slate-200 cursor-pointer transition-colors">
+                            <Upload size={18} className="text-green-400"/> Upload File
+                            <input type="file" multiple className="hidden" onChange={(e) => {
+                                setIsNewDropdownOpen(false);
+                                if(e.target.files) {
+                                    const files = Array.from(e.target.files);
+                                    setBgProcessing(true);
+                                    Promise.all(files.map(f => API.uploadToDrive(f, currentFolderId)))
+                                        .then(() => loadFolder(currentFolderId))
+                                        .finally(() => setBgProcessing(false));
+                                }
+                            }} />
+                        </label>
+                    </div>
+                )}
+            </div>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 py-6">
+      {/* MULTI-SELECT TOOLBAR */}
+      {selectedIds.size > 0 && (
+        <div className="sticky top-16 z-30 bg-blue-600 text-white px-4 py-2 flex justify-between items-center shadow-md animate-in slide-in-from-top-2">
+           <div className="flex items-center gap-3">
+             <button onClick={() => setSelectedIds(new Set())} className="p-1 hover:bg-blue-500 rounded"><X size={18}/></button>
+             <span className="font-semibold text-sm">{selectedIds.size} terpilih</span>
+           </div>
+           <div className="flex gap-2">
+             <button onClick={(e) => { e.stopPropagation(); executeAction('duplicate'); }} className="p-2 hover:bg-blue-500 rounded tooltip" title="Copy"><Copy size={18}/></button>
+             <button onClick={(e) => { e.stopPropagation(); executeAction('move'); }} className="p-2 hover:bg-blue-500 rounded tooltip" title="Move"><Move size={18}/></button>
+             {selectedIds.size === 1 && (
+                 <>
+                   <button onClick={(e) => { e.stopPropagation(); executeAction('rename'); }} className="p-2 hover:bg-blue-500 rounded" title="Rename"><Edit size={18}/></button>
+                   <button onClick={(e) => { e.stopPropagation(); executeAction('download'); }} className="p-2 hover:bg-blue-500 rounded" title="Download"><Download size={18}/></button>
+                 </>
+             )}
+             <button onClick={(e) => { e.stopPropagation(); executeAction('delete'); }} className="p-2 hover:bg-red-500 rounded bg-red-600/50" title="Delete"><Trash2 size={18}/></button>
+           </div>
+        </div>
+      )}
+
+      {/* MAIN CONTENT */}
+      <main className="p-4 md:p-6 pb-20 space-y-8">
         
         {loading ? (
-          <div className="flex justify-center py-20 flex-col items-center gap-4">
-            <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-            <p className="text-xs text-slate-500 animate-pulse">Mengambil data dari Google Drive...</p>
-          </div>
-        ) : !currentGallery ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-            {galleries.length === 0 ? (
-              <div className="col-span-full py-20 text-center flex flex-col items-center gap-4 border-2 border-dashed border-slate-800 rounded-2xl">
-                <Folder size={48} className="text-slate-700" />
-                <p className="text-slate-500">Drive Kosong. Buat folder baru.</p>
-              </div>
-            ) : (
-              galleries.map(g => (
-                <div 
-                  key={g.id}
-                  onClick={() => selectGallery(g)}
-                  className="group relative bg-slate-900 border border-slate-800 p-6 rounded-2xl hover:border-blue-500/50 cursor-pointer transition-all hover:shadow-xl hover:shadow-blue-500/5"
-                >
-                  <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
-                    <button 
-                      onClick={(e) => handleRenameGalleryDialog(g, e)}
-                      className="p-1.5 bg-slate-800/80 hover:bg-blue-600 text-slate-400 hover:text-white rounded-lg transition-colors backdrop-blur-sm"
-                      title="Ubah Nama"
-                    >
-                      <Edit size={16} />
-                    </button>
-                    <button 
-                      onClick={(e) => handleDeleteGalleryDialog(g, e)}
-                      className="p-1.5 bg-slate-800/80 hover:bg-red-600 text-slate-400 hover:text-white rounded-lg transition-colors backdrop-blur-sm"
-                      title="Hapus Folder"
-                    >
-                      <Trash2 size={16} />
-                    </button>
-                  </div>
-                  <div className="w-16 h-16 bg-blue-500/10 rounded-2xl flex items-center justify-center text-blue-500 mb-4 group-hover:scale-110 transition-transform">
-                    <Folder size={32} />
-                  </div>
-                  <h3 className="font-bold text-lg truncate mb-1">{g.name}</h3>
-                  <div className="flex items-center gap-2 text-xs text-slate-500 uppercase tracking-widest">
-                     <CloudLightning size={12} className="text-blue-500" />
-                     <span>GDrive</span>
-                  </div>
-                </div>
-              ))
-            )}
-          </div>
+            <div className="flex flex-col items-center justify-center py-20 gap-4 opacity-50">
+                <Loader2 size={32} className="animate-spin text-blue-500"/>
+                <p className="text-sm">Memuat isi folder...</p>
+            </div>
+        ) : items.length === 0 ? (
+            <div className="flex flex-col items-center justify-center py-20 text-slate-600 border-2 border-dashed border-slate-800 rounded-2xl">
+                <Folder size={64} className="mb-4 opacity-20" />
+                <p className="font-medium">Folder Kosong</p>
+                <p className="text-xs mt-1 text-slate-500">Klik kanan untuk opsi baru</p>
+            </div>
         ) : (
-          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-300">
-            <UploadZone onFilesSelected={processFiles} />
-            
-            <div className="flex flex-col sm:flex-row justify-between items-center bg-slate-900/50 p-4 rounded-xl border border-slate-800 gap-4">
-              <div className="flex items-center gap-4 w-full sm:w-auto">
-                <div className="text-xs font-mono text-blue-400 bg-blue-400/10 px-3 py-1 rounded-full border border-blue-400/20">
-                  {images.length} FILES • {notes.length} NOTES
-                </div>
-                
-                <div className="flex items-center gap-2">
-                  <button 
-                    onClick={handleAddNote}
-                    className="flex items-center gap-2 bg-amber-500/10 hover:bg-amber-500/20 px-4 py-2 rounded-lg text-xs font-bold transition-all border border-amber-500/30 text-amber-500"
-                  >
-                    <FileText size={14} />
-                    ADD NOTE
-                  </button>
-                  
-                  <button 
-                    onClick={async () => {
-                      try {
-                        const clipboardItems = await navigator.clipboard.read();
-                        let found = false;
-                        for (const item of clipboardItems) {
-                          const imageTypes = item.types.filter(t => t.startsWith('image/'));
-                          if (imageTypes.length > 0) {
-                            const blob = await item.getType(imageTypes[0]);
-                            const file = new File([blob], `Pasted_${Date.now()}.png`, { type: blob.type });
-                            processFiles([file]);
-                            found = true;
-                          }
-                        }
-                        if (!found) {
-                          setModal({
-                            type: 'alert',
-                            title: 'Clipboard Kosong',
-                            message: 'Tidak ada gambar yang ditemukan di clipboard Anda.',
-                            confirmText: 'OK'
-                          });
-                        }
-                      } catch (e) {
-                        setModal({
-                          type: 'alert',
-                          title: 'Akses Ditolak',
-                          message: 'Berikan izin akses clipboard atau gunakan shortcut keyboard Ctrl+V.',
-                          confirmText: 'Paham'
-                        });
-                      }
-                    }}
-                    className="flex items-center gap-2 bg-slate-800 hover:bg-slate-700 px-4 py-2 rounded-lg text-xs font-bold transition-all border border-slate-700 text-blue-300"
-                  >
-                    <Clipboard size={14} />
-                    PASTE
-                  </button>
-                </div>
-              </div>
-              <LayoutGrid size={18} className="text-slate-600 hidden sm:block" />
-            </div>
+            <>
+                {/* 1. FOLDERS SECTION */}
+                {groupedItems.folders.length > 0 && (
+                    <section>
+                        <div className="flex items-center gap-3 mb-4">
+                            <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                                <Folder size={14}/> Folders
+                            </h2>
+                            <div className="h-px bg-slate-800 flex-1"></div>
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+                            {groupedItems.folders.map(item => (
+                                <FolderItem 
+                                    key={item.id} 
+                                    item={item} 
+                                    selected={selectedIds.has(item.id)}
+                                    onClick={handleItemClick}
+                                    onContextMenu={handleContextMenu}
+                                    onToggleSelect={() => toggleSelection(item.id, true)}
+                                />
+                            ))}
+                        </div>
+                    </section>
+                )}
 
-            {/* NOTES SECTION */}
-            {notes.length > 0 && (
-              <div className="space-y-3">
-                <h2 className="text-xs font-bold text-slate-500 uppercase tracking-widest pl-1">Sticky Notes</h2>
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
-                  {notes.map((note) => (
-                    <NoteCard 
-                      key={note.id} 
-                      note={note} 
-                      onClick={handleNoteClick}
-                      onDelete={handleDeleteNoteDialog}
-                    />
-                  ))}
-                </div>
-                <div className="h-px bg-slate-800 my-6"></div>
-              </div>
-            )}
+                {/* 2. NOTES SECTION */}
+                {groupedItems.notes.length > 0 && (
+                    <section>
+                         <div className="flex items-center gap-3 mb-4 mt-8">
+                            <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                                <FileText size={14}/> Notes
+                            </h2>
+                            <div className="h-px bg-slate-800 flex-1"></div>
+                        </div>
+                        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+                            {groupedItems.notes.map(item => (
+                                <NoteItem 
+                                    key={item.id} 
+                                    item={item} 
+                                    selected={selectedIds.has(item.id)}
+                                    onClick={handleItemClick}
+                                    onContextMenu={handleContextMenu}
+                                    onToggleSelect={() => toggleSelection(item.id, true)}
+                                />
+                            ))}
+                        </div>
+                    </section>
+                )}
 
-            {/* IMAGES SECTION */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
-              {images.map((img, idx) => (
-                <ImageCard 
-                  key={img.id} 
-                  image={img} 
-                  index={idx}
-                  onDelete={handleDeleteImageDialog}
-                  onMaximize={setPreviewUrl}
-                />
-              ))}
-            </div>
-            {images.length === 0 && notes.length === 0 && (
-                <div className="col-span-full py-20 text-center text-slate-600 border border-dashed border-slate-800 rounded-xl">
-                  Folder Drive ini kosong.
-                </div>
-              )}
-          </div>
+                {/* 3. IMAGES SECTION */}
+                {groupedItems.images.length > 0 && (
+                    <section>
+                        <div className="flex items-center gap-3 mb-4 mt-8">
+                            <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                                <ImageIcon size={14}/> Images
+                            </h2>
+                            <div className="h-px bg-slate-800 flex-1"></div>
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
+                            {groupedItems.images.map(item => (
+                                <ImageItem 
+                                    key={item.id} 
+                                    item={item} 
+                                    selected={selectedIds.has(item.id)}
+                                    onClick={handleItemClick}
+                                    onContextMenu={handleContextMenu}
+                                    onToggleSelect={() => toggleSelection(item.id, true)}
+                                />
+                            ))}
+                        </div>
+                    </section>
+                )}
+            </>
         )}
       </main>
 
       {/* --- OVERLAYS --- */}
-      
-      {/* 1. UPLOAD WIDGET (Bottom Left) */}
-      <UploadWidget 
-        isVisible={uploadWidgetOpen}
-        onToggle={() => setUploadWidgetOpen(!uploadWidgetOpen)}
-        queueLength={uploadQueue.length}
-        currentFolder={currentUploadItem?.galleryName || "..."}
-        currentFile={currentUploadItem?.file.name || "..."}
-        isProcessing={isProcessingQueue}
-      />
 
-      {/* 2. GENERIC ACTION LOADING (Delete / Save) */}
-      {(isDeleting || isSaving) && (
-        <div style={{
-          position: "fixed", top: 0, left: 0, right: 0, bottom: 0,
-          background: "rgba(0,0,0,0.6)", zIndex: 9999,
-          display: "flex", justifyContent: "center", alignItems: "center", backdropFilter: "blur(2px)"
-        }}>
-          <div className="bg-white text-slate-900 px-6 py-4 rounded-xl shadow-2xl flex items-center gap-3 animate-in zoom-in-95">
-            <Loader2 className="animate-spin text-blue-600" size={24} />
-            <span className="font-bold text-sm">
-              {isDeleting ? "Menghapus..." : "Menyimpan..."}
-            </span>
-          </div>
+      {/* 1. Drag & Drop File Indicator */}
+      {isDraggingFile && (
+        <div className="fixed inset-0 z-50 bg-blue-500/20 backdrop-blur-sm border-4 border-blue-500 border-dashed m-4 rounded-3xl flex flex-col items-center justify-center pointer-events-none animate-in fade-in zoom-in-95">
+           <div className="bg-slate-900 p-8 rounded-3xl shadow-2xl flex flex-col items-center">
+              <div className="p-4 bg-blue-500/10 rounded-full mb-4">
+                  <Upload size={48} className="text-blue-500 animate-bounce"/>
+              </div>
+              <h2 className="text-2xl font-bold">Lepaskan untuk Upload</h2>
+           </div>
         </div>
       )}
 
-      {/* FULLSCREEN PREVIEW */}
-      {previewUrl && (
-        <div 
-          className="fixed inset-0 z-[100] bg-black/95 flex items-center justify-center p-4 backdrop-blur-sm"
-          onClick={() => setPreviewUrl(null)}
-        >
-          <button className="absolute top-6 right-6 text-white/50 hover:text-white z-[110] bg-white/10 p-2 rounded-full backdrop-blur-md">
-            <X size={24} />
-          </button>
-          <img 
-            src={previewUrl} 
-            alt="Preview" 
-            className="max-w-full max-h-full object-contain shadow-2xl animate-in zoom-in-95 duration-300"
-            onClick={(e) => e.stopPropagation()}
-            referrerPolicy="no-referrer"
-            crossOrigin="anonymous"
-          />
+      {/* 2. Context Menu */}
+      {contextMenu && (
+        <>
+            <div className="fixed inset-0 z-[99]" onClick={() => setContextMenu(null)} onContextMenu={(e) => { e.preventDefault(); setContextMenu(null); }}></div>
+            
+            <div 
+            className="fixed z-[100] bg-slate-800 border border-slate-700 rounded-lg shadow-2xl py-1.5 min-w-[200px] animate-in fade-in zoom-in-95 duration-100 overflow-hidden"
+            style={{ top: Math.min(contextMenu.y, window.innerHeight - 300), left: Math.min(contextMenu.x, window.innerWidth - 220) }}
+            >
+            {contextMenu.targetItem ? (
+                // --- MENU ITEM (File/Folder) ---
+                <>
+                <div className="px-3 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-700/50 mb-1 truncate max-w-[200px]">
+                    {contextMenu.targetItem.name}
+                </div>
+                <button onClick={() => executeAction('rename')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Edit size={16} className="text-slate-400"/> Rename</button>
+                <button onClick={() => executeAction('duplicate')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Copy size={16} className="text-slate-400"/> Copy</button>
+                <button onClick={() => executeAction('move')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Move size={16} className="text-slate-400"/> Move</button>
+                {contextMenu.targetItem.type !== 'folder' && (
+                    <button onClick={() => executeAction('download')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Download size={16} className="text-slate-400"/> Download</button>
+                )}
+                <div className="h-px bg-slate-700 my-1"/>
+                <button onClick={() => executeAction('delete')} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-400 hover:text-red-300 flex items-center gap-3 text-sm transition-colors"><Trash2 size={16}/> Delete</button>
+                </>
+            ) : (
+                // --- MENU EMPTY SPACE ---
+                <>
+                <button onClick={() => executeAction('new_folder')} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Folder size={16} className="text-blue-400"/> New Folder</button>
+                <button onClick={handleCreateNote} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><FileText size={16} className="text-yellow-400"/> New Note</button>
+                <label className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 cursor-pointer transition-colors">
+                    <Upload size={16} className="text-green-400"/> Upload File
+                    <input type="file" multiple className="hidden" onChange={(e) => {
+                        setContextMenu(null);
+                        if(e.target.files) {
+                            const files = Array.from(e.target.files);
+                            setBgProcessing(true);
+                            Promise.all(files.map(f => API.uploadToDrive(f, currentFolderId)))
+                                .then(() => loadFolder(currentFolderId))
+                                .finally(() => setBgProcessing(false));
+                        }
+                    }} />
+                </label>
+                <div className="h-px bg-slate-700 my-1"/>
+                <button onClick={() => { setContextMenu(null); loadFolder(currentFolderId); }} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Loader2 size={16} className="text-slate-400"/> Refresh</button>
+                </>
+            )}
+            </div>
+        </>
+      )}
+
+      {/* 3. Image Preview */}
+      {previewImage && (
+        <div className="fixed inset-0 z-[150] bg-black/95 backdrop-blur flex items-center justify-center p-4 animate-in fade-in" onClick={() => setPreviewImage(null)}>
+            <button className="absolute top-4 right-4 p-2 bg-white/10 rounded-full hover:bg-white/20 text-white z-10"><X size={24}/></button>
+            <img src={previewImage} className="max-w-full max-h-full object-contain rounded-lg shadow-2xl" onClick={(e) => e.stopPropagation()} referrerPolicy="no-referrer" />
         </div>
       )}
 
-      {/* TEXT EDITOR MODAL */}
+      {/* 4. Text Editor */}
       {editingNote && (
-        <TextEditor 
-          note={editingNote}
-          onSave={handleSaveNote}
-          onClose={() => setEditingNote(null)}
-        />
+          <TextEditor 
+            note={editingNote}
+            onSave={handleSaveNote}
+            onClose={() => setEditingNote(null)}
+          />
       )}
 
-      {/* CUSTOM SYSTEM MODAL */}
+      {/* 5. Modal */}
       {modal && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200" onClick={() => setModal(null)} />
-          
-          <div className="relative w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95 duration-200">
-            <div className="p-6 space-y-4">
-              <div className="flex items-center gap-3">
-                <div className={`p-2 rounded-lg ${modal.isDanger ? 'bg-red-500/10 text-red-500' : 'bg-blue-500/10 text-blue-500'}`}>
-                  {modal.type === 'confirm' ? <Trash2 size={24} /> : modal.type === 'alert' ? <AlertCircle size={24} /> : <Folder size={24} />}
-                </div>
-                <h3 className="text-xl font-bold">{modal.title}</h3>
-              </div>
-              
-              {modal.message && <p className="text-slate-400 text-sm leading-relaxed">{modal.message}</p>}
-              
-              {modal.type === 'input' && (
-                <input
-                  ref={inputRef}
-                  type="text"
-                  value={modal.inputValue}
-                  onChange={(e) => setModal({ ...modal, inputValue: e.target.value })}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') modal.onConfirm?.(modal.inputValue);
-                    if (e.key === 'Escape') setModal(null);
-                  }}
-                  placeholder="Nama Folder Drive..."
-                  className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 outline-none focus:ring-2 focus:ring-blue-500/50 transition-all text-white"
-                />
-              )}
-            </div>
-            
-            <div className="flex border-t border-slate-800 p-4 gap-3 bg-slate-900/50">
-              {modal.type !== 'alert' && (
-                <button
-                  onClick={() => setModal(null)}
-                  className="flex-1 py-3 px-4 rounded-xl text-sm font-semibold text-slate-400 hover:bg-slate-800 transition-colors"
-                >
-                  Batal
-                </button>
-              )}
-              <button
-                onClick={() => modal.onConfirm ? modal.onConfirm(modal.inputValue) : setModal(null)}
-                className={`flex-1 py-3 px-4 rounded-xl text-sm font-semibold transition-all shadow-lg
-                  ${modal.isDanger 
-                    ? 'bg-red-600 hover:bg-red-500 text-white' 
-                    : 'bg-blue-600 hover:bg-blue-500 text-white'}`}
-              >
-                {modal.confirmText || 'OK'}
-              </button>
-            </div>
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm animate-in fade-in" onClick={() => setModal(null)} />
+          <div className="relative w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95">
+             <div className="p-6">
+                 <h3 className="text-lg font-bold mb-2 flex items-center gap-2">
+                     {modal.isDanger && <AlertCircle className="text-red-500" size={20} />}
+                     {modal.title}
+                 </h3>
+                 {modal.message && <p className="text-sm text-slate-400 mb-4">{modal.message}</p>}
+                 
+                 {/* Input Type */}
+                 {modal.type === 'input' && (
+                     <input 
+                       ref={inputRef}
+                       type="text" 
+                       defaultValue={modal.inputValue}
+                       className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500"
+                       onKeyDown={(e) => { if(e.key === 'Enter') modal.onConfirm?.(e.currentTarget.value); }}
+                       onChange={(e) => { if (modal) modal.inputValue = e.target.value; }}
+                     />
+                 )}
+
+                 {/* Select Type */}
+                 {modal.type === 'select' && modal.options && (
+                     <select 
+                       ref={selectRef}
+                       className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500"
+                       onChange={(e) => { if (modal) modal.inputValue = e.target.value; }}
+                       defaultValue={modal.options[0]?.value}
+                     >
+                        {modal.options.map(opt => (
+                            <option key={opt.value} value={opt.value}>{opt.label}</option>
+                        ))}
+                     </select>
+                 )}
+             </div>
+             
+             <div className="bg-slate-800/50 p-4 flex gap-3 border-t border-slate-800">
+                 <button onClick={() => setModal(null)} className="flex-1 py-2 rounded-lg text-sm font-medium hover:bg-slate-700 transition-colors text-slate-300">Batal</button>
+                 <button 
+                    onClick={() => {
+                        // For select, if inputValue is unset, use the first option value
+                        let val = modal.inputValue;
+                        if (modal.type === 'select' && !val && modal.options && modal.options.length > 0) {
+                            val = modal.options[0].value;
+                        }
+                        modal.onConfirm?.(val);
+                    }} 
+                    className={`flex-1 py-2 rounded-lg text-sm font-medium text-white shadow-lg transition-transform active:scale-95 ${modal.isDanger ? 'bg-red-600 hover:bg-red-500' : 'bg-blue-600 hover:bg-blue-500'}`}
+                 >
+                     {modal.confirmText || 'OK'}
+                 </button>
+             </div>
           </div>
         </div>
       )}
-
-      {/* Footer Info */}
-      <footer className="fixed bottom-0 left-0 right-0 bg-slate-950/90 border-t border-slate-900 py-3 px-6 backdrop-blur-md z-40">
-        <div className="max-w-7xl mx-auto flex justify-between items-center text-[10px] text-slate-500 uppercase tracking-widest font-mono">
-          <span>Storage: Google Drive (API) + IndexedDB Cache</span>
-          <span>{currentGallery ? `Folder: ${currentGallery.name}` : 'tempimg Cloud'}</span>
-        </div>
-      </footer>
     </div>
   );
 };
+
+// --- SUB COMPONENTS FOR GRID ITEMS ---
+
+const FolderItem = ({ item, selected, onClick, onContextMenu, onToggleSelect }: any) => (
+    <div 
+        data-folder-id={item.id}
+        draggable
+        onDragStart={(e) => e.dataTransfer.setData("text/item-id", item.id)}
+        onClick={(e) => onClick(e, item)}
+        onContextMenu={(e) => onContextMenu(e, item)}
+        className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col items-center gap-2
+        ${selected ? 'bg-blue-500/20 border-blue-500 shadow-md' : 'bg-slate-900 border-slate-800 hover:bg-slate-800 hover:border-slate-600'}`}
+    >
+        <div className={`absolute top-2 left-2 z-10 transition-opacity ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+            <CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/>
+        </div>
+        <Folder size={48} className="text-blue-500 fill-blue-500/10 drop-shadow-md" />
+        <span className="text-xs font-medium text-slate-200 text-center truncate w-full px-1">{item.name}</span>
+    </div>
+);
+
+const NoteItem = ({ item, selected, onClick, onContextMenu, onToggleSelect }: any) => (
+    <div 
+        draggable
+        onDragStart={(e) => e.dataTransfer.setData("text/item-id", item.id)}
+        onClick={(e) => onClick(e, item)}
+        onContextMenu={(e) => onContextMenu(e, item)}
+        className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col gap-2 h-40 overflow-hidden shadow-sm
+        ${selected ? 'ring-2 ring-blue-500 shadow-lg scale-[1.02]' : 'hover:-translate-y-1 hover:shadow-lg'}`}
+        style={{ backgroundColor: '#fff9c4', color: '#333' }}
+    >
+        <div className={`absolute top-2 left-2 z-10 transition-opacity ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+             <CheckSquare size={18} className={selected ? "text-blue-600" : "text-slate-400"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/>
+        </div>
+        <h4 className="font-bold text-sm border-b border-black/10 pb-1 truncate">{item.name.replace('.txt', '')}</h4>
+        <p className="text-[10px] leading-relaxed opacity-80 break-words line-clamp-6">{item.snippet || "No preview"}</p>
+        <div className="absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-[#fff9c4] to-transparent pointer-events-none"/>
+    </div>
+);
+
+const ImageItem = ({ item, selected, onClick, onContextMenu, onToggleSelect }: any) => (
+    <div 
+        draggable
+        onDragStart={(e) => e.dataTransfer.setData("text/item-id", item.id)}
+        onClick={(e) => onClick(e, item)}
+        onContextMenu={(e) => onContextMenu(e, item)}
+        className={`group relative rounded-xl border overflow-hidden transition-all cursor-pointer aspect-square bg-slate-950 shadow-sm
+        ${selected ? 'border-blue-500 ring-1 ring-blue-500' : 'border-slate-800 hover:border-slate-600'}`}
+    >
+        <div className={`absolute top-2 left-2 z-10 transition-opacity ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+            <CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-white drop-shadow-md"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/>
+        </div>
+        <img 
+            src={item.thumbnail} 
+            alt={item.name} 
+            className="w-full h-full object-cover" 
+            loading="lazy" 
+            referrerPolicy="no-referrer"
+        />
+        <div className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm p-2 translate-y-full group-hover:translate-y-0 transition-transform">
+            <p className="text-[10px] text-white truncate text-center">{item.name}</p>
+        </div>
+    </div>
+);
 
 export default App;

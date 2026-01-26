@@ -1,32 +1,19 @@
 
-import { StoredImage, StoredNote } from '../types';
+import { Item } from '../types';
 
-// URL Final dari User
-const API_URL = "https://script.google.com/macros/s/AKfycbziuE1X6G9JMd0zC5j9L78YWvsX2GjRcBNp8MXCk2BOPJL4zZ-bJTkkS61Kld_0ML49tA/exec";
+// URL Final Baru (File Manager Backend)
+const API_URL = "https://script.google.com/macros/s/AKfycbw-khPTpmPiuUhTzo-vqtkHZTqJ3MLqZtP-btpHLbnBVyJ13Z6k5glBBpMWomP8p6BIog/exec";
 
 interface ApiResponse {
   status: 'success' | 'error';
   data?: any;
   message?: string;
+  currentFolderId?: string;
+  currentFolderName?: string;
+  parentFolderId?: string;
 }
 
-interface DriveFile {
-  id: string;
-  name: string;
-  url: string;
-  thumbnail: string;
-  type: string;
-  date: string;
-  snippet?: string;
-}
-
-export interface CloudFolder {
-  id: string;
-  name: string;
-  url: string;
-}
-
-const callGoogleScript = async (payload: any): Promise<ApiResponse> => {
+export const callGoogleScript = async (payload: any): Promise<ApiResponse> => {
   try {
     const response = await fetch(API_URL, {
       method: "POST",
@@ -51,63 +38,6 @@ const callGoogleScript = async (payload: any): Promise<ApiResponse> => {
   }
 };
 
-// --- OPTIMIZATION: IMAGE COMPRESSION ---
-// Mobile photos are huge (5-10MB). Converting to Base64 creates massive strings that crash browsers.
-// We compress client-side to max 1920px width/height and 0.8 quality.
-const compressImage = (file: File): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    // If not an image or very small, just return raw base64
-    if (!file.type.startsWith('image/') || file.size < 500 * 1024) { 
-       fileToBase64(file).then(resolve).catch(reject);
-       return;
-    }
-
-    const reader = new FileReader();
-    reader.readAsDataURL(file);
-    reader.onload = (event) => {
-      const img = new Image();
-      img.src = event.target?.result as string;
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        let width = img.width;
-        let height = img.height;
-        const MAX_WIDTH = 1920;
-        const MAX_HEIGHT = 1920;
-
-        // Calculate new dimensions
-        if (width > height) {
-          if (width > MAX_WIDTH) {
-            height *= MAX_WIDTH / width;
-            width = MAX_WIDTH;
-          }
-        } else {
-          if (height > MAX_HEIGHT) {
-            width *= MAX_HEIGHT / height;
-            height = MAX_HEIGHT;
-          }
-        }
-
-        canvas.width = width;
-        canvas.height = height;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-           fileToBase64(file).then(resolve).catch(reject); // Fallback
-           return;
-        }
-
-        ctx.drawImage(img, 0, 0, width, height);
-        
-        // Compress to JPEG with 0.8 quality
-        // This drastically reduces Base64 string length
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
-        resolve(dataUrl);
-      };
-      img.onerror = (err) => reject(err);
-    };
-    reader.onerror = (err) => reject(err);
-  });
-};
-
 export const fileToBase64 = (file: File | Blob): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -117,24 +47,60 @@ export const fileToBase64 = (file: File | Blob): Promise<string> => {
   });
 };
 
-const getGoogleCdnUrl = (fileId: string): string => {
-  return `https://lh3.googleusercontent.com/d/${fileId}`;
-};
+// --- FILE MANAGER API ACTIONS ---
 
-// 0. Fetch All Folders from Cloud
-export const fetchAllCloudGalleries = async (): Promise<CloudFolder[]> => {
-  const result = await callGoogleScript({
-    action: "getFolders"
+// 1. Get Folder Contents (Files + Subfolders)
+export const getFolderContents = async (folderId: string = ""): Promise<ApiResponse> => {
+  return callGoogleScript({
+    action: "getFolderContents",
+    folderId: folderId
   });
-  
-  if (result.status === "success" && Array.isArray(result.data)) {
-    return result.data;
-  } else {
-    return [];
-  }
 };
 
-// 0.5 Fetch File Content (For Notes)
+// 2. Create Folder
+export const createFolder = async (parentId: string, name: string): Promise<ApiResponse> => {
+  return callGoogleScript({
+    action: "createFolder",
+    parentId: parentId,
+    name: name
+  });
+};
+
+// 3. Rename Item
+export const renameItem = async (itemId: string, newName: string): Promise<ApiResponse> => {
+  return callGoogleScript({
+    action: "renameItem",
+    itemId: itemId,
+    newName: newName
+  });
+};
+
+// 4. Delete Items (Bulk)
+export const deleteItems = async (itemIds: string[]): Promise<ApiResponse> => {
+  return callGoogleScript({
+    action: "deleteItems",
+    itemIds: itemIds
+  });
+};
+
+// 5. Move Items
+export const moveItems = async (itemIds: string[], targetFolderId: string): Promise<ApiResponse> => {
+  return callGoogleScript({
+    action: "moveItems",
+    itemIds: itemIds,
+    targetFolderId: targetFolderId
+  });
+};
+
+// 6. Duplicate Items
+export const duplicateItems = async (itemIds: string[]): Promise<ApiResponse> => {
+  return callGoogleScript({
+    action: "duplicateItems",
+    itemIds: itemIds
+  });
+};
+
+// 7. Get File Content (for Notes)
 export const getFileContent = async (fileId: string): Promise<string> => {
   const result = await callGoogleScript({
     action: "getFileContent",
@@ -144,162 +110,38 @@ export const getFileContent = async (fileId: string): Promise<string> => {
   if (result.status === 'success') {
     return typeof result.data?.content === 'string' ? result.data.content : "";
   } else {
-    throw new Error(result.message || "Gagal mengambil konten catatan.");
+    throw new Error(result.message || "Gagal mengambil konten.");
   }
 };
 
-// 1. Create Folder Explicitly
-export const createFolderInDrive = async (folderName: string): Promise<string> => {
-  const result = await callGoogleScript({
-    action: "createFolder",
-    folderName: folderName
-  });
-
-  if (result.status === 'error') throw new Error(result.message);
-  return result.data?.folderId || "";
-};
-
-// 1.5 Delete Folder
-export const deleteFolderInDrive = async (folderId: string): Promise<void> => {
-  const result = await callGoogleScript({
-    action: "deleteFolder",
-    folderId: folderId
-  });
-
-  if (result.status === 'error') throw new Error(result.message);
-};
-
-// 1.6 Rename Folder
-export const renameFolderInDrive = async (folderId: string, newName: string): Promise<void> => {
-  const result = await callGoogleScript({
-    action: "renameFolder",
-    folderId: folderId,
-    newName: newName
-  });
-
-  if (result.status === 'error') throw new Error(result.message);
-};
-
-// 2. Upload Image / File (WITH COMPRESSION)
-export const uploadToDrive = async (file: File, folderName: string): Promise<DriveFile> => {
-  // Use compressed base64
-  const base64 = await compressImage(file);
+// 8. Upload Image (With Folder ID)
+export const uploadToDrive = async (file: File, folderId: string): Promise<any> => {
+  const base64 = await fileToBase64(file);
   
   const result = await callGoogleScript({
     action: "uploadImage",
-    folderName: folderName,
+    folderId: folderId, // Now uses ID, not name
     fileName: file.name,
-    mimeType: "image/jpeg", // Always send as JPEG if compressed, handles png transparency poorly but stable for photos
+    mimeType: file.type || "image/jpeg",
     base64: base64
   });
 
   if (result.status === 'error') {
-    throw new Error(result.message || "Upload gagal dari sisi server.");
+    throw new Error(result.message || "Upload gagal.");
   }
-  
-  const data = result.data;
-  if (!data || !data.id) {
-    throw new Error("Respon server tidak memiliki File ID.");
-  }
-
-  const cdnUrl = getGoogleCdnUrl(data.id);
-
-  return {
-    id: data.id,
-    name: data.name || file.name,
-    url: cdnUrl, 
-    thumbnail: cdnUrl,
-    type: file.type || "image/jpeg",
-    date: new Date().toISOString(),
-    snippet: ""
-  };
+  return result.data;
 };
 
-// 3. Upload Note (Create or Update)
-export const uploadNoteToDrive = async (noteTitle: string, content: string, folderName: string, fileId?: string): Promise<DriveFile> => {
+// 9. Save Note (With Folder ID)
+export const saveNoteToDrive = async (title: string, content: string, folderId: string, fileId?: string): Promise<any> => {
   const result = await callGoogleScript({
     action: "saveNote", 
-    folderName: folderName,
-    title: noteTitle,
+    folderId: folderId,
+    title: title,
     content: content,
     fileId: fileId || null 
   });
 
   if (result.status === 'error') throw new Error(result.message);
-  
-  const data = result.data;
-
-  return {
-    id: data.id,
-    name: data.name,
-    url: data.url, 
-    thumbnail: "",
-    type: 'text/plain',
-    date: new Date().toISOString(),
-    snippet: content.substring(0, 100) 
-  };
-};
-
-// 4. Load Gallery (Get Files)
-export const loadGallery = async (folderName: string): Promise<{ images: StoredImage[], notes: StoredNote[] }> => {
-  const result = await callGoogleScript({
-    action: "getFiles",
-    folderName: folderName
-  });
-
-  if (result.status === 'error') throw new Error(result.message);
-
-  const rawFiles: any[] = result.data || []; 
-  
-  const images: StoredImage[] = [];
-  const notes: StoredNote[] = [];
-
-  rawFiles.forEach((file) => {
-    const rawMime = file.mimeType || file.type;
-    const mime = (rawMime || "").toLowerCase();
-    const name = (file.name || "").toLowerCase();
-    
-    let fileType = "unknown";
-    
-    if (mime.startsWith('image/') || name.match(/\.(jpg|jpeg|png|gif|webp|bmp)$/)) {
-      fileType = "image";
-    } else if (mime.startsWith('text/') || name.endsWith('.txt')) {
-      fileType = "note";
-    }
-
-    if (fileType === "image") {
-      const cdnUrl = getGoogleCdnUrl(file.id);
-      
-      images.push({
-        id: file.id,
-        galleryId: folderName,
-        name: file.name || "Untitled Image",
-        type: mime || 'image/jpeg',
-        size: 0, 
-        data: cdnUrl,
-        timestamp: file.lastUpdated ? new Date(file.lastUpdated).getTime() : Date.now()
-      });
-    } else if (fileType === "note") {
-      notes.push({
-        id: file.id,
-        galleryId: folderName,
-        title: (file.name || "Untitled Note").replace('.txt', ''),
-        content: file.url,
-        snippet: file.snippet || "Memuat preview...", 
-        timestamp: file.lastUpdated ? new Date(file.lastUpdated).getTime() : Date.now()
-      });
-    }
-  });
-
-  return { images, notes };
-};
-
-// 5. Delete File
-export const deleteFromDrive = async (fileId: string): Promise<void> => {
-  const result = await callGoogleScript({
-    action: "deleteFile",
-    fileId: fileId
-  });
-
-  if (result.status === 'error') throw new Error(result.message);
+  return result.data;
 };

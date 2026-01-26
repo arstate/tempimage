@@ -23,3 +23,14 @@ export interface StoredNote {
   snippet?: string; // Short preview text from backend
   timestamp: number;
 }
+
+// New Generic Item for File Manager
+export interface Item {
+  id: string;
+  name: string;
+  type: 'folder' | 'image' | 'note';
+  url?: string;
+  thumbnail?: string;
+  snippet?: string;
+  lastUpdated: number;
+}
