@@ -33,4 +33,5 @@ export interface Item {
   thumbnail?: string;
   snippet?: string;
   lastUpdated: number;
+  content?: string; // Cache content for notes locally
 }

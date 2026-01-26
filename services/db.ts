@@ -31,7 +31,7 @@ export const initDB = (): Promise<IDBDatabase> => {
 
 // --- FOLDER CACHE FUNCTIONS ---
 
-export const getCachedFolder = async (folderId: string): Promise<Item[]> => {
+export const getCachedFolder = async (folderId: string): Promise<Item[] | null> => {
   const db = await initDB();
   return new Promise((resolve) => {
     const tx = db.transaction(STORE_FOLDER_CACHE, 'readonly');
@@ -41,9 +41,10 @@ export const getCachedFolder = async (folderId: string): Promise<Item[]> => {
     const request = store.get(key);
     
     request.onsuccess = () => {
-      resolve(request.result ? request.result.items : []);
+      // Return null if no cache exists, otherwise return items array (even if empty)
+      resolve(request.result ? request.result.items : null);
     };
-    request.onerror = () => resolve([]);
+    request.onerror = () => resolve(null);
   });
 };
 
@@ -58,6 +59,20 @@ export const cacheFolderContents = async (folderId: string, items: Item[]): Prom
   return new Promise((resolve) => {
     tx.oncomplete = () => resolve();
   });
+};
+
+// Helper to update a single item within a folder's cached list (e.g., updating note content)
+export const updateItemInCache = async (folderId: string, updatedItem: Item): Promise<void> => {
+    const items = (await getCachedFolder(folderId)) || [];
+    const index = items.findIndex(i => i.id === updatedItem.id);
+    
+    if (index !== -1) {
+        items[index] = updatedItem;
+    } else {
+        items.push(updatedItem);
+    }
+    
+    await cacheFolderContents(folderId, items);
 };
 
 export const clearCache = async (): Promise<void> => {
