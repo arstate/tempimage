@@ -491,8 +491,18 @@ const App = () => {
   const executeAction = async (action: string) => {
     const ids = Array.from(selectedIds) as string[];
     const targetItem = contextMenu?.targetItem || (ids.length === 1 ? items.find(i => i.id === ids[0]) : null);
-    const isRecycleBin = currentFolderId === recycleBinId;
+    const isRecycleBinView = currentFolderId === recycleBinId;
     
+    // --- PROTECTION: PREVENT ACTIONS ON RECYCLE BIN FOLDER ITSELF ---
+    if (ids.includes(recycleBinId)) {
+        if (['delete', 'move', 'rename'].includes(action)) {
+            addNotification("Folder System tidak dapat diubah/dihapus", "error");
+            setContextMenu(null);
+            setIsNewDropdownOpen(false);
+            return;
+        }
+    }
+
     setContextMenu(null);
     setIsNewDropdownOpen(false);
 
@@ -507,7 +517,7 @@ const App = () => {
     else if (action === 'delete' || action === 'delete_permanent') {
        if (ids.length === 0) return;
        
-       const isPermanent = action === 'delete_permanent' || isRecycleBin;
+       const isPermanent = action === 'delete_permanent' || isRecycleBinView;
        const title = isPermanent ? 'Hapus Permanen?' : 'Pindah ke Sampah?';
        const confirmMsg = isPermanent 
           ? `Hapus ${ids.length} item selamanya? Tidak bisa dikembalikan.`
@@ -851,11 +861,8 @@ const App = () => {
      else { const target = folderHistory[index]; setFolderHistory(prev => prev.slice(0, index + 1)); setCurrentFolderId(target.id); }
   };
 
-  // Filter items. If we are NOT in the recycle bin, hide the "Recycle Bin" folder itself from the view to avoid confusion
-  const filteredItems = items.filter(i => {
-      if (currentFolderId === "" && i.name === RECYCLE_BIN_NAME) return false;
-      return true;
-  });
+  // REMOVED FILTER: Now we show the Recycle Bin folder (but check ID for icon)
+  const filteredItems = items; 
 
   const groupedItems = {
       folders: filteredItems.filter(i => i.type === 'folder'),
@@ -905,6 +912,7 @@ const App = () => {
          onAction={executeAction}
          containerRef={containerRef}
          isInRecycleBin={currentFolderId === recycleBinId}
+         recycleBinId={recycleBinId}
       />
 
       {/* UPLOAD PROGRESS WIDGET */}
@@ -997,7 +1005,7 @@ const App = () => {
                         </div>
                         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
                             {groupedItems.folders.map(item => (
-                                <FolderItem key={item.id} item={item} selected={selectedIds.has(item.id)} onClick={handleItemClick} onDoubleClick={handleItemDoubleClick} onContextMenu={handleContextMenu} onToggleSelect={() => handleItemClick({ stopPropagation: () => {}, ctrlKey: true } as any, item)} />
+                                <FolderItem key={item.id} item={item} isRecycleBin={item.id === recycleBinId} selected={selectedIds.has(item.id)} onClick={handleItemClick} onDoubleClick={handleItemDoubleClick} onContextMenu={handleContextMenu} onToggleSelect={() => handleItemClick({ stopPropagation: () => {}, ctrlKey: true } as any, item)} />
                             ))}
                         </div>
                     </section>
@@ -1032,7 +1040,7 @@ const App = () => {
         )}
       </main>
 
-      {/* RECYCLE BIN FLOATING BUTTON */}
+      {/* RECYCLE BIN FLOATING BUTTON (Keep it for quick access) */}
       {currentFolderId !== recycleBinId && (
           <div 
              className="fixed bottom-6 left-6 z-[250] group"
@@ -1092,29 +1100,34 @@ const App = () => {
                 <>
                 <div className="px-3 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-700/50 mb-1 truncate max-w-[200px]">{contextMenu.targetItem.name}</div>
                 
-                {/* RECYCLE BIN ITEM CONTEXT MENU */}
-                {currentFolderId === recycleBinId ? (
-                     <>
-                     <button onClick={() => executeAction('restore')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><RotateCcw size={16} className="text-green-400"/> Restore</button>
-                     <button onClick={() => executeAction('delete_permanent')} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-400 hover:text-red-300 flex items-center gap-3 text-sm transition-colors"><Ban size={16}/> Delete Permanently</button>
-                     </>
+                {/* CHECK IF TARGET IS RECYCLE BIN FOLDER ITSELF */}
+                {contextMenu.targetItem.id === recycleBinId ? (
+                     <div className="px-3 py-2 text-xs text-slate-500 italic">System Folder (Protected)</div>
                 ) : (
-                    // NORMAL ITEM CONTEXT MENU
-                    <>
-                    <button onClick={() => executeAction('rename')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Edit size={16} className="text-slate-400"/> Rename</button>
-                    <button onClick={() => executeAction('duplicate')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Copy size={16} className="text-slate-400"/> Copy</button>
-                    <button onClick={() => executeAction('move')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Move size={16} className="text-slate-400"/> Move</button>
-                    {contextMenu.targetItem.type !== 'folder' && (
+                    /* RECYCLE BIN ITEM CONTEXT MENU */
+                    currentFolderId === recycleBinId ? (
+                         <>
+                         <button onClick={() => executeAction('restore')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><RotateCcw size={16} className="text-green-400"/> Restore</button>
+                         <button onClick={() => executeAction('delete_permanent')} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-400 hover:text-red-300 flex items-center gap-3 text-sm transition-colors"><Ban size={16}/> Delete Permanently</button>
+                         </>
+                    ) : (
+                        // NORMAL ITEM CONTEXT MENU
                         <>
-                        <button onClick={() => executeAction('download')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Download size={16} className="text-slate-400"/> Download</button>
-                        {contextMenu.targetItem.type === 'image' && (
-                            <button onClick={() => executeAction('copy_image')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Image size={16} className="text-slate-400"/> Copy Image</button>
+                        <button onClick={() => executeAction('rename')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Edit size={16} className="text-slate-400"/> Rename</button>
+                        <button onClick={() => executeAction('duplicate')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Copy size={16} className="text-slate-400"/> Copy</button>
+                        <button onClick={() => executeAction('move')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Move size={16} className="text-slate-400"/> Move</button>
+                        {contextMenu.targetItem.type !== 'folder' && (
+                            <>
+                            <button onClick={() => executeAction('download')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Download size={16} className="text-slate-400"/> Download</button>
+                            {contextMenu.targetItem.type === 'image' && (
+                                <button onClick={() => executeAction('copy_image')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Image size={16} className="text-slate-400"/> Copy Image</button>
+                            )}
+                            </>
                         )}
+                        <div className="h-px bg-slate-700 my-1"/>
+                        <button onClick={() => executeAction('delete')} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-400 hover:text-red-300 flex items-center gap-3 text-sm transition-colors"><Trash2 size={16}/> Delete</button>
                         </>
-                    )}
-                    <div className="h-px bg-slate-700 my-1"/>
-                    <button onClick={() => executeAction('delete')} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-400 hover:text-red-300 flex items-center gap-3 text-sm transition-colors"><Trash2 size={16}/> Delete</button>
-                    </>
+                    )
                 )}
                 </>
             ) : (
@@ -1201,11 +1214,14 @@ const App = () => {
 };
 
 // --- FLOATING SELECTION MENU COMPONENT ---
-const SelectionFloatingMenu = ({ selectedIds, items, onClear, onAction, containerRef, isInRecycleBin }: { selectedIds: Set<string>, items: Item[], onClear: () => void, onAction: (a: string) => void, containerRef: React.RefObject<HTMLDivElement>, isInRecycleBin: boolean }) => {
+const SelectionFloatingMenu = ({ selectedIds, items, onClear, onAction, containerRef, isInRecycleBin, recycleBinId }: { selectedIds: Set<string>, items: Item[], onClear: () => void, onAction: (a: string) => void, containerRef: React.RefObject<HTMLDivElement>, isInRecycleBin: boolean, recycleBinId: string }) => {
     const [pos, setPos] = useState<{top?: number, left?: number, bottom?: number, x?:number}>({ bottom: 24, left: window.innerWidth / 2 }); 
     const [styleType, setStyleType] = useState<'contextual' | 'dock'>('dock');
     const menuRef = useRef<HTMLDivElement>(null);
     
+    // Check if Recycle Bin folder is selected in Home View
+    const isRecycleBinFolderSelected = !isInRecycleBin && Array.from(selectedIds).some(id => id === recycleBinId);
+
     useLayoutEffect(() => {
         if (selectedIds.size === 0) return;
         
@@ -1294,7 +1310,10 @@ const SelectionFloatingMenu = ({ selectedIds, items, onClear, onAction, containe
                 <button onClick={(e) => { e.stopPropagation(); onClear(); }} className="p-1 hover:bg-white/10 rounded-full transition-colors"><X size={14} /></button>
             </div>
             
-            {isInRecycleBin ? (
+            {/* If Recycle Bin folder itself is selected, show minimal options */}
+            {isRecycleBinFolderSelected ? (
+                <span className="px-2 text-xs text-slate-400 font-medium">System Folder</span>
+            ) : isInRecycleBin ? (
                 <>
                 <button onClick={(e) => { e.stopPropagation(); onAction('restore'); }} className="p-2 hover:bg-green-500/20 hover:text-green-400 rounded-lg transition-colors tooltip" title="Restore"><RotateCcw size={18}/></button>
                 <div className="w-px h-6 bg-white/10 mx-1"></div>
@@ -1332,47 +1351,46 @@ const ItemOverlay = ({ status }: { status?: string }) => {
     );
 };
 
-const FolderItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }: any) => (
+const FolderItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect, isRecycleBin }: any) => (
     <div id={`item-${item.id}`} data-folder-id={item.id} draggable onDragStart={(e) => e.dataTransfer.setData("text/item-id", item.id)} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col items-center gap-2 item-clickable ${selected ? 'bg-blue-500/20 border-blue-500 shadow-md ring-1 ring-blue-500' : 'bg-slate-900 border-slate-800 hover:bg-slate-800 hover:border-slate-600'}`}>
         <ItemOverlay status={item.status} />
         <div className={`absolute top-2 left-2 z-10 transition-opacity ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
             <CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/>
         </div>
-        <Folder size={48} className="text-blue-500 fill-blue-500/10 drop-shadow-md" />
-        <span className="text-xs font-medium text-slate-200 text-center truncate w-full px-1 select-none">{item.name}</span>
+        {/* Render Trash Icon if Recycle Bin */}
+        {isRecycleBin ? (
+             <Trash2 size={48} className="text-red-500 fill-red-500/10 drop-shadow-md" />
+        ) : (
+             <Folder size={48} className="text-blue-500 fill-blue-500/10 drop-shadow-md" />
+        )}
+        <span className={`text-xs font-medium text-center truncate w-full px-1 select-none ${isRecycleBin ? 'text-red-400' : 'text-slate-200'}`}>{item.name}</span>
     </div>
 );
 
-const NoteItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }: any) => {
-    const preview = stripHtml(item.content || item.snippet || "").substring(0, 150);
-    return (
-        <div id={`item-${item.id}`} draggable onDragStart={(e) => e.dataTransfer.setData("text/item-id", item.id)} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col gap-2 h-40 overflow-hidden shadow-sm item-clickable ${selected ? 'ring-2 ring-blue-500 shadow-lg scale-[1.02]' : 'hover:-translate-y-1 hover:shadow-lg'}`} style={{ backgroundColor: '#fff9c4', color: '#333' }}>
-            <ItemOverlay status={item.status} />
-            <div className={`absolute top-2 left-2 z-10 transition-opacity ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
-                <CheckSquare size={18} className={selected ? "text-blue-600" : "text-slate-400"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/>
-            </div>
-            <h4 className="font-bold text-sm border-b border-black/10 pb-1 truncate select-none">{item.name.replace('.txt', '')}</h4>
-            <p className="text-[10px] leading-relaxed opacity-80 break-words line-clamp-6 select-none">{preview || "No preview"}</p>
-            <div className="absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-[#fff9c4] to-transparent pointer-events-none"/>
-        </div>
-    );
-};
-
-const ImageItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }: any) => (
-    <div id={`item-${item.id}`} draggable onDragStart={(e) => e.dataTransfer.setData("text/item-id", item.id)} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} className={`group relative rounded-xl border overflow-hidden transition-all cursor-pointer aspect-square bg-slate-950 shadow-sm item-clickable ${selected ? 'border-blue-500 ring-2 ring-blue-500' : 'border-slate-800 hover:border-slate-600'}`}>
+const NoteItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }: any) => (
+    <div id={`item-${item.id}`} draggable onDragStart={(e) => e.dataTransfer.setData("text/item-id", item.id)} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col items-center gap-2 item-clickable ${selected ? 'bg-blue-500/20 border-blue-500 shadow-md ring-1 ring-blue-500' : 'bg-slate-900 border-slate-800 hover:bg-slate-800 hover:border-slate-600'}`}>
         <ItemOverlay status={item.status} />
         <div className={`absolute top-2 left-2 z-10 transition-opacity ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
-            <CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-white drop-shadow-md"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/>
+            <CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/>
         </div>
-        <img 
-            src={item.thumbnail} 
-            alt={item.name} 
-            className="w-full h-full object-cover select-none" 
-            loading="lazy" 
-            referrerPolicy="no-referrer" 
-        />
-        <div className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm p-2 translate-y-full group-hover:translate-y-0 transition-transform">
-            <p className="text-[10px] text-white truncate text-center select-none">{item.name}</p>
+        <FileText size={48} className="text-yellow-500 fill-yellow-500/10 drop-shadow-md" />
+        <span className="text-xs font-medium text-slate-200 text-center truncate w-full px-1 select-none" title={item.name}>{item.name.replace('.txt', '')}</span>
+    </div>
+);
+
+const ImageItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }: any) => (
+    <div id={`item-${item.id}`} draggable onDragStart={(e) => e.dataTransfer.setData("text/item-id", item.id)} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} className={`group relative rounded-xl border transition-all cursor-pointer overflow-hidden aspect-square flex flex-col items-center justify-center bg-slate-950 item-clickable ${selected ? 'border-blue-500 shadow-md ring-1 ring-blue-500' : 'border-slate-800 hover:border-slate-600'}`}>
+        <ItemOverlay status={item.status} />
+        <div className={`absolute top-2 left-2 z-10 transition-opacity ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+            <CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300 shadow-sm"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/>
+        </div>
+        {item.thumbnail || item.url ? (
+             <img src={item.thumbnail || item.url} alt={item.name} className="w-full h-full object-cover" loading="lazy" referrerPolicy="no-referrer" />
+        ) : (
+             <ImageIcon size={32} className="text-slate-600" />
+        )}
+        <div className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm p-1.5 truncate">
+             <span className="text-[10px] font-medium text-slate-200 block text-center truncate select-none">{item.name}</span>
         </div>
     </div>
 );
