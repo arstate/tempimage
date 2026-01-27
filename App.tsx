@@ -4,7 +4,7 @@ import {
   Folder, FileText, Image as ImageIcon, MoreVertical, 
   ArrowLeft, Plus, Trash2, Copy, Move, Edit, CheckSquare, 
   Loader2, Home, Upload, ChevronRight, X, AlertCircle, Download, CornerUpLeft,
-  CheckCircle, XCircle, Image, RotateCcw, Ban, GripVertical, Database
+  CheckCircle, XCircle, Image, RotateCcw, Ban, GripVertical, Database, Lock, ShieldAlert
 } from 'lucide-react';
 import * as API from './services/api';
 import * as DB from './services/db';
@@ -14,7 +14,7 @@ import { UploadProgress, UploadItem } from './components/UploadProgress';
 import { DownloadProgress } from './components/DownloadProgress';
 
 // --- TYPES ---
-type ModalType = 'input' | 'confirm' | 'alert' | 'select' | null;
+type ModalType = 'input' | 'confirm' | 'alert' | 'select' | 'password' | null;
 interface ModalState {
   type: ModalType;
   title: string;
@@ -33,6 +33,8 @@ interface Notification {
 }
 
 const RECYCLE_BIN_NAME = "Recycle Bin";
+const SYSTEM_FOLDER_NAME = "System";
+const SYSTEM_PASSWORD = "1509";
 
 // --- HELPER: STRIP HTML ---
 const stripHtml = (html: string) => {
@@ -54,11 +56,12 @@ const App = () => {
   // --- SYSTEM DB STATE ---
   const [systemMap, setSystemMap] = useState<FolderMap>({});
   const [dbFileId, setDbFileId] = useState<string | null>(null);
+  const [systemFolderId, setSystemFolderId] = useState<string | null>(null);
   const [isSystemInitialized, setIsSystemInitialized] = useState(false);
 
   // --- GLOBAL LOADING OVERLAY (BLOCKING) ---
-  const [isGlobalLoading, setIsGlobalLoading] = useState(true); // Start true for DB Init
-  const [globalLoadingMessage, setGlobalLoadingMessage] = useState("Menghubungkan ke Database...");
+  const [isGlobalLoading, setIsGlobalLoading] = useState(true); 
+  const [globalLoadingMessage, setGlobalLoadingMessage] = useState("Memulai Sistem...");
 
   // --- PROCESSING STATE (NON-BLOCKING ACTIONS) ---
   const [isProcessingAction, setIsProcessingAction] = useState(false);
@@ -128,55 +131,50 @@ const App = () => {
            const cachedDB = await DB.getSystemMap();
            let currentMap: FolderMap = cachedDB ? cachedDB.map : {};
            let currentFileId = cachedDB ? cachedDB.fileId : null;
-           let forceRefresh = false;
+           
+           // Always check drive for structure consistency on boot
+           setGlobalLoadingMessage("Pengecekan Sistem Otomatis...");
+           
+           // 2. Locate DB File using logic (Root -> System Folder -> DB File)
+           const location = await API.locateSystemDB();
+           let sysFolderId = location.systemFolderId;
+           currentFileId = location.fileId;
 
-           // Check if we need to force check drive (e.g. if fileId is missing or map is empty)
-           if (!currentFileId || Object.keys(currentMap).length <= 1) {
-              forceRefresh = true;
+           if (!sysFolderId) {
+               setGlobalLoadingMessage("Membuat Folder System...");
+               sysFolderId = await API.createSystemFolder();
            }
+           setSystemFolderId(sysFolderId);
 
-           if (forceRefresh) {
-               setGlobalLoadingMessage("Sinkronisasi Sistem...");
-               
-               // 2. Locate DB File using new logic (Root -> System Folder -> DB File)
-               const location = await API.locateSystemDB();
-               let systemFolderId = location.systemFolderId;
-               currentFileId = location.fileId;
-
-               if (currentFileId) {
-                   setGlobalLoadingMessage("Memuat Database...");
-                   const content = await API.getFileContent(currentFileId);
-                   try {
-                       currentMap = JSON.parse(content);
-                   } catch(e) { 
-                       console.warn("Corrupt DB, resetting map"); 
-                       currentMap = { "root": { id: "root", name: "Home", parentId: "" } }; 
-                   }
-               } else {
-                   setGlobalLoadingMessage("Inisialisasi Sistem...");
-                   // 3. Create Structure if missing
-                   if (!systemFolderId) {
-                       setGlobalLoadingMessage("Membuat Folder System...");
-                       systemFolderId = await API.createSystemFolder();
-                   }
-                   
-                   setGlobalLoadingMessage("Membuat File Database...");
-                   currentMap = { "root": { id: "root", name: "Home", parentId: "" } };
-                   const newId = await API.createSystemDBFile(currentMap, systemFolderId);
-                   currentFileId = newId;
+           if (!currentFileId) {
+               setGlobalLoadingMessage("Membuat Database Baru...");
+               // Reset map if file is missing (fresh start logic)
+               if (!cachedDB) currentMap = { "root": { id: "root", name: "Home", parentId: "" } };
+               const newId = await API.createSystemDBFile(currentMap, sysFolderId);
+               currentFileId = newId;
+           } else if (!cachedDB) {
+               // File exists but no cache, fetch content
+               setGlobalLoadingMessage("Mengunduh Database...");
+               const content = await API.getFileContent(currentFileId);
+               try {
+                   currentMap = JSON.parse(content);
+               } catch(e) { 
+                   console.warn("Corrupt DB, resetting map"); 
+                   currentMap = { "root": { id: "root", name: "Home", parentId: "" } }; 
                }
-
-               // Save to Cache
-               await DB.saveSystemMap({ fileId: currentFileId, map: currentMap, lastSync: Date.now() });
            }
+
+           // Update Cache
+           await DB.saveSystemMap({ fileId: currentFileId, map: currentMap, lastSync: Date.now() });
 
            setSystemMap(currentMap);
            setDbFileId(currentFileId);
            setIsSystemInitialized(true);
 
-           // 4. Resolve URL to Folder ID
+           // 4. Resolve URL to Folder ID (SMART ROUTING)
            const path = window.location.pathname.split('/').filter(p => p);
            if (path.length > 0) {
+               setGlobalLoadingMessage("Membuka Link...");
                let foundId = "";
                let parentSearchId = "root"; 
                
@@ -206,7 +204,7 @@ const App = () => {
                    setFolderHistory(traceHistory);
                    setCurrentFolderId(foundId);
                } else {
-                   // Invalid path, reset
+                   // Invalid path, go home
                    setCurrentFolderId("");
                    setFolderHistory([]);
                    window.history.replaceState(null, '', '/');
@@ -217,7 +215,7 @@ const App = () => {
 
        } catch (err) {
            console.error("System Init Failed", err);
-           addNotification("Gagal memuat database sistem", 'error');
+           addNotification("Gagal inisialisasi sistem", 'error');
            setCurrentFolderId("");
        } finally {
            setIsGlobalLoading(false);
@@ -405,7 +403,7 @@ const App = () => {
           setLoading(false);
       }
     }
-  }, [dbFileId]); // Re-create if dbFileId changes (unlikely but safe)
+  }, [dbFileId]); // Re-create if dbFileId changes
 
   useEffect(() => {
     // Only load folder after system is init to prevent race condition on root
@@ -463,6 +461,9 @@ const App = () => {
              const clickedItem = items.find(i => i.id === id);
              if (clickedItem) {
                  longPressTimerRef.current = setTimeout(() => {
+                     // Disable Drag for Locked Folders
+                     if (clickedItem.id === systemFolderId || currentFolderId === systemFolderId) return;
+
                      setCustomDragItem(clickedItem);
                      setCustomDragPos({ x: e.clientX, y: e.clientY });
                      if (!selectedIds.has(clickedItem.id)) {
@@ -580,6 +581,14 @@ const App = () => {
       }
 
       if (customDragItem && dropTargetId) {
+          // Block move to system folder
+          if (dropTargetId === systemFolderId) {
+              addNotification("Tidak bisa memindahkan ke Folder System", "error");
+              setCustomDragItem(null); setCustomDragPos(null); setDropTargetId(null);
+              setIsDragSelecting(false); setSelectionBox(null); dragStartPos.current = null;
+              return;
+          }
+
           const idsToMove = selectedIds.size > 0 ? Array.from(selectedIds) : [customDragItem.id];
           const targetName = items.find(i => i.id === dropTargetId)?.name || "Folder";
           
@@ -653,6 +662,27 @@ const App = () => {
   const handleItemDoubleClick = (e: React.MouseEvent, item: Item) => {
     e.stopPropagation();
     if (item.type === 'folder') {
+        // SECURITY CHECK FOR SYSTEM FOLDER
+        if (item.id === systemFolderId || item.name === SYSTEM_FOLDER_NAME) {
+            setModal({
+                type: 'input', // Use Input type but we'll mask it visually if possible or just use text
+                title: 'Folder Terkunci',
+                message: 'Masukkan Password untuk membuka System',
+                confirmText: 'Buka',
+                inputValue: '',
+                onConfirm: (val) => {
+                    if (val === SYSTEM_PASSWORD) {
+                        setModal(null);
+                        setFolderHistory(prev => [...prev, { id: item.id, name: item.name }]);
+                        setCurrentFolderId(item.id);
+                    } else {
+                        addNotification("Password Salah!", "error");
+                    }
+                }
+            });
+            return;
+        }
+
         setFolderHistory(prev => [...prev, { id: item.id, name: item.name }]);
         setCurrentFolderId(item.id);
     } else if (item.type === 'note') {
@@ -903,7 +933,13 @@ const App = () => {
          const availableFolders = items.filter(i => i.type === 'folder' && !ids.includes(i.id));
          const options = [];
          if (currentFolderId) options.push({ label: '📁 .. (Folder Induk)', value: parentFolderId || "" }); 
-         availableFolders.forEach(f => options.push({ label: `📁 ${f.name}`, value: f.id }));
+         availableFolders.forEach(f => {
+             // Filter out System Folder from move targets
+             if (f.id !== systemFolderId && f.name !== SYSTEM_FOLDER_NAME) {
+                 options.push({ label: `📁 ${f.name}`, value: f.id });
+             }
+         });
+         
          if (options.length === 0) { setModal({ type: 'alert', title: 'Info', message: 'Tidak ada tujuan.' }); return; }
          setModal({
              type: 'select',
@@ -961,6 +997,10 @@ const App = () => {
              confirmText: 'Buat',
              onConfirm: async (name) => {
                  if(name) {
+                     if (name === SYSTEM_FOLDER_NAME) {
+                         addNotification("Nama 'System' dicadangkan.", "error");
+                         return;
+                     }
                      setModal(null); setIsProcessingAction(true);
                      const notifId = addNotification('Membuat folder...', 'loading');
                      try {
@@ -1026,6 +1066,12 @@ const App = () => {
 
   // --- UPLOAD LOGIC ---
   const handleUploadFiles = async (files: File[]) => {
+      // Prevent upload in System folder
+      if (currentFolderId === systemFolderId) {
+          addNotification("Folder System Read-Only.", "error");
+          return;
+      }
+
       const newUploads: UploadItem[] = files.map(f => ({
           id: Math.random().toString(36).substr(2, 9),
           file: f,
@@ -1064,6 +1110,13 @@ const App = () => {
             if (!targetElement || targetElement === e.currentTarget) break;
         }
         const targetFolderId = targetElement?.getAttribute("data-folder-id");
+        
+        // Prevent drop into System folder
+        if (targetFolderId === systemFolderId) {
+            addNotification("Tidak bisa memindahkan ke System.", "error");
+            return;
+        }
+
         if (movedItemId && targetFolderId && movedItemId !== targetFolderId) {
             const notifId = addNotification('Memindahkan via drag...', 'loading');
             setIsProcessingAction(true);
@@ -1134,6 +1187,8 @@ const App = () => {
       images: items.filter(i => i.type === 'image')
   };
 
+  const isSystemFolder = currentFolderId === systemFolderId;
+
   return (
     <div 
       className="min-h-screen bg-slate-950 text-slate-200 relative select-none"
@@ -1198,6 +1253,8 @@ const App = () => {
          containerRef={containerRef}
          isInRecycleBin={currentFolderId === recycleBinId}
          recycleBinId={recycleBinId}
+         isSystemFolder={isSystemFolder}
+         systemFolderId={systemFolderId}
       />
 
       <UploadProgress 
@@ -1240,7 +1297,7 @@ const App = () => {
            ))}
         </div>
 
-        {currentFolderId !== recycleBinId && (
+        {currentFolderId !== recycleBinId && !isSystemFolder && (
         <div className="flex items-center gap-2 new-dropdown-container">
             <div className="relative">
                 <button onClick={() => setIsNewDropdownOpen(!isNewDropdownOpen)} className={`px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold shadow-lg transition-all border border-transparent ${isNewDropdownOpen ? 'bg-slate-800 border-slate-700 text-white' : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-900/20'}`}>
@@ -1269,6 +1326,11 @@ const App = () => {
             </div>
         </div>
         )}
+        {isSystemFolder && (
+            <div className="px-3 py-1.5 bg-amber-500/10 border border-amber-500/30 rounded-lg flex items-center gap-2 text-amber-400 text-xs font-semibold">
+                <Lock size={14}/> Read-Only
+            </div>
+        )}
       </header>
 
       {/* MAIN CONTENT */}
@@ -1280,9 +1342,19 @@ const App = () => {
             </div>
         ) : items.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-20 text-slate-600 border-2 border-dashed border-slate-800 rounded-2xl">
-                <Folder size={64} className="mb-4 opacity-20" />
-                <p className="font-medium">{currentFolderId === recycleBinId ? "Recycle Bin Kosong" : "Folder Kosong"}</p>
-                {currentFolderId !== recycleBinId && <p className="text-xs mt-1 text-slate-500">Klik kanan untuk opsi baru</p>}
+                {currentFolderId === recycleBinId ? (
+                    <Trash2 size={64} className="mb-4 opacity-20" />
+                ) : isSystemFolder ? (
+                    <ShieldAlert size={64} className="mb-4 opacity-20 text-amber-500"/>
+                ) : (
+                    <Folder size={64} className="mb-4 opacity-20" />
+                )}
+                
+                <p className="font-medium">
+                    {currentFolderId === recycleBinId ? "Recycle Bin Kosong" : 
+                     isSystemFolder ? "System Folder (Protected)" : "Folder Kosong"}
+                </p>
+                {currentFolderId !== recycleBinId && !isSystemFolder && <p className="text-xs mt-1 text-slate-500">Klik kanan untuk opsi baru</p>}
             </div>
         ) : (
             <>
@@ -1298,6 +1370,7 @@ const App = () => {
                                     key={item.id} 
                                     item={item} 
                                     isRecycleBin={item.id === recycleBinId} 
+                                    isSystem={item.id === systemFolderId || item.name === SYSTEM_FOLDER_NAME}
                                     selected={selectedIds.has(item.id)} 
                                     isDropTarget={dropTargetId === item.id}
                                     onClick={handleItemClick} 
@@ -1340,7 +1413,7 @@ const App = () => {
       </main>
 
       {/* FOOTER / RECYCLE BIN BUTTON */}
-      {currentFolderId !== recycleBinId && (
+      {currentFolderId !== recycleBinId && !isSystemFolder && (
           <div 
              className="fixed bottom-6 left-6 z-[250] group"
              onContextMenu={(e) => { 
@@ -1390,7 +1463,8 @@ const App = () => {
             ) : contextMenu.targetItem ? (
                 <>
                 <div className="px-3 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-700/50 mb-1 truncate max-w-[200px]">{contextMenu.targetItem.name}</div>
-                {contextMenu.targetItem.id === recycleBinId ? (
+                {/* SYSTEM FOLDER PROTECTION */}
+                {(contextMenu.targetItem.id === recycleBinId || contextMenu.targetItem.id === systemFolderId || contextMenu.targetItem.name === SYSTEM_FOLDER_NAME) ? (
                      <div className="px-3 py-2 text-xs text-slate-500 italic">System Folder (Protected)</div>
                 ) : (
                     currentFolderId === recycleBinId ? (
@@ -1398,6 +1472,14 @@ const App = () => {
                          <button onClick={() => executeAction('restore')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><RotateCcw size={16} className="text-green-400"/> Restore</button>
                          <button onClick={() => executeAction('delete_permanent')} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-400 hover:text-red-300 flex items-center gap-3 text-sm transition-colors"><Ban size={16}/> Delete Permanently</button>
                          </>
+                    ) : isSystemFolder ? (
+                        <>
+                        <button onClick={() => executeAction('download')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Download size={16} className="text-slate-400"/> Download</button>
+                        {contextMenu.targetItem.type === 'image' && (
+                            <button onClick={() => executeAction('copy_image')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Image size={16} className="text-slate-400"/> Copy Image</button>
+                        )}
+                        <div className="px-3 py-2 text-xs text-amber-500/70 italic flex items-center gap-1"><Lock size={12}/> Read-Only</div>
+                        </>
                     ) : (
                         <>
                         <button onClick={() => executeAction('rename')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Edit size={16} className="text-slate-400"/> Rename</button>
@@ -1418,6 +1500,7 @@ const App = () => {
                 )}
                 </>
             ) : (
+                /* EMPTY AREA CONTEXT MENU */
                 currentFolderId === recycleBinId ? (
                      <>
                      <button onClick={() => executeAction('empty_bin')} className="w-full text-left px-3 py-2.5 hover:bg-red-500/10 text-red-400 hover:text-red-300 flex items-center gap-3 text-sm transition-colors"><Trash2 size={16}/> Empty Recycle Bin</button>
@@ -1425,6 +1508,12 @@ const App = () => {
                      <div className="h-px bg-slate-700 my-1"/>
                      <button onClick={() => { setContextMenu(null); loadFolder(currentFolderId); }} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Loader2 size={16} className="text-slate-400"/> Refresh</button>
                      </>
+                ) : isSystemFolder ? (
+                    <>
+                    <div className="px-3 py-2.5 text-xs text-amber-500 flex items-center gap-2"><Lock size={14}/> System Folder Protected</div>
+                    <div className="h-px bg-slate-700 my-1"/>
+                    <button onClick={() => { setContextMenu(null); loadFolder(currentFolderId); }} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Loader2 size={16} className="text-slate-400"/> Refresh</button>
+                    </>
                 ) : (
                     <>
                     <button onClick={() => executeAction('new_folder')} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Folder size={16} className="text-blue-400"/> New Folder</button>
@@ -1482,7 +1571,26 @@ const App = () => {
                  </h3>
                  {modal.message && <p className="text-sm text-slate-400 mb-4">{modal.message}</p>}
                  {modal.type === 'input' && (
-                     <input ref={inputRef} type="text" defaultValue={modal.inputValue} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500" onKeyDown={(e) => { if(e.key === 'Enter') modal.onConfirm?.(e.currentTarget.value); }} onChange={(e) => { if (modal) modal.inputValue = e.target.value; }} />
+                     <input 
+                        ref={inputRef} 
+                        type="text" 
+                        defaultValue={modal.inputValue} 
+                        className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500" 
+                        onKeyDown={(e) => { if(e.key === 'Enter') modal.onConfirm?.(e.currentTarget.value); }} 
+                        onChange={(e) => { if (modal) modal.inputValue = e.target.value; }} 
+                        autoFocus
+                     />
+                 )}
+                 {modal.type === 'password' && (
+                     <input 
+                        ref={inputRef} 
+                        type="password" 
+                        className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500" 
+                        onKeyDown={(e) => { if(e.key === 'Enter') modal.onConfirm?.(e.currentTarget.value); }} 
+                        onChange={(e) => { if (modal) modal.inputValue = e.target.value; }} 
+                        autoFocus
+                        placeholder="Masukkan password..."
+                     />
                  )}
                  {modal.type === 'select' && modal.options && (
                      <select ref={selectRef} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500" onChange={(e) => { if (modal) modal.inputValue = e.target.value; }} defaultValue={modal.options[0]?.value}>
@@ -1609,7 +1717,7 @@ const DragHandle = ({ item }: { item: Item }) => {
     );
 };
 
-const FolderItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect, isRecycleBin, isDropTarget }: any) => (
+const FolderItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect, isRecycleBin, isSystem, isDropTarget }: any) => (
     <div 
         id={`item-${item.id}`} 
         data-folder-id={item.id} 
@@ -1629,14 +1737,19 @@ const FolderItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onT
             <CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/>
         </div>
 
-        {!isRecycleBin && <DragHandle item={item} />}
+        {!isRecycleBin && !isSystem && <DragHandle item={item} />}
 
         {isRecycleBin ? (
              <Trash2 size={48} className="text-red-500 fill-red-500/10 drop-shadow-md pointer-events-none" />
+        ) : isSystem ? (
+             <div className="relative">
+                 <Folder size={48} className="text-slate-500 fill-slate-500/10 drop-shadow-md pointer-events-none" />
+                 <Lock size={16} className="absolute bottom-0 right-0 text-amber-400 bg-slate-900 rounded-full p-0.5 border border-slate-800" />
+             </div>
         ) : (
              <Folder size={48} className="text-blue-500 fill-blue-500/10 drop-shadow-md pointer-events-none" />
         )}
-        <span className={`text-xs font-medium text-center truncate w-full px-1 ${isRecycleBin ? 'text-red-400' : 'text-slate-200'}`}>{item.name}</span>
+        <span className={`text-xs font-medium text-center truncate w-full px-1 ${isRecycleBin ? 'text-red-400' : isSystem ? 'text-slate-400' : 'text-slate-200'}`}>{item.name}</span>
     </div>
 );
 
@@ -1722,11 +1835,16 @@ const ImageItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onTo
 );
 
 // --- FLOATING MENU ---
-const SelectionFloatingMenu = ({ selectedIds, items, onClear, onAction, containerRef, isInRecycleBin, recycleBinId }: { selectedIds: Set<string>, items: Item[], onClear: () => void, onAction: (a: string) => void, containerRef: React.RefObject<HTMLDivElement>, isInRecycleBin: boolean, recycleBinId: string }) => {
+const SelectionFloatingMenu = ({ selectedIds, items, onClear, onAction, containerRef, isInRecycleBin, recycleBinId, isSystemFolder, systemFolderId }: { selectedIds: Set<string>, items: Item[], onClear: () => void, onAction: (a: string) => void, containerRef: React.RefObject<HTMLDivElement>, isInRecycleBin: boolean, recycleBinId: string, isSystemFolder: boolean, systemFolderId: string | null }) => {
     const [pos, setPos] = useState<{top?: number, left?: number, bottom?: number, x?:number}>({ bottom: 24, left: window.innerWidth / 2 }); 
     const [styleType, setStyleType] = useState<'contextual' | 'dock'>('dock');
     const menuRef = useRef<HTMLDivElement>(null);
     const isRecycleBinFolderSelected = !isInRecycleBin && Array.from(selectedIds).some(id => id === recycleBinId);
+    // Check if system folder is selected
+    const isSystemFolderSelected = !isInRecycleBin && Array.from(selectedIds).some(id => {
+        const item = items.find(i => i.id === id);
+        return item?.id === systemFolderId || item?.name === SYSTEM_FOLDER_NAME;
+    });
 
     useLayoutEffect(() => {
         if (selectedIds.size === 0) return;
@@ -1769,11 +1887,23 @@ const SelectionFloatingMenu = ({ selectedIds, items, onClear, onAction, containe
                 <span className="font-bold text-sm text-blue-100">{selectedIds.size}</span>
                 <button onClick={(e) => { e.stopPropagation(); onClear(); }} className="p-1 hover:bg-white/10 rounded-full transition-colors"><X size={14} /></button>
             </div>
-            {isRecycleBinFolderSelected ? <span className="px-2 text-xs text-slate-400 font-medium">System Folder</span> : isInRecycleBin ? (
+            {isRecycleBinFolderSelected ? (
+                <span className="px-2 text-xs text-slate-400 font-medium">System Folder</span>
+            ) : isSystemFolderSelected ? (
+                <span className="px-2 text-xs text-amber-500 font-medium flex items-center gap-1"><Lock size={12}/> Protected</span>
+            ) : isInRecycleBin ? (
                 <>
                 <button onClick={(e) => { e.stopPropagation(); onAction('restore'); }} className="p-2 hover:bg-green-500/20 hover:text-green-400 rounded-lg transition-colors tooltip" title="Restore"><RotateCcw size={18}/></button>
                 <div className="w-px h-6 bg-white/10 mx-1"></div>
                 <button onClick={(e) => { e.stopPropagation(); onAction('delete_permanent'); }} className="p-2 hover:bg-red-500/20 text-red-400 hover:text-red-300 rounded-lg transition-colors tooltip" title="Delete Permanently"><Ban size={18}/></button>
+                </>
+            ) : isSystemFolder ? (
+                // Inside system folder: Read Only actions
+                <>
+                <button onClick={(e) => { e.stopPropagation(); onAction('download'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Download"><Download size={18}/></button>
+                {selectedIds.size === 1 && items.find(i => i.id === Array.from(selectedIds)[0])?.type === 'image' && (
+                    <button onClick={(e) => { e.stopPropagation(); onAction('copy_image'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Copy Image"><Image size={18}/></button>
+                )}
                 </>
             ) : (
                 <>
