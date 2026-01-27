@@ -4,12 +4,13 @@ import {
   Folder, FileText, Image as ImageIcon, MoreVertical, 
   ArrowLeft, Plus, Trash2, Copy, Move, Edit, CheckSquare, 
   Loader2, Home, Upload, ChevronRight, X, AlertCircle, Download, CornerUpLeft,
-  CheckCircle, XCircle
+  CheckCircle, XCircle, Image
 } from 'lucide-react';
 import * as API from './services/api';
 import * as DB from './services/db';
 import { Item, StoredNote } from './types';
 import { TextEditor } from './components/TextEditor';
+import { UploadProgress, UploadItem } from './components/UploadProgress';
 
 // --- TYPES ---
 type ModalType = 'input' | 'confirm' | 'alert' | 'select' | null;
@@ -46,6 +47,10 @@ const App = () => {
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(false); 
   
+  // --- GLOBAL LOADING OVERLAY (BLOCKING) ---
+  const [isGlobalLoading, setIsGlobalLoading] = useState(false);
+  const [globalLoadingMessage, setGlobalLoadingMessage] = useState("");
+
   // --- UI STATE ---
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [lastSelectedId, setLastSelectedId] = useState<string | null>(null); 
@@ -53,10 +58,13 @@ const App = () => {
   const [isDraggingFile, setIsDraggingFile] = useState(false); 
   const [isNewDropdownOpen, setIsNewDropdownOpen] = useState(false);
   
+  // --- UPLOAD STATE ---
+  const [uploadQueue, setUploadQueue] = useState<UploadItem[]>([]);
+
   // --- NOTIFICATIONS STATE ---
   const [notifications, setNotifications] = useState<Notification[]>([]);
 
-  // --- DRAG SELECTION STATE ---
+  // --- DRAG/TOUCH SELECTION STATE ---
   const [isDragSelecting, setIsDragSelecting] = useState(false);
   const [selectionBox, setSelectionBox] = useState<{x:number, y:number, width:number, height:number} | null>(null);
   const dragStartPos = useRef<{x:number, y:number} | null>(null);
@@ -75,6 +83,27 @@ const App = () => {
   useEffect(() => {
     activeFolderIdRef.current = currentFolderId;
   }, [currentFolderId]);
+
+  // --- 0. INITIAL URL CHECK (Persistence) ---
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const folderIdParam = params.get('folder');
+    if (folderIdParam && folderIdParam !== currentFolderId) {
+        setCurrentFolderId(folderIdParam);
+    }
+  }, []); // Run once on mount
+
+  // Update URL when folder changes
+  useEffect(() => {
+    const url = new URL(window.location.href);
+    if (currentFolderId) {
+        url.searchParams.set('folder', currentFolderId);
+    } else {
+        url.searchParams.delete('folder');
+    }
+    window.history.pushState({}, '', url);
+  }, [currentFolderId]);
+
 
   // --- NOTIFICATION HELPERS ---
   const addNotification = (message: string, type: 'loading' | 'success' | 'error' = 'success', duration = 3000) => {
@@ -144,7 +173,10 @@ const App = () => {
       setLoading(false);
       
       if (res.status === 'success') {
-        const freshItems: Item[] = res.data;
+        // ROBUSTNESS: Ensure data is array and filter out nulls to prevent "Uncaught" errors during render
+        const freshItems: Item[] = (Array.isArray(res.data) ? res.data : [])
+            .filter((i: any) => i && i.id && i.name); // Filter invalid items
+
         setParentFolderId(res.parentFolderId || ""); 
 
         const mergedItems = freshItems.map(newItem => {
@@ -165,7 +197,7 @@ const App = () => {
       }
     } catch (e) {
       if (folderId === activeFolderIdRef.current) {
-          console.error(e);
+          console.error("Load Folder Error:", e);
           setLoading(false);
       }
     }
@@ -190,35 +222,38 @@ const App = () => {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isNewDropdownOpen]);
 
-  // --- DRAG SELECTION ---
+  // --- SELECTION LOGIC (SHARED MOUSE & TOUCH) ---
+  const updateSelection = (currentX: number, currentY: number) => {
+      if (!dragStartPos.current) return;
+      
+      const x = Math.min(dragStartPos.current.x, currentX);
+      const y = Math.min(dragStartPos.current.y, currentY);
+      const width = Math.abs(currentX - dragStartPos.current.x);
+      const height = Math.abs(currentY - dragStartPos.current.y);
+      setSelectionBox({ x, y, width, height });
+
+      const newSelected = new Set(selectedIds); 
+      
+      items.forEach(item => {
+          const el = document.getElementById(`item-${item.id}`);
+          if (el) {
+              const rect = el.getBoundingClientRect();
+              const elX = rect.left;
+              const elY = rect.top;
+              
+              if (x < elX + rect.width && x + width > elX && y < elY + rect.height && y + height > elY) {
+                  newSelected.add(item.id);
+              }
+          }
+      });
+      setSelectedIds(newSelected);
+  };
+
+  // --- MOUSE DRAG SELECTION ---
   useEffect(() => {
     const handleWindowMouseMove = (e: MouseEvent) => {
-        if (!isDragSelecting || !dragStartPos.current) return;
-        // FIX: Use clientX/clientY for viewport coordinates (matches fixed position)
-        const currentX = e.clientX;
-        const currentY = e.clientY;
-        
-        const x = Math.min(dragStartPos.current.x, currentX);
-        const y = Math.min(dragStartPos.current.y, currentY);
-        const width = Math.abs(currentX - dragStartPos.current.x);
-        const height = Math.abs(currentY - dragStartPos.current.y);
-        setSelectionBox({ x, y, width, height });
-
-        const newSelected = new Set(e.shiftKey ? selectedIds : []);
-        items.forEach(item => {
-            const el = document.getElementById(`item-${item.id}`);
-            if (el) {
-                const rect = el.getBoundingClientRect();
-                // FIX: Use rect directly (viewport) without adding scroll, because x/y are now viewport based
-                const elX = rect.left;
-                const elY = rect.top;
-                
-                if (x < elX + rect.width && x + width > elX && y < elY + rect.height && y + height > elY) {
-                    newSelected.add(item.id);
-                }
-            }
-        });
-        setSelectedIds(newSelected);
+        if (!isDragSelecting) return;
+        updateSelection(e.clientX, e.clientY);
     };
 
     const handleWindowMouseUp = () => {
@@ -242,12 +277,43 @@ const App = () => {
   const startDragSelection = (e: React.MouseEvent) => {
       if ((e.target as HTMLElement).closest('button, .item-clickable') || e.button !== 0) return;
       setIsDragSelecting(true);
-      // FIX: Capture viewport coordinates
       dragStartPos.current = { x: e.clientX, y: e.clientY };
       setSelectionBox({ x: e.clientX, y: e.clientY, width: 0, height: 0 });
       if (!e.ctrlKey && !e.shiftKey) setSelectedIds(new Set());
       setContextMenu(null);
       setIsNewDropdownOpen(false);
+  };
+
+  // --- TOUCH SELECTION (MOBILE) ---
+  const handleTouchStart = (e: React.TouchEvent) => {
+     if ((e.target as HTMLElement).closest('button, .item-clickable')) return;
+     if (e.touches.length === 1) {
+         dragStartPos.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+     }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+     if (!dragStartPos.current) return;
+     const x = e.touches[0].clientX;
+     const y = e.touches[0].clientY;
+     
+     if (!isDragSelecting) {
+         const dist = Math.sqrt(Math.pow(x - dragStartPos.current.x, 2) + Math.pow(y - dragStartPos.current.y, 2));
+         if (dist > 10) { 
+             setIsDragSelecting(true);
+         }
+     }
+
+     if (isDragSelecting) {
+         updateSelection(x, y);
+         if(e.cancelable) e.preventDefault(); 
+     }
+  };
+
+  const handleTouchEnd = () => {
+      setIsDragSelecting(false);
+      setSelectionBox(null);
+      dragStartPos.current = null;
   };
 
   // --- SELECTION & CLICK LOGIC ---
@@ -300,27 +366,97 @@ const App = () => {
     }
   };
 
-  // --- ACTIONS ---
-  const handleDownload = async (item: Item) => {
-    if (!item.url) return;
+  // --- ROBUST FILE ACTIONS (COPY & DOWNLOAD) ---
+  
+  const getBlobFromUrl = async (url: string): Promise<Blob> => {
+      try {
+          // Method 1: Fetch directly (Works if CORS headers are correct)
+          const response = await fetch(url, {
+              mode: 'cors',
+              credentials: 'omit',
+              referrerPolicy: 'no-referrer'
+          });
+          if (!response.ok) throw new Error(`Fetch failed: ${response.status}`);
+          return await response.blob();
+      } catch (fetchError) {
+          console.warn("Fetch failed, trying Canvas fallback...", fetchError);
+          // Method 2: Load via HTML Image (Bypasses some fetch restrictions for displayable images)
+          return new Promise((resolve, reject) => {
+              const img = new window.Image();
+              // Note: If we use Anonymous, it might fail on Drive images. If we don't, we can draw but not export.
+              // Try Anonymous first for the blob access.
+              img.crossOrigin = "Anonymous";
+              img.referrerPolicy = "no-referrer";
+              img.src = url;
+              img.onload = () => {
+                  const canvas = document.createElement('canvas');
+                  canvas.width = img.naturalWidth;
+                  canvas.height = img.naturalHeight;
+                  const ctx = canvas.getContext('2d');
+                  if (!ctx) { reject(new Error("Canvas context error")); return; }
+                  try {
+                      ctx.drawImage(img, 0, 0);
+                      canvas.toBlob((blob) => {
+                          if (blob) resolve(blob);
+                          else reject(new Error("Canvas blob error"));
+                      }, 'image/png');
+                  } catch (err) {
+                      reject(new Error("Canvas tainted (CORS blocked)"));
+                  }
+              };
+              img.onerror = () => reject(new Error("Image load error"));
+          });
+      }
+  };
+
+  const handleDownload = async (item: Item | string) => {
+    const url = typeof item === 'string' ? item : (item.url || item.thumbnail);
+    const name = typeof item === 'string' ? 'download.png' : item.name;
+
+    if (!url) return;
+    const notifId = addNotification('Downloading...', 'loading');
     try {
-        const response = await fetch(item.url);
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
+        const blob = await getBlobFromUrl(url);
+        const blobUrl = window.URL.createObjectURL(blob);
         const a = document.createElement('a');
-        a.href = url;
-        a.download = item.name; 
+        a.href = blobUrl;
+        a.download = name; 
         document.body.appendChild(a);
         a.click();
-        window.URL.revokeObjectURL(url);
+        window.URL.revokeObjectURL(blobUrl);
         document.body.removeChild(a);
+        removeNotification(notifId);
     } catch (e) {
-        window.open(item.url, '_blank');
+        console.error(e);
+        // Fallback to new tab if everything fails
+        window.open(url, '_blank');
+        removeNotification(notifId);
     }
   };
 
+  const handleCopyImage = async (item: Item | string) => {
+      const url = typeof item === 'string' ? item : (item.thumbnail || item.url);
+      if (!url) return;
+
+      const notifId = addNotification('Menyalin gambar...', 'loading');
+      try {
+          const blob = await getBlobFromUrl(url);
+          
+          await navigator.clipboard.write([
+              new ClipboardItem({
+                  [blob.type]: blob
+              })
+          ]);
+          updateNotification(notifId, 'Gambar disalin ke clipboard!', 'success');
+      } catch (err) {
+          console.error("Clipboard Error:", err);
+          updateNotification(notifId, 'Membuka gambar (Silahkan salin manual)', 'error');
+          // Fallback: Open in new tab so user can right-click copy
+          setTimeout(() => window.open(url, '_blank'), 1000);
+      }
+  };
+
   const executeAction = async (action: string) => {
-    // FIX: Cast ids to string[] to resolve TypeScript 'unknown[]' error
     const ids = Array.from(selectedIds) as string[];
     const targetItem = contextMenu?.targetItem || (ids.length === 1 ? items.find(i => i.id === ids[0]) : null);
     
@@ -329,6 +465,9 @@ const App = () => {
 
     if (action === 'download' && targetItem) {
         handleDownload(targetItem);
+    }
+    else if (action === 'copy_image' && targetItem) {
+        handleCopyImage(targetItem);
     }
     // --- OPTIMISTIC DELETE ---
     else if (action === 'delete') {
@@ -342,23 +481,18 @@ const App = () => {
          onConfirm: async () => {
             setModal(null);
             
-            // 1. Optimistic UI Update: Remove immediately
             const previousItems = [...items];
             setItems(prev => prev.filter(i => !ids.includes(i.id)));
             setSelectedIds(new Set());
             
-            // 2. Add Notification
             const notifId = addNotification(`Menghapus ${ids.length} item...`, 'loading');
 
             try {
-                // 3. API Call
                 await API.deleteItems(ids);
                 updateNotification(notifId, 'Berhasil dihapus', 'success');
-                // Update Cache after success
                 const remainingItems = previousItems.filter(i => !ids.includes(i.id));
                 await DB.cacheFolderContents(currentFolderId, remainingItems);
             } catch (e) {
-                // 4. Revert on Error
                 setItems(previousItems);
                 updateNotification(notifId, 'Gagal menghapus', 'error');
             }
@@ -445,52 +579,98 @@ const App = () => {
     }
   };
 
+  // --- UPLOAD LOGIC (PARALLEL) ---
+  const handleUploadFiles = async (files: File[]) => {
+      const newUploads: UploadItem[] = files.map(f => ({
+          id: Math.random().toString(36).substr(2, 9),
+          file: f,
+          status: 'uploading',
+          progress: 10 // Initial fake progress
+      }));
+
+      setUploadQueue(prev => [...prev, ...newUploads]);
+
+      // Process parallel
+      newUploads.forEach(async (item) => {
+          try {
+              // Simulated progress interval since fetch doesn't support progress events easily with GAS
+              const progressInterval = setInterval(() => {
+                  setUploadQueue(prev => prev.map(u => 
+                      u.id === item.id && u.progress < 90 
+                      ? { ...u, progress: u.progress + 10 } 
+                      : u
+                  ));
+              }, 500);
+
+              await API.uploadToDrive(item.file, currentFolderId);
+              
+              clearInterval(progressInterval);
+              setUploadQueue(prev => prev.map(u => 
+                  u.id === item.id ? { ...u, status: 'success', progress: 100 } : u
+              ));
+              
+              // If this was the last pending, refresh folder
+              loadFolder(currentFolderId); 
+
+          } catch (err) {
+              setUploadQueue(prev => prev.map(u => 
+                  u.id === item.id ? { ...u, status: 'error', progress: 0 } : u
+              ));
+          }
+      });
+  };
+
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setIsDraggingFile(false);
-    if (e.dataTransfer.files.length > 0) {
-      // FIX: Cast files to File[] to avoid 'unknown' items in the array
-      const files = Array.from(e.dataTransfer.files) as File[];
-      const notifId = addNotification(`Mengupload ${files.length} file...`, 'loading', 60000); // Long timeout for upload
-      for (const file of files) {
-          try { await API.uploadToDrive(file, currentFolderId); } catch(err) { console.error(err); }
-      }
-      updateNotification(notifId, 'Upload selesai', 'success');
-      await loadFolder(currentFolderId);
-      return;
+    
+    // FIX: Don't trigger upload if dragging internal items
+    if (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes("text/item-id")) {
+        const movedItemId = e.dataTransfer.getData("text/item-id");
+        let targetElement = e.target as HTMLElement;
+        while(targetElement && !targetElement.getAttribute("data-folder-id")) {
+            targetElement = targetElement.parentElement as HTMLElement;
+            if (!targetElement || targetElement === e.currentTarget) break;
+        }
+        const targetFolderId = targetElement?.getAttribute("data-folder-id");
+        if (movedItemId && targetFolderId && movedItemId !== targetFolderId) {
+            const notifId = addNotification('Memindahkan via drag...', 'loading');
+            try {
+                await API.moveItems([movedItemId], targetFolderId);
+                updateNotification(notifId, 'Berhasil dipindahkan', 'success');
+                await loadFolder(currentFolderId);
+            } catch(err) { updateNotification(notifId, 'Gagal pindah', 'error'); } 
+        }
+        return;
     }
-    const movedItemId = e.dataTransfer.getData("text/item-id");
-    let targetElement = e.target as HTMLElement;
-    while(targetElement && !targetElement.getAttribute("data-folder-id")) {
-       targetElement = targetElement.parentElement as HTMLElement;
-       if (!targetElement || targetElement === e.currentTarget) break;
-    }
-    const targetFolderId = targetElement?.getAttribute("data-folder-id");
-    if (movedItemId && targetFolderId && movedItemId !== targetFolderId) {
-       const notifId = addNotification('Memindahkan via drag...', 'loading');
-       try {
-         await API.moveItems([movedItemId], targetFolderId);
-         updateNotification(notifId, 'Berhasil dipindahkan', 'success');
-         await loadFolder(currentFolderId);
-       } catch(err) { updateNotification(notifId, 'Gagal pindah', 'error'); } 
+
+    // Handle File Drop
+    if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      handleUploadFiles(Array.from(e.dataTransfer.files));
     }
   };
 
   // --- NOTE HANDLING ---
   const handleOpenNote = async (item: Item) => {
-      if (item.content) {
-          setEditingNote({ id: item.id, galleryId: currentFolderId, title: item.name.replace('.txt', ''), content: item.content, timestamp: item.lastUpdated });
-          return;
-      }
-      const notifId = addNotification('Membuka catatan...', 'loading');
+      // Show blocking overlay
+      setIsGlobalLoading(true);
+      setGlobalLoadingMessage("Membuka catatan...");
+      
       try {
-          const content = await API.getFileContent(item.id);
-          const updatedItem = { ...item, content };
-          await DB.updateItemInCache(currentFolderId, updatedItem);
-          if (currentFolderId === activeFolderIdRef.current) setItems(prev => prev.map(i => i.id === item.id ? updatedItem : i));
-          setEditingNote({ id: item.id, galleryId: currentFolderId, title: item.name.replace('.txt', ''), content: content, timestamp: item.lastUpdated });
-          removeNotification(notifId);
-      } catch(e) { updateNotification(notifId, 'Gagal buka catatan', 'error'); } 
+          if (item.content) {
+              setEditingNote({ id: item.id, galleryId: currentFolderId, title: item.name.replace('.txt', ''), content: item.content, timestamp: item.lastUpdated });
+          } else {
+              const content = await API.getFileContent(item.id);
+              const updatedItem = { ...item, content };
+              await DB.updateItemInCache(currentFolderId, updatedItem);
+              if (currentFolderId === activeFolderIdRef.current) setItems(prev => prev.map(i => i.id === item.id ? updatedItem : i));
+              setEditingNote({ id: item.id, galleryId: currentFolderId, title: item.name.replace('.txt', ''), content: content, timestamp: item.lastUpdated });
+          }
+      } catch(e) { 
+          addNotification('Gagal buka catatan', 'error'); 
+      } finally {
+          setIsGlobalLoading(false);
+      }
   };
 
   const handleCreateNote = () => {
@@ -500,7 +680,10 @@ const App = () => {
   };
 
   const handleSaveNote = async (id: string, title: string, content: string) => {
-      const notifId = addNotification('Menyimpan catatan...', 'loading');
+      // BLOCKING OVERLAY
+      setIsGlobalLoading(true);
+      setGlobalLoadingMessage("Menyimpan catatan...");
+      
       try {
           const isNew = id.startsWith('temp-');
           const fileId = isNew ? undefined : id;
@@ -513,8 +696,12 @@ const App = () => {
               if (currentFolderId === activeFolderIdRef.current) await loadFolder(currentFolderId); 
           }
           setEditingNote(null);
-          updateNotification(notifId, 'Catatan tersimpan', 'success');
-      } catch(e) { updateNotification(notifId, 'Gagal simpan', 'error'); }
+          addNotification('Catatan tersimpan', 'success');
+      } catch(e) { 
+          addNotification('Gagal simpan', 'error'); 
+      } finally {
+          setIsGlobalLoading(false);
+      }
   };
 
   const handleBreadcrumbClick = (index: number) => {
@@ -530,19 +717,37 @@ const App = () => {
 
   return (
     <div 
-      className="min-h-screen bg-slate-950 text-slate-200 relative select-none"
+      className="min-h-screen bg-slate-950 text-slate-200 relative select-none touch-pan-y"
       ref={containerRef}
       onContextMenu={(e) => handleContextMenu(e)} 
-      onDragOver={(e) => { e.preventDefault(); setIsDraggingFile(true); }}
+      onDragOver={(e) => { 
+          e.preventDefault(); 
+          e.stopPropagation(); // FIX: Prevent event bubbling that causes overlay flicker
+          // FIX: Only show overlay if dragging FILES (not internal items)
+          if (e.dataTransfer && !e.dataTransfer.types.includes("text/item-id")) {
+            setIsDraggingFile(true); 
+          }
+      }}
       onDragLeave={() => setIsDraggingFile(false)}
       onDrop={handleDrop}
       onMouseDown={startDragSelection}
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
     >
       
       {/* SELECTION BOX */}
       {selectionBox && (
           <div className="fixed z-50 bg-blue-500/20 border border-blue-400 pointer-events-none"
              style={{ left: selectionBox.x, top: selectionBox.y, width: selectionBox.width, height: selectionBox.height }} />
+      )}
+
+      {/* BLOCKING LOADING OVERLAY */}
+      {isGlobalLoading && (
+          <div className="fixed inset-0 z-[999] bg-black/70 backdrop-blur-sm flex flex-col items-center justify-center cursor-wait">
+              <Loader2 size={48} className="animate-spin text-blue-500 mb-4"/>
+              <p className="text-white font-semibold text-lg animate-pulse">{globalLoadingMessage}</p>
+          </div>
       )}
       
       {/* FLOATING SELECTION MENU */}
@@ -554,7 +759,14 @@ const App = () => {
          containerRef={containerRef}
       />
 
-      {/* NOTIFICATIONS */}
+      {/* UPLOAD PROGRESS WIDGET */}
+      <UploadProgress 
+        uploads={uploadQueue} 
+        onClose={() => setUploadQueue([])} 
+        onRemove={(id) => setUploadQueue(prev => prev.filter(u => u.id !== id))} 
+      />
+
+      {/* NOTIFICATIONS (Toast) */}
       <div className="fixed bottom-6 right-6 z-[300] flex flex-col gap-2 pointer-events-none">
           {notifications.map(n => (
               <div key={n.id} className="bg-slate-800/90 backdrop-blur-md border border-slate-700 text-white px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3 animate-in slide-in-from-bottom-5 fade-in duration-300">
@@ -601,12 +813,7 @@ const App = () => {
                             <input type="file" multiple className="hidden" onChange={(e) => {
                                 setIsNewDropdownOpen(false);
                                 if(e.target.files) {
-                                    // FIX: Cast files to File[] to resolve 'unknown' typing issues
-                                    const files = Array.from(e.target.files) as File[];
-                                    const notifId = addNotification(`Mengupload ${files.length} file...`, 'loading', 60000);
-                                    Promise.all(files.map(f => API.uploadToDrive(f, currentFolderId)))
-                                        .then(() => { updateNotification(notifId, 'Upload selesai', 'success'); loadFolder(currentFolderId); })
-                                        .catch(() => updateNotification(notifId, 'Upload gagal', 'error'));
+                                    handleUploadFiles(Array.from(e.target.files));
                                 }
                             }} />
                         </label>
@@ -695,7 +902,12 @@ const App = () => {
                 <button onClick={() => executeAction('duplicate')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Copy size={16} className="text-slate-400"/> Copy</button>
                 <button onClick={() => executeAction('move')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Move size={16} className="text-slate-400"/> Move</button>
                 {contextMenu.targetItem.type !== 'folder' && (
+                    <>
                     <button onClick={() => executeAction('download')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Download size={16} className="text-slate-400"/> Download</button>
+                    {contextMenu.targetItem.type === 'image' && (
+                        <button onClick={() => executeAction('copy_image')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Image size={16} className="text-slate-400"/> Copy Image</button>
+                    )}
+                    </>
                 )}
                 <div className="h-px bg-slate-700 my-1"/>
                 <button onClick={() => executeAction('delete')} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-400 hover:text-red-300 flex items-center gap-3 text-sm transition-colors"><Trash2 size={16}/> Delete</button>
@@ -709,12 +921,7 @@ const App = () => {
                     <input type="file" multiple className="hidden" onChange={(e) => {
                         setContextMenu(null);
                         if(e.target.files) {
-                            // FIX: Cast files to File[] to resolve 'unknown' typing issues
-                            const files = Array.from(e.target.files) as File[];
-                            const notifId = addNotification(`Mengupload ${files.length} file...`, 'loading', 60000);
-                            Promise.all(files.map(f => API.uploadToDrive(f, currentFolderId)))
-                                .then(() => { updateNotification(notifId, 'Upload selesai', 'success'); loadFolder(currentFolderId); })
-                                .catch(() => updateNotification(notifId, 'Upload gagal', 'error'));
+                            handleUploadFiles(Array.from(e.target.files));
                         }
                     }} />
                 </label>
@@ -728,7 +935,17 @@ const App = () => {
 
       {previewImage && (
         <div className="fixed inset-0 z-[150] bg-black/95 backdrop-blur flex items-center justify-center p-4 animate-in fade-in" onClick={() => setPreviewImage(null)}>
-            <button className="absolute top-4 right-4 p-2 bg-white/10 rounded-full hover:bg-white/20 text-white z-10"><X size={24}/></button>
+            <div className="absolute top-4 right-4 z-10 flex gap-2">
+                 <button onClick={(e) => { e.stopPropagation(); handleCopyImage(previewImage); }} className="p-2 bg-white/10 rounded-full hover:bg-white/20 text-white" title="Copy Image">
+                    <Image size={24}/>
+                 </button>
+                 <button onClick={(e) => { e.stopPropagation(); handleDownload(previewImage); }} className="p-2 bg-white/10 rounded-full hover:bg-white/20 text-white" title="Download">
+                    <Download size={24}/>
+                 </button>
+                 <button onClick={() => setPreviewImage(null)} className="p-2 bg-white/10 rounded-full hover:bg-white/20 text-white">
+                    <X size={24}/>
+                 </button>
+            </div>
             <img src={previewImage} className="max-w-full max-h-full object-contain rounded-lg shadow-2xl" onClick={(e) => e.stopPropagation()} referrerPolicy="no-referrer" />
         </div>
       )}
@@ -928,7 +1145,14 @@ const ImageItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onTo
         <div className={`absolute top-2 left-2 z-10 transition-opacity ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
             <CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-white drop-shadow-md"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/>
         </div>
-        <img src={item.thumbnail} alt={item.name} className="w-full h-full object-cover select-none" loading="lazy" referrerPolicy="no-referrer"/>
+        <img 
+            src={item.thumbnail} 
+            alt={item.name} 
+            className="w-full h-full object-cover select-none" 
+            loading="lazy" 
+            referrerPolicy="no-referrer" 
+            // Removed crossOrigin="anonymous" to fix display issues with non-CORS images
+        />
         <div className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm p-2 translate-y-full group-hover:translate-y-0 transition-transform">
             <p className="text-[10px] text-white truncate text-center select-none">{item.name}</p>
         </div>
