@@ -607,15 +607,57 @@ const App = () => {
     }
   };
 
-  const handleCopyImage = async (item: Item | string) => {
-      const url = typeof item === 'string' ? item : (item.thumbnail || item.url);
-      if (!url) return;
-      const notifId = addNotification('Menyalin gambar...', 'loading');
-      try {
-          const blob = await getBlobFromUrl(url);
-          await navigator.clipboard.write([new ClipboardItem({[blob.type]: blob})]);
-          updateNotification(notifId, 'Gambar disalin ke clipboard!', 'success');
-      } catch (err) { updateNotification(notifId, 'Gagal menyalin: Proxy/Izin Error', 'error'); }
+  const handleCopyImage = async (itemOrUrl: Item | string) => {
+    const notifId = addNotification('Menyalin gambar...', 'loading');
+    try {
+      let blob: Blob | null = null;
+
+      // 1. Try to grab directly from DOM (Canvas/Cache)
+      let imgElement: HTMLImageElement | null = null;
+
+      if (typeof itemOrUrl === 'string') {
+        // From Preview Modal
+        const previewContainer = document.querySelector('.fixed.z-\\[150\\]');
+        imgElement = previewContainer?.querySelector('img') as HTMLImageElement;
+      } else {
+        // From Grid Item
+        const elementId = `item-${itemOrUrl.id}`;
+        const container = document.getElementById(elementId);
+        imgElement = container?.querySelector('img') as HTMLImageElement;
+      }
+
+      if (imgElement && imgElement.complete && imgElement.naturalWidth > 0) {
+         try {
+           const canvas = document.createElement('canvas');
+           canvas.width = imgElement.naturalWidth;
+           canvas.height = imgElement.naturalHeight;
+           const ctx = canvas.getContext('2d');
+           if (ctx) {
+             ctx.drawImage(imgElement, 0, 0);
+             blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'));
+           }
+         } catch (err) {
+           console.warn("Canvas copy failed (tainted?), falling back to fetch.");
+         }
+      }
+
+      // 2. Fallback: Fetch URL if DOM failed
+      if (!blob) {
+         const url = typeof itemOrUrl === 'string' ? itemOrUrl : (itemOrUrl.thumbnail || itemOrUrl.url);
+         if (!url) throw new Error("URL tidak ditemukan");
+         blob = await getBlobFromUrl(url);
+      }
+
+      if (!blob) throw new Error("Gagal membuat blob");
+
+      // 3. Write to Clipboard
+      await navigator.clipboard.write([new ClipboardItem({[blob.type]: blob})]);
+      updateNotification(notifId, 'Gambar disalin!', 'success');
+
+    } catch (err) {
+      console.error(err);
+      updateNotification(notifId, 'Gagal menyalin: ' + (err instanceof Error ? err.message : 'Unknown error'), 'error');
+    }
   };
 
   const executeAction = async (action: string) => {
@@ -1230,7 +1272,7 @@ const App = () => {
                     <X size={24}/>
                  </button>
             </div>
-            <img src={previewImage} className="max-w-full max-h-full object-contain rounded-lg shadow-2xl" onClick={(e) => e.stopPropagation()} referrerPolicy="no-referrer" />
+            <img src={previewImage} className="max-w-full max-h-full object-contain rounded-lg shadow-2xl" onClick={(e) => e.stopPropagation()} referrerPolicy="no-referrer" crossOrigin="anonymous" />
         </div>
       )}
 
@@ -1294,59 +1336,45 @@ const DragHandle = ({ item }: { item: Item }) => (
 
             // 2. External Drag Logic
             if (item.type === 'image' && (item.url || item.thumbnail)) {
-                const url = item.url || item.thumbnail;
-                
-                // Set Ghost Image
-                const imgEl = document.querySelector(`#item-${item.id} img`) as HTMLImageElement;
-                if (imgEl) {
-                    // Center the drag image
-                    e.dataTransfer.setDragImage(imgEl, imgEl.width / 2, imgEl.height / 2);
-                }
+                // Find the image element in the DOM
+                const imgEl = document.getElementById(`item-${item.id}`)?.querySelector('img') as HTMLImageElement;
 
-                if (url) {
-                    // Detect MIME
-                    let mime = 'image/jpeg';
-                    const lowerName = item.name.toLowerCase();
-                    if (lowerName.endsWith('.png')) mime = 'image/png';
-                    else if (lowerName.endsWith('.gif')) mime = 'image/gif';
-                    else if (lowerName.endsWith('.webp')) mime = 'image/webp';
-                    else if (lowerName.endsWith('.svg')) mime = 'image/svg+xml';
-                    
-                    // Normalize Filename
-                    let filename = item.name;
-                    if (!filename.includes('.')) {
-                        filename += '.' + mime.split('/')[1];
+                if (imgEl && imgEl.complete && imgEl.naturalWidth > 0) {
+                    try {
+                        // Get extension
+                        let mime = 'image/png';
+                        if (item.name.toLowerCase().endsWith('.jpg') || item.name.toLowerCase().endsWith('.jpeg')) mime = 'image/jpeg';
+                        else if (item.name.toLowerCase().endsWith('.webp')) mime = 'image/webp';
+                        else if (item.name.toLowerCase().endsWith('.gif')) mime = 'image/gif';
+                        else if (item.name.toLowerCase().endsWith('.svg')) mime = 'image/svg+xml';
+
+                        // Draw to canvas to get Data URL (base64)
+                        const canvas = document.createElement('canvas');
+                        canvas.width = imgEl.naturalWidth;
+                        canvas.height = imgEl.naturalHeight;
+                        const ctx = canvas.getContext('2d');
+                        ctx?.drawImage(imgEl, 0, 0);
+                        const base64 = canvas.toDataURL(mime);
+
+                        // Set Drag Image (Ghost)
+                        e.dataTransfer.setDragImage(imgEl, imgEl.width / 2, imgEl.height / 2);
+
+                        // 1. DownloadURL: Allows dragging to Desktop to save file
+                        // Format: mime:filename:base64
+                        e.dataTransfer.setData("DownloadURL", `${mime}:${item.name}:${base64}`);
+
+                        // 2. text/html: Allows dragging to Word/Docs/Gmail
+                        e.dataTransfer.setData("text/html", `<img src="${base64}" alt="${item.name}" />`);
+
+                        // 3. URI List
+                        e.dataTransfer.setData("text/uri-list", base64);
+                    } catch (err) {
+                        console.warn("Drag export: Canvas tainted or failed.", err);
+                        // Fallback to URL if canvas fails
+                        const url = item.url || item.thumbnail || "";
+                        e.dataTransfer.setData("text/uri-list", url);
+                        e.dataTransfer.setData("text/plain", url);
                     }
-
-                    let finalUrl = url;
-
-                    // --- NEW LOGIC: Convert to Base64 via Canvas ---
-                    // This forces the file content to be generated locally, 
-                    // allowing "Drag to Desktop" to save the file instead of a link.
-                    if (imgEl && imgEl.complete && imgEl.naturalWidth > 0) {
-                        try {
-                            const canvas = document.createElement('canvas');
-                            canvas.width = imgEl.naturalWidth;
-                            canvas.height = imgEl.naturalHeight;
-                            const ctx = canvas.getContext('2d');
-                            if (ctx) {
-                                ctx.drawImage(imgEl, 0, 0);
-                                finalUrl = canvas.toDataURL(mime);
-                            }
-                        } catch(err) {
-                            console.warn("Drag export: Canvas tainted, falling back to URL.");
-                        }
-                    }
-
-                    // A. DownloadURL (File Drop to Desktop)
-                    e.dataTransfer.setData("DownloadURL", `${mime}:${filename}:${finalUrl}`);
-                    
-                    // B. HTML Image (WhatsApp/Canva/Word)
-                    e.dataTransfer.setData("text/html", `<img src="${finalUrl}" alt="${filename}" />`);
-                    
-                    // C. Standard URI (Fallback)
-                    e.dataTransfer.setData("text/uri-list", finalUrl);
-                    e.dataTransfer.setData("text/plain", finalUrl);
                 }
             } else if (item.type === 'note' && item.content) {
                  e.dataTransfer.setData("text/plain", stripHtml(item.content));
@@ -1469,6 +1497,7 @@ const ImageItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onTo
                 className="w-full h-full object-cover pointer-events-none" 
                 loading="lazy" 
                 referrerPolicy="no-referrer"
+                crossOrigin="anonymous"
              />
         ) : (
              <ImageIcon size={32} className="text-slate-600 pointer-events-none" />
