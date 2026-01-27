@@ -1399,7 +1399,7 @@ const FolderItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onT
 );
 
 const NoteItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }: any) => {
-    const cleanText = stripHtml(item.content || item.snippet || "").slice(0, 100);
+    const cleanText = stripHtml(item.content || item.snippet || "").slice(0, 150);
     
     return (
     <div 
@@ -1410,24 +1410,35 @@ const NoteItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onTog
         onDoubleClick={(e) => onDoubleClick(e, item)} 
         onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} 
         style={{ touchAction: 'pan-y' }}
-        className={`group relative p-3 rounded-xl border transition-all cursor-pointer flex flex-col gap-2 item-clickable select-none aspect-square ${selected ? 'bg-blue-500/20 border-blue-500 shadow-md ring-1 ring-blue-500' : 'bg-slate-900 border-slate-800 hover:bg-slate-800 hover:border-slate-600'}`}
+        className={`group relative p-4 rounded-sm border transition-all cursor-pointer flex flex-col gap-2 item-clickable select-none aspect-[4/3] shadow-lg hover:shadow-xl hover:-translate-y-1 hover:rotate-1 duration-200 ${
+            selected 
+            ? 'bg-yellow-200 border-blue-500 ring-2 ring-blue-500 scale-[1.02] z-10' 
+            : 'bg-[#fff9c4] border-transparent hover:border-yellow-300'
+        }`}
     >
         <ItemOverlay status={item.status} />
+        
+        {/* Selection Checkbox */}
         <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
-            <CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/>
+            <CheckSquare size={18} className={selected ? "text-blue-600 bg-white rounded shadow-sm" : "text-slate-600/50 hover:text-slate-900"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/>
         </div>
         
         <DragHandle item={item} />
 
-        <div className="flex-1 w-full overflow-hidden">
-            <p className="text-[10px] text-slate-400 font-mono leading-relaxed break-words whitespace-pre-wrap opacity-70">
-                {cleanText || "No content..."}
+        {/* Content Area */}
+        <div className="flex-1 w-full overflow-hidden flex flex-col">
+            <h4 className="text-xs font-bold text-slate-900 mb-1.5 truncate border-b border-slate-800/10 pb-1">
+                {item.name.replace('.txt', '')}
+            </h4>
+            <p className="text-[10px] text-slate-800/90 leading-relaxed font-sans font-medium break-words whitespace-pre-wrap line-clamp-6">
+                {cleanText || <span className="italic text-slate-500">Kosong...</span>}
             </p>
         </div>
 
-        <div className="flex items-center gap-2 w-full pt-2 border-t border-slate-800/50 mt-auto">
-            <FileText size={14} className="text-yellow-500 flex-shrink-0" />
-            <span className="text-xs font-medium text-slate-200 truncate" title={item.name}>{item.name.replace('.txt', '')}</span>
+        {/* Bottom Decoration */}
+        <div className="flex items-center justify-between w-full pt-2 mt-auto opacity-50">
+           <FileText size={10} className="text-slate-600" />
+           <span className="text-[9px] text-slate-600">{new Date(item.lastUpdated).toLocaleDateString()}</span>
         </div>
     </div>
     );
