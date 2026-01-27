@@ -277,30 +277,32 @@ const App = () => {
      const isCheckbox = target.closest('.selection-checkbox');
      const itemRow = target.closest('[data-item-id]');
      
-     // Start Tracking
+     // Start Tracking Position
      dragStartPos.current = { x: e.clientX, y: e.clientY };
      
-     // 1. If clicking on an Item (potential click or swipe-start)
-     if (itemRow) {
-         // Don't modify selection immediately on down (wait for click or drag)
-         // Unless it's the checkbox
-         if (isCheckbox) {
-             const id = itemRow.getAttribute('data-item-id');
-             if(id) {
-                 handleToggleSelect(id); 
-                 lastTouchedIdRef.current = id; // Prepare for drag from checkbox
-                 isPaintingRef.current = true; // Immediate paint mode
-             }
+     // 1. Checkbox Click (Immediate Toggle + Prepare Drag)
+     if (isCheckbox && itemRow) {
+         const id = itemRow.getAttribute('data-item-id');
+         if(id) {
+             handleToggleSelect(id); 
+             lastTouchedIdRef.current = id; 
+             isPaintingRef.current = true; // Mark as painting to avoid conflicts
          }
+         // Capture pointer immediately for checkbox drag
          containerRef.current?.setPointerCapture(e.pointerId);
          setIsDragSelecting(true);
      } 
-     // 2. If clicking on Background (Box Selection)
+     // 2. Item Body Click (Wait for move to capture)
+     else if (itemRow) {
+         // DO NOT CAPTURE POINTER YET.
+         // Let browser handle "Click" and "DoubleClick" naturally unless we move.
+         isPaintingRef.current = false; 
+     }
+     // 3. Background Click (Immediate Capture for Box Select)
      else {
          isPaintingRef.current = false;
          setSelectionBox({ x: e.clientX, y: e.clientY, width: 0, height: 0 });
          setIsDragSelecting(true);
-         // Clear selection if clicking background without keys
          if (!e.ctrlKey && !e.shiftKey) setSelectedIds(new Set());
          containerRef.current?.setPointerCapture(e.pointerId);
      }
@@ -310,28 +312,32 @@ const App = () => {
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
-     if (!isDragSelecting || !dragStartPos.current) return;
+     if (!dragStartPos.current) return;
 
      const moveDist = Math.sqrt(Math.pow(e.clientX - dragStartPos.current.x, 2) + Math.pow(e.clientY - dragStartPos.current.y, 2));
      
      // Threshold to consider it a drag/swipe
      if (moveDist > 8) {
+         // If we haven't started selecting yet (e.g. started on item body), start now
+         if (!isDragSelecting) {
+             setIsDragSelecting(true);
+             containerRef.current?.setPointerCapture(e.pointerId); // Take control from browser
+         }
+
          const target = document.elementFromPoint(e.clientX, e.clientY);
          const itemRow = target?.closest('[data-item-id]');
          
          // MODE 1: Item-based Swipe (Paint Selection)
-         // If we started on an item OR we are already painting
          if (selectionBox === null) {
              isPaintingRef.current = true; // Confirm paint mode
 
-             // If we just started dragging, ensure the starting item is selected
+             // If we just started dragging from body, ensure start item is selected
              if (lastTouchedIdRef.current === null) {
-                  // Find origin item
                   const startTarget = document.elementFromPoint(dragStartPos.current.x, dragStartPos.current.y);
                   const startRow = startTarget?.closest('[data-item-id]');
                   const startId = startRow?.getAttribute('data-item-id');
                   if (startId) {
-                      // If starting a drag, we assume selection intent
+                      // If starting a drag on body, add it to selection if not present
                       if (!selectedIds.has(startId)) {
                           setSelectedIds(prev => new Set(prev).add(startId));
                       }
@@ -343,7 +349,7 @@ const App = () => {
                  const id = itemRow.getAttribute('data-item-id');
                  if (id && id !== lastTouchedIdRef.current) {
                      lastTouchedIdRef.current = id;
-                     // Add to selection
+                     // Add to selection (Paint)
                      setSelectedIds(prev => {
                          const next = new Set(prev);
                          next.add(id);
@@ -379,26 +385,16 @@ const App = () => {
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
-      // If we were NOT painting/dragging significantly -> It's a Click
-      if (isDragSelecting && !isPaintingRef.current && selectionBox === null) {
-          const target = e.target as HTMLElement;
-          const itemRow = target.closest('[data-item-id]');
-          const isCheckbox = target.closest('.selection-checkbox');
-
-          if (itemRow && !isCheckbox) { // Checkbox handled in PointerDown
-              const id = itemRow.getAttribute('data-item-id');
-              if (id) {
-                 handleItemClickLogic(e, id);
-              }
-          }
-      }
-
+      // Cleanup
       setIsDragSelecting(false);
       setSelectionBox(null);
       dragStartPos.current = null;
       lastTouchedIdRef.current = null;
       isPaintingRef.current = false;
-      containerRef.current?.releasePointerCapture(e.pointerId);
+      
+      if (containerRef.current) {
+        try { containerRef.current.releasePointerCapture(e.pointerId); } catch(err) {}
+      }
   };
 
   // --- SELECTION HELPERS ---
@@ -412,10 +408,15 @@ const App = () => {
       setLastSelectedId(id);
   };
 
-  const handleItemClickLogic = (e: React.PointerEvent | React.MouseEvent, id: string) => {
+  // Triggered by onClick on Item Body
+  const handleItemClick = (e: React.MouseEvent, item: Item) => {
+    // If we were painting/swiping, ignore this click (it's part of the drag)
+    if (isPaintingRef.current) return;
+    
+    // Check for modifier keys
     if (e.shiftKey && lastSelectedId) {
         const lastIndex = items.findIndex(i => i.id === lastSelectedId);
-        const currentIndex = items.findIndex(i => i.id === id);
+        const currentIndex = items.findIndex(i => i.id === item.id);
         if (lastIndex !== -1 && currentIndex !== -1) {
             const start = Math.min(lastIndex, currentIndex);
             const end = Math.max(lastIndex, currentIndex);
@@ -425,19 +426,13 @@ const App = () => {
             setSelectedIds(newSet);
         }
     } else if (e.ctrlKey || e.metaKey) {
-        handleToggleSelect(id);
+        // Ctrl+Click = Toggle
+        handleToggleSelect(item.id);
     } else {
-        // SINGLE CLICK: Select only this one, deselect others
-        setSelectedIds(new Set([id]));
-        setLastSelectedId(id);
+        // Standard Click = Single Select (Reset others)
+        setSelectedIds(new Set([item.id]));
+        setLastSelectedId(item.id);
     }
-  };
-
-  // Used for onClick prop on items (as fallback or double click handling)
-  const handleItemClick = (e: React.MouseEvent, item: Item) => {
-      // Logic moved to PointerUp to separate drag from click cleanly
-      // We only use this to stop propagation if needed
-      e.stopPropagation();
   };
 
   const handleItemDoubleClick = (e: React.MouseEvent, item: Item) => {
