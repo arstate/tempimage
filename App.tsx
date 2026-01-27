@@ -4,7 +4,7 @@ import {
   Folder, FileText, Image as ImageIcon, MoreVertical, 
   ArrowLeft, Plus, Trash2, Copy, Move, Edit, CheckSquare, 
   Loader2, Home, Upload, ChevronRight, X, AlertCircle, Download, CornerUpLeft,
-  CheckCircle, XCircle, Image, RotateCcw, Ban, GripVertical, Database, Lock, ShieldAlert
+  CheckCircle, XCircle, Image, RotateCcw, Ban, GripVertical, Database, Lock, ShieldAlert, Cloud, CloudUpload
 } from 'lucide-react';
 import * as API from './services/api';
 import * as DB from './services/db';
@@ -55,9 +55,14 @@ const App = () => {
   
   // --- SYSTEM DB STATE ---
   const [systemMap, setSystemMap] = useState<FolderMap>({});
+  const systemMapRef = useRef<FolderMap>({}); // Ref for instant access during rapid actions
   const [dbFileId, setDbFileId] = useState<string | null>(null);
   const [systemFolderId, setSystemFolderId] = useState<string | null>(null);
   const [isSystemInitialized, setIsSystemInitialized] = useState(false);
+  
+  // --- SYNC STATUS STATE ---
+  const [isSavingDB, setIsSavingDB] = useState(false);
+  const saveTimeoutRef = useRef<any>(null);
 
   // --- GLOBAL LOADING OVERLAY (BLOCKING) ---
   const [isGlobalLoading, setIsGlobalLoading] = useState(true); 
@@ -111,17 +116,31 @@ const App = () => {
 
   // --- INITIALIZATION & ROUTING LOGIC ---
 
-  const syncMapToDrive = useCallback(async (newMap: FolderMap, fileId: string | null) => {
-     if (!fileId) return;
-     try {
-        console.log("Syncing DB to Drive...");
-        await API.updateSystemDBFile(fileId, newMap);
-        await DB.saveSystemMap({ fileId, map: newMap, lastSync: Date.now() });
-        console.log("DB Synced.");
-     } catch (e) {
-        console.error("Failed to sync DB to Drive", e);
-     }
-  }, []);
+  // Triggered via updateMap. Uses Debounce.
+  const triggerCloudSync = useCallback(() => {
+      if (!dbFileId) return;
+      
+      // Clear existing timeout to restart debounce timer
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+      
+      setIsSavingDB(true);
+
+      saveTimeoutRef.current = setTimeout(async () => {
+          try {
+              console.log("Saving DB to Cloud...");
+              // Always use the REF value for the most up-to-date state
+              await API.updateSystemDBFile(dbFileId, systemMapRef.current);
+              
+              // Only turn off loading if this was the last queued save
+              setIsSavingDB(false);
+              await DB.saveSystemMap({ fileId: dbFileId, map: systemMapRef.current, lastSync: Date.now() });
+          } catch (e) {
+              console.error("Failed to sync DB", e);
+              // Optional: Add visual error state
+              setIsSavingDB(false); 
+          }
+      }, 1500); // 1.5s debounce to gather rapid changes
+  }, [dbFileId]);
 
   // Initialize System: Load Map from IDB or Drive
   useEffect(() => {
@@ -164,9 +183,9 @@ const App = () => {
                }
            }
 
-           // Update Cache
+           // Update Cache & Refs
            await DB.saveSystemMap({ fileId: currentFileId, map: currentMap, lastSync: Date.now() });
-
+           systemMapRef.current = currentMap;
            setSystemMap(currentMap);
            setDbFileId(currentFileId);
            setIsSystemInitialized(true);
@@ -241,35 +260,51 @@ const App = () => {
 
   // Helper to Update Map locally and schedule Sync
   const updateMap = (action: 'add' | 'remove' | 'update' | 'move', items: {id: string, name?: string, parentId?: string}[]) => {
-      setSystemMap(prev => {
-          const next = { ...prev };
-          items.forEach(item => {
-              if (action === 'add' || action === 'update') {
-                  if (item.name && item.parentId !== undefined) {
-                      next[item.id] = { id: item.id, name: item.name, parentId: item.parentId };
-                  }
-              } else if (action === 'remove') {
-                  delete next[item.id];
-              } else if (action === 'move') {
-                   if (next[item.id] && item.parentId) {
-                       next[item.id] = { ...next[item.id], parentId: item.parentId };
-                   }
+      // 1. Operate on the latest Ref state directly (prevents race conditions)
+      const nextMap = { ...systemMapRef.current };
+      
+      items.forEach(item => {
+          if (action === 'add' || action === 'update') {
+              if (item.name) {
+                  // Get existing to preserve parentId if not passed in update
+                  const existing = nextMap[item.id] || {};
+                  
+                  nextMap[item.id] = { 
+                      id: item.id, 
+                      name: item.name, 
+                      // Critical: Use provided parentId, fallback to existing, fallback to "root"
+                      parentId: item.parentId !== undefined ? item.parentId : (existing.parentId || "root") 
+                  };
               }
-          });
-          
-          if (dbFileId) {
-            syncMapToDrive(next, dbFileId);
+          } else if (action === 'remove') {
+              delete nextMap[item.id];
+              // Note: We don't recursively remove children from map here to keep it fast.
+              // They become orphans, which is fine for now.
+          } else if (action === 'move') {
+               if (nextMap[item.id] && item.parentId !== undefined) {
+                   nextMap[item.id] = { ...nextMap[item.id], parentId: item.parentId };
+               }
           }
-          
-          return next;
       });
+      
+      // 2. Update Ref Immediately
+      systemMapRef.current = nextMap;
+
+      // 3. Update React State (UI)
+      setSystemMap(nextMap);
+
+      // 4. Update Local DB (Background)
+      DB.saveSystemMap({ fileId: dbFileId, map: nextMap, lastSync: Date.now() });
+
+      // 5. Trigger Cloud Sync (Debounced)
+      triggerCloudSync();
   };
 
   // --- SAFETY: PREVENT ACCIDENTAL CLOSE ---
   useEffect(() => {
     const isUploading = uploadQueue.some(u => u.status === 'uploading');
     const isDownloading = downloadQueue.some(d => d.status === 'downloading');
-    const isBusy = isGlobalLoading || isProcessingAction || isUploading || isDownloading;
+    const isBusy = isGlobalLoading || isProcessingAction || isUploading || isDownloading || isSavingDB;
 
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       if (isBusy) {
@@ -286,7 +321,7 @@ const App = () => {
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
-  }, [isGlobalLoading, isProcessingAction, uploadQueue, downloadQueue]);
+  }, [isGlobalLoading, isProcessingAction, uploadQueue, downloadQueue, isSavingDB]);
 
 
   // --- NOTIFICATION HELPERS ---
@@ -387,6 +422,8 @@ const App = () => {
         // Ensure map knows about these folders
         const folders = freshItems.filter(i => i.type === 'folder');
         if (folders.length > 0) {
+            // Using updateMap here is critical to keep map in sync with actual drive content
+            // We pass the current folderId as parentId to ensure hierarchy is correct
             updateMap('add', folders.map(f => ({ id: f.id, name: f.name, parentId: folderId || "root" })));
         }
 
@@ -1299,6 +1336,21 @@ const App = () => {
 
         {currentFolderId !== recycleBinId && !isSystemFolder && (
         <div className="flex items-center gap-2 new-dropdown-container">
+            {/* SAVING INDICATOR */}
+            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all duration-300 ${isSavingDB ? 'bg-blue-500/10 text-blue-400' : 'bg-slate-800 text-slate-500'}`}>
+                {isSavingDB ? (
+                    <>
+                        <Loader2 size={14} className="animate-spin" /> 
+                        <span className="hidden sm:inline">Saving DB...</span>
+                    </>
+                ) : (
+                    <>
+                        <Cloud size={14} /> 
+                        <span className="hidden sm:inline">Synced</span>
+                    </>
+                )}
+            </div>
+
             <div className="relative">
                 <button onClick={() => setIsNewDropdownOpen(!isNewDropdownOpen)} className={`px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold shadow-lg transition-all border border-transparent ${isNewDropdownOpen ? 'bg-slate-800 border-slate-700 text-white' : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-900/20'}`}>
                     <Plus size={18} /> <span className="hidden sm:inline">Baru</span>
