@@ -1393,6 +1393,11 @@ const DragHandle = ({ item }: { item: Item }) => {
             if (item.type === 'image') {
                 const url = item.url || item.thumbnail || "";
                 
+                // --- NEW: Add Specific Drive Link (Requested Feature) ---
+                const driveThumbnailLink = `https://drive.google.com/thumbnail?id=${item.id}&sz=s16383`;
+                e.dataTransfer.setData("text/uri-list", driveThumbnailLink);
+                e.dataTransfer.setData("text/plain", driveThumbnailLink);
+
                 // Ghost image
                 const imgEl = document.getElementById(`item-${item.id}`)?.querySelector('img') as HTMLImageElement;
                 if (imgEl) e.dataTransfer.setDragImage(imgEl, imgEl.width / 2, imgEl.height / 2);
@@ -1404,11 +1409,7 @@ const DragHandle = ({ item }: { item: Item }) => {
                      
                      // Legacy
                      e.dataTransfer.setData("DownloadURL", `${dragData.file.type}:${dragData.file.name}:${dragData.base64}`); // Use base64 or blob? Base64 is safer across origins if small enough.
-                } else {
-                     // If data isn't ready, try to pass URL
-                     e.dataTransfer.setData("text/uri-list", url);
-                     e.dataTransfer.setData("text/plain", url);
-                }
+                } 
             } else if (item.type === 'note' && item.content) {
                  e.dataTransfer.setData("text/plain", stripHtml(item.content));
             }
