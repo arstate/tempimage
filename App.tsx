@@ -75,6 +75,7 @@ const App = () => {
   const [selectionBox, setSelectionBox] = useState<{x:number, y:number, width:number, height:number} | null>(null);
   const dragStartPos = useRef<{x:number, y:number} | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const lastTouchedIdRef = useRef<string | null>(null); // For Swipe Selection
 
   // --- EDITOR & MODALS ---
   const [modal, setModal] = useState<ModalState | null>(null);
@@ -286,7 +287,7 @@ const App = () => {
   }, [isNewDropdownOpen]);
 
   // --- SELECTION LOGIC (SHARED MOUSE & TOUCH) ---
-  const updateSelection = (currentX: number, currentY: number) => {
+  const updateSelectionBox = (currentX: number, currentY: number) => {
       if (!dragStartPos.current) return;
       
       const x = Math.min(dragStartPos.current.x, currentX);
@@ -316,7 +317,7 @@ const App = () => {
   useEffect(() => {
     const handleWindowMouseMove = (e: MouseEvent) => {
         if (!isDragSelecting) return;
-        updateSelection(e.clientX, e.clientY);
+        updateSelectionBox(e.clientX, e.clientY);
     };
 
     const handleWindowMouseUp = () => {
@@ -349,27 +350,54 @@ const App = () => {
 
   // --- TOUCH SELECTION (MOBILE) ---
   const handleTouchStart = (e: React.TouchEvent) => {
+     // Prevent starting drag on interactive elements
      if ((e.target as HTMLElement).closest('button, .item-clickable')) return;
      if (e.touches.length === 1) {
          dragStartPos.current = { x: e.touches[0].clientX, y: e.touches[0].clientY };
+         lastTouchedIdRef.current = null;
      }
   };
 
   const handleTouchMove = (e: React.TouchEvent) => {
      if (!dragStartPos.current) return;
-     const x = e.touches[0].clientX;
-     const y = e.touches[0].clientY;
+     const touch = e.touches[0];
+     const x = touch.clientX;
+     const y = touch.clientY;
      
+     // Detect Swipe Threshold to start selection mode
      if (!isDragSelecting) {
          const dist = Math.sqrt(Math.pow(x - dragStartPos.current.x, 2) + Math.pow(y - dragStartPos.current.y, 2));
-         if (dist > 10) { 
+         if (dist > 15) { 
              setIsDragSelecting(true);
          }
      }
 
+     // SWIPE SELECTION LOGIC (Paint Select)
      if (isDragSelecting) {
-         updateSelection(x, y);
+         // Stop scrolling while selecting
          if(e.cancelable) e.preventDefault(); 
+         
+         // Find element under finger
+         const target = document.elementFromPoint(x, y);
+         const itemRow = target?.closest('[data-item-id]');
+         
+         if (itemRow) {
+             const id = itemRow.getAttribute('data-item-id');
+             if (id && id !== lastTouchedIdRef.current) {
+                 lastTouchedIdRef.current = id;
+                 
+                 // Toggle Selection for this item
+                 setSelectedIds(prev => {
+                     const next = new Set(prev);
+                     if (!next.has(id)) {
+                         next.add(id);
+                     }
+                     return next;
+                 });
+             }
+         } else {
+            lastTouchedIdRef.current = null;
+         }
      }
   };
 
@@ -377,6 +405,7 @@ const App = () => {
       setIsDragSelecting(false);
       setSelectionBox(null);
       dragStartPos.current = null;
+      lastTouchedIdRef.current = null;
   };
 
   // --- SELECTION & CLICK LOGIC ---
@@ -467,38 +496,74 @@ const App = () => {
       }
   };
 
-  const handleDownload = async (item: Item | string) => {
-    const url = typeof item === 'string' ? item : (item.url || item.thumbnail);
-    const name = typeof item === 'string' ? 'download.png' : item.name;
+  const handleDownloadSingle = async (item: Item) => {
+      const url = item.url || item.thumbnail;
+      if(!url) return;
+      const blob = await getBlobFromUrl(url);
+      const blobUrl = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = item.name;
+      document.body.appendChild(a);
+      a.click();
+      window.URL.revokeObjectURL(blobUrl);
+      document.body.removeChild(a);
+  };
 
-    if (!url) return;
+  const handleBulkDownload = async (ids: string[]) => {
+    const itemsToDownload = items.filter(i => ids.includes(i.id) && (i.type === 'image' || i.type === 'note')); // Only files
+    if (itemsToDownload.length === 0) return;
     
-    // Lock app state to prevent closing
+    // Lock app state
     setIsProcessingAction(true);
-    const notifId = addNotification('Mengunduh gambar...', 'loading');
+    const notifId = addNotification(`Mengunduh ${itemsToDownload.length} file...`, 'loading');
     
+    let successCount = 0;
     try {
-        const blob = await getBlobFromUrl(url);
-        const blobUrl = window.URL.createObjectURL(blob);
+        for (const item of itemsToDownload) {
+             try {
+                await handleDownloadSingle(item);
+                successCount++;
+                // Small delay to prevent browser throttling downloads
+                await new Promise(r => setTimeout(r, 800)); 
+             } catch (e) {
+                console.error("Failed to download item", item.name);
+             }
+        }
         
-        const a = document.createElement('a');
-        a.href = blobUrl;
-        a.download = name; 
-        document.body.appendChild(a);
-        a.click();
-        
-        // Cleanup
-        window.URL.revokeObjectURL(blobUrl);
-        document.body.removeChild(a);
-        
-        updateNotification(notifId, 'Download berhasil', 'success');
+        if (successCount === itemsToDownload.length) {
+             updateNotification(notifId, 'Semua file berhasil didownload', 'success');
+        } else {
+             updateNotification(notifId, `${successCount}/${itemsToDownload.length} file terdownload`, 'success');
+        }
     } catch (e) {
-        console.error(e);
-        // Show specific error notification for the user
-        const msg = e instanceof Error ? e.message : "Network Error";
-        updateNotification(notifId, `Gagal: ${msg}`, 'error');
+        updateNotification(notifId, 'Gagal melakukan download massal', 'error');
     } finally {
         setIsProcessingAction(false);
+    }
+  };
+
+  const handleDownload = async (url: string | null) => {
+    if (!url) return;
+    const item = items.find(i => i.url === url || i.thumbnail === url);
+    if (item) {
+        await handleDownloadSingle(item);
+    } else {
+        const notifId = addNotification('Mengunduh...', 'loading');
+        try {
+            const blob = await getBlobFromUrl(url);
+            const blobUrl = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = blobUrl;
+            a.download = `image-${Date.now()}.png`;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(blobUrl);
+            document.body.removeChild(a);
+            updateNotification(notifId, 'Berhasil didownload', 'success');
+        } catch(e) {
+            updateNotification(notifId, 'Gagal download', 'error');
+        }
     }
   };
 
@@ -540,8 +605,12 @@ const App = () => {
     setContextMenu(null);
     setIsNewDropdownOpen(false);
 
-    if (action === 'download' && targetItem) {
-        handleDownload(targetItem);
+    if (action === 'download') {
+        if (ids.length > 1) {
+            handleBulkDownload(ids);
+        } else if (targetItem) {
+            handleBulkDownload([targetItem.id]);
+        }
     }
     else if (action === 'copy_image' && targetItem) {
         handleCopyImage(targetItem);
@@ -932,7 +1001,8 @@ const App = () => {
       onDragOver={(e) => { 
           e.preventDefault(); 
           e.stopPropagation(); 
-          if (e.dataTransfer && !e.dataTransfer.types.includes("text/item-id")) {
+          // STRICT CHECK: Only trigger if files are being dragged (not internal items or text)
+          if (e.dataTransfer && e.dataTransfer.types.includes("Files") && !e.dataTransfer.types.includes("text/item-id")) {
             setIsDraggingFile(true); 
           }
       }}
@@ -1380,9 +1450,11 @@ const SelectionFloatingMenu = ({ selectedIds, items, onClear, onAction, containe
                 {selectedIds.size === 1 && (
                     <>
                     <button onClick={(e) => { e.stopPropagation(); onAction('rename'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Rename"><Edit size={18}/></button>
-                    <button onClick={(e) => { e.stopPropagation(); onAction('download'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Download"><Download size={18}/></button>
                     </>
                 )}
+                {/* Download is always available for files (1 or more) */}
+                <button onClick={(e) => { e.stopPropagation(); onAction('download'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Download"><Download size={18}/></button>
+                
                 <div className="w-px h-6 bg-white/10 mx-1"></div>
                 <button onClick={(e) => { e.stopPropagation(); onAction('delete'); }} className="p-2 hover:bg-red-500/20 text-red-400 hover:text-red-300 rounded-lg transition-colors tooltip" title="Delete"><Trash2 size={18}/></button>
                 </>
@@ -1406,7 +1478,7 @@ const ItemOverlay = ({ status }: { status?: string }) => {
 };
 
 const FolderItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect, isRecycleBin }: any) => (
-    <div id={`item-${item.id}`} data-folder-id={item.id} draggable onDragStart={(e) => e.dataTransfer.setData("text/item-id", item.id)} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col items-center gap-2 item-clickable ${selected ? 'bg-blue-500/20 border-blue-500 shadow-md ring-1 ring-blue-500' : 'bg-slate-900 border-slate-800 hover:bg-slate-800 hover:border-slate-600'}`}>
+    <div id={`item-${item.id}`} data-folder-id={item.id} data-item-id={item.id} draggable onDragStart={(e) => e.dataTransfer.setData("text/item-id", item.id)} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col items-center gap-2 item-clickable ${selected ? 'bg-blue-500/20 border-blue-500 shadow-md ring-1 ring-blue-500' : 'bg-slate-900 border-slate-800 hover:bg-slate-800 hover:border-slate-600'}`}>
         <ItemOverlay status={item.status} />
         <div className={`absolute top-2 left-2 z-10 transition-opacity ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
             <CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/>
@@ -1422,7 +1494,7 @@ const FolderItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onT
 );
 
 const NoteItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }: any) => (
-    <div id={`item-${item.id}`} draggable onDragStart={(e) => e.dataTransfer.setData("text/item-id", item.id)} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col items-center gap-2 item-clickable ${selected ? 'bg-blue-500/20 border-blue-500 shadow-md ring-1 ring-blue-500' : 'bg-slate-900 border-slate-800 hover:bg-slate-800 hover:border-slate-600'}`}>
+    <div id={`item-${item.id}`} data-item-id={item.id} draggable onDragStart={(e) => e.dataTransfer.setData("text/item-id", item.id)} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col items-center gap-2 item-clickable ${selected ? 'bg-blue-500/20 border-blue-500 shadow-md ring-1 ring-blue-500' : 'bg-slate-900 border-slate-800 hover:bg-slate-800 hover:border-slate-600'}`}>
         <ItemOverlay status={item.status} />
         <div className={`absolute top-2 left-2 z-10 transition-opacity ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
             <CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/>
@@ -1433,7 +1505,7 @@ const NoteItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onTog
 );
 
 const ImageItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }: any) => (
-    <div id={`item-${item.id}`} draggable onDragStart={(e) => e.dataTransfer.setData("text/item-id", item.id)} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} className={`group relative rounded-xl border transition-all cursor-pointer overflow-hidden aspect-square flex flex-col items-center justify-center bg-slate-950 item-clickable ${selected ? 'border-blue-500 shadow-md ring-1 ring-blue-500' : 'border-slate-800 hover:border-slate-600'}`}>
+    <div id={`item-${item.id}`} data-item-id={item.id} draggable onDragStart={(e) => e.dataTransfer.setData("text/item-id", item.id)} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} className={`group relative rounded-xl border transition-all cursor-pointer overflow-hidden aspect-square flex flex-col items-center justify-center bg-slate-950 item-clickable ${selected ? 'border-blue-500 shadow-md ring-1 ring-blue-500' : 'border-slate-800 hover:border-slate-600'}`}>
         <ItemOverlay status={item.status} />
         <div className={`absolute top-2 left-2 z-10 transition-opacity ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
             <CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300 shadow-sm"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/>
