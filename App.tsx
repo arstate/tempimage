@@ -1318,15 +1318,35 @@ const DragHandle = ({ item }: { item: Item }) => (
                         filename += '.' + mime.split('/')[1];
                     }
 
+                    let finalUrl = url;
+
+                    // --- NEW LOGIC: Convert to Base64 via Canvas ---
+                    // This forces the file content to be generated locally, 
+                    // allowing "Drag to Desktop" to save the file instead of a link.
+                    if (imgEl && imgEl.complete && imgEl.naturalWidth > 0) {
+                        try {
+                            const canvas = document.createElement('canvas');
+                            canvas.width = imgEl.naturalWidth;
+                            canvas.height = imgEl.naturalHeight;
+                            const ctx = canvas.getContext('2d');
+                            if (ctx) {
+                                ctx.drawImage(imgEl, 0, 0);
+                                finalUrl = canvas.toDataURL(mime);
+                            }
+                        } catch(err) {
+                            console.warn("Drag export: Canvas tainted, falling back to URL.");
+                        }
+                    }
+
                     // A. DownloadURL (File Drop to Desktop)
-                    e.dataTransfer.setData("DownloadURL", `${mime}:${filename}:${url}`);
+                    e.dataTransfer.setData("DownloadURL", `${mime}:${filename}:${finalUrl}`);
                     
                     // B. HTML Image (WhatsApp/Canva/Word)
-                    e.dataTransfer.setData("text/html", `<img src="${url}" alt="${filename}" />`);
+                    e.dataTransfer.setData("text/html", `<img src="${finalUrl}" alt="${filename}" />`);
                     
-                    // C. Standard URI (For Address Bar / Text editors)
-                    e.dataTransfer.setData("text/uri-list", url);
-                    e.dataTransfer.setData("text/plain", url);
+                    // C. Standard URI (Fallback)
+                    e.dataTransfer.setData("text/uri-list", finalUrl);
+                    e.dataTransfer.setData("text/plain", finalUrl);
                 }
             } else if (item.type === 'note' && item.content) {
                  e.dataTransfer.setData("text/plain", stripHtml(item.content));
@@ -1420,7 +1440,14 @@ const ImageItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onTo
         <DragHandle item={item} />
 
         {item.thumbnail || item.url ? (
-             <img src={item.thumbnail || item.url} alt={item.name} className="w-full h-full object-cover pointer-events-none" loading="lazy" referrerPolicy="no-referrer" />
+             <img 
+                src={item.thumbnail || item.url} 
+                alt={item.name} 
+                className="w-full h-full object-cover pointer-events-none" 
+                loading="lazy" 
+                referrerPolicy="no-referrer"
+                crossOrigin="anonymous" 
+             />
         ) : (
              <ImageIcon size={32} className="text-slate-600 pointer-events-none" />
         )}
