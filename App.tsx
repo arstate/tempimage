@@ -161,7 +161,11 @@ const App = () => {
            // This logic specifically looks for the file name defined in API
            const location = await API.locateSystemDB();
            let sysFolderId = location.systemFolderId;
-           currentFileId = location.fileId;
+           
+           // Prioritize Cloud ID if found, else use Cached ID, else Null
+           if (location.fileId) {
+               currentFileId = location.fileId;
+           }
 
            if (!sysFolderId) {
                setGlobalLoadingMessage("Membuat Folder System...");
@@ -173,17 +177,24 @@ const App = () => {
                setGlobalLoadingMessage("Membuat Database Baru...");
                // Reset map if file is missing (fresh start logic)
                if (!cachedDB) currentMap = { "root": { id: "root", name: "Home", parentId: "" } };
+               
+               // DOUBLE CHECKING LOGIC: Cek sekali lagi sebelum create
+               // Kadang API.locateSystemDB bisa miss jika file baru saja dibuat
+               // Kita coba overwrite kalau API create mengembalikan ID
                const newId = await API.createSystemDBFile(currentMap, sysFolderId);
                currentFileId = newId;
-           } else if (!cachedDB) {
-               // File exists but no cache, fetch content
+           } else if (!cachedDB || location.fileId) {
+               // File exists but no cache OR we found a fresh file ID from cloud
+               // Fetch content to ensure we have latest data
                setGlobalLoadingMessage("Mengunduh Database...");
-               const content = await API.getFileContent(currentFileId);
                try {
+                   const content = await API.getFileContent(currentFileId);
                    currentMap = JSON.parse(content);
                } catch(e) { 
-                   console.warn("Corrupt DB, resetting map"); 
-                   currentMap = { "root": { id: "root", name: "Home", parentId: "" } }; 
+                   console.warn("Corrupt/Empty DB, using existing map or fresh root"); 
+                   if (!currentMap || Object.keys(currentMap).length === 0) {
+                      currentMap = { "root": { id: "root", name: "Home", parentId: "" } }; 
+                   }
                }
            }
 
@@ -194,8 +205,11 @@ const App = () => {
            setDbFileId(currentFileId);
            setIsSystemInitialized(true);
 
-           // 4. Resolve URL to Folder ID (SMART ROUTING)
-           const path = window.location.pathname.split('/').filter(p => p);
+           // 4. Resolve HASH URL to Folder ID (HASH ROUTING)
+           // Format: domain.com/#/FOLDER/SUBFOLDER
+           const hash = window.location.hash.replace(/^#/, ''); // Remove leading #
+           const path = hash.split('/').filter(p => p);
+
            if (path.length > 0) {
                setGlobalLoadingMessage("Membuka Link...");
                let foundId = "";
@@ -248,16 +262,18 @@ const App = () => {
     initSystem();
   }, []);
 
-  // Sync URL when Folder Changes
+  // Sync HASH URL when Folder Changes
   useEffect(() => {
     if (!isSystemInitialized || isNotFound) return;
     
     // Construct Path string from history
     const pathSegments = folderHistory.map(f => encodeURIComponent(f.name));
-    const newPath = '/' + pathSegments.join('/');
+    const newHash = pathSegments.length > 0 ? '/' + pathSegments.join('/') : '';
     
-    if (window.location.pathname !== newPath) {
-        window.history.pushState({ currentFolderId, folderHistory }, '', newPath || '/');
+    // Use replaceState to avoid cluttering history stack too much, or pushState for navigation
+    // Using simple hash assignment works well
+    if (window.location.hash !== `#${newHash}`) {
+         window.history.replaceState(null, '', `#${newHash}`);
     }
   }, [currentFolderId, folderHistory, isSystemInitialized, isNotFound]);
 
@@ -1264,7 +1280,7 @@ const App = () => {
                 <p className="text-slate-400 max-w-md">Link yang Anda tuju mungkin sudah dihapus, dipindahkan, atau tidak valid.</p>
               </div>
               <button 
-                onClick={() => { setIsNotFound(false); setCurrentFolderId(""); setFolderHistory([]); window.history.replaceState(null, '', '/'); }}
+                onClick={() => { setIsNotFound(false); setCurrentFolderId(""); setFolderHistory([]); window.history.replaceState(null, '', '#/'); }}
                 className="px-6 py-3 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-lg shadow-lg transition-transform active:scale-95 flex items-center gap-2"
               >
                   <Home size={18} /> Kembali ke Home
