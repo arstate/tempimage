@@ -431,40 +431,30 @@ const App = () => {
 
   // --- ROBUST FILE ACTIONS (COPY & DOWNLOAD) ---
   
+  // Updated Helper: Uses Proxy fallback for CORS issues
   const getBlobFromUrl = async (url: string): Promise<Blob> => {
+      // 1. Attempt Direct Fetch
       try {
           const response = await fetch(url, {
               mode: 'cors',
               credentials: 'omit',
               referrerPolicy: 'no-referrer'
           });
-          if (!response.ok) throw new Error(`Fetch failed: ${response.status}`);
+          if (response.ok) return await response.blob();
+      } catch (e) {
+          console.warn("Direct fetch failed, attempting proxy...", e);
+      }
+
+      // 2. Attempt via CORS Proxy (Public proxy used for demonstration)
+      try {
+          // Using a public proxy to bypass CORS if direct fetch fails
+          const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
+          const response = await fetch(proxyUrl);
+          if (!response.ok) throw new Error(`Proxy status: ${response.status}`);
           return await response.blob();
-      } catch (fetchError) {
-          console.warn("Fetch failed, trying Canvas fallback...", fetchError);
-          return new Promise((resolve, reject) => {
-              const img = new window.Image();
-              img.crossOrigin = "Anonymous";
-              img.referrerPolicy = "no-referrer";
-              img.src = url;
-              img.onload = () => {
-                  const canvas = document.createElement('canvas');
-                  canvas.width = img.naturalWidth;
-                  canvas.height = img.naturalHeight;
-                  const ctx = canvas.getContext('2d');
-                  if (!ctx) { reject(new Error("Canvas context error")); return; }
-                  try {
-                      ctx.drawImage(img, 0, 0);
-                      canvas.toBlob((blob) => {
-                          if (blob) resolve(blob);
-                          else reject(new Error("Canvas blob error"));
-                      }, 'image/png');
-                  } catch (err) {
-                      reject(new Error("Canvas tainted (CORS blocked)"));
-                  }
-              };
-              img.onerror = () => reject(new Error("Image load error"));
-          });
+      } catch (proxyError) {
+           console.error("Proxy fetch failed:", proxyError);
+           throw new Error("Gagal mengunduh: Proxy tidak dapat mengakses gambar.");
       }
   };
 
@@ -473,22 +463,32 @@ const App = () => {
     const name = typeof item === 'string' ? 'download.png' : item.name;
 
     if (!url) return;
-    const notifId = addNotification('Downloading...', 'loading');
+    
+    // Lock app state to prevent closing
+    setIsProcessingAction(true);
+    const notifId = addNotification('Mengunduh gambar...', 'loading');
+    
     try {
         const blob = await getBlobFromUrl(url);
         const blobUrl = window.URL.createObjectURL(blob);
+        
         const a = document.createElement('a');
         a.href = blobUrl;
         a.download = name; 
         document.body.appendChild(a);
         a.click();
+        
+        // Cleanup
         window.URL.revokeObjectURL(blobUrl);
         document.body.removeChild(a);
-        removeNotification(notifId);
+        
+        updateNotification(notifId, 'Download berhasil', 'success');
     } catch (e) {
         console.error(e);
-        window.open(url, '_blank');
-        removeNotification(notifId);
+        // Show specific error notification
+        updateNotification(notifId, 'Gagal Download: Proxy Error / Network Blocked', 'error');
+    } finally {
+        setIsProcessingAction(false);
     }
   };
 
@@ -508,8 +508,7 @@ const App = () => {
           updateNotification(notifId, 'Gambar disalin ke clipboard!', 'success');
       } catch (err) {
           console.error("Clipboard Error:", err);
-          updateNotification(notifId, 'Membuka gambar (Silahkan salin manual)', 'error');
-          setTimeout(() => window.open(url, '_blank'), 1000);
+          updateNotification(notifId, 'Gagal menyalin: Proxy/Permission Error', 'error');
       }
   };
 
