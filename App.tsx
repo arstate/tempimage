@@ -1330,56 +1330,74 @@ const ItemOverlay = ({ status }: { status?: string }) => {
 };
 
 // UPDATED Common Draggable Handle (To enable drag only on intent)
-const DragHandle = ({ item }: { item: Item }) => (
+const DragHandle = ({ item }: { item: Item }) => {
+    const [cachedBlob, setCachedBlob] = useState<string | null>(null);
+
+    // Pre-fetch blob on hover/active to ensure file drag works (without crossOrigin issues)
+    const prepareDragData = async () => {
+        if (cachedBlob) return;
+        const url = item.url || item.thumbnail;
+        if (!url) return;
+
+        // Helper to fetch using proxy if needed
+        const fetchBase64 = async (targetUrl: string) => {
+             try {
+                 // Try direct (hits browser cache if available)
+                 let res = await fetch(targetUrl, { cache: 'force-cache' });
+                 if (!res.ok) throw new Error("Direct fetch failed");
+                 const blob = await res.blob();
+                 return await API.fileToBase64(blob);
+             } catch (e) {
+                 // Fallback to Proxy
+                 try {
+                     const proxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(targetUrl)}&output=png`;
+                     let res = await fetch(proxyUrl);
+                     if (!res.ok) throw new Error("Proxy failed");
+                     const blob = await res.blob();
+                     return await API.fileToBase64(blob);
+                 } catch (err) { return null; }
+             }
+        };
+
+        if (item.type === 'image') {
+            const base64 = await fetchBase64(url);
+            if (base64) setCachedBlob(base64);
+        }
+    };
+
+    return (
     <div 
         className="absolute top-2 right-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity p-2 bg-slate-800/80 rounded-lg hover:bg-slate-700 cursor-grab active:cursor-grabbing text-slate-400 item-handle backdrop-blur-sm border border-slate-600/30 shadow-lg"
         draggable={true}
+        onMouseEnter={prepareDragData}
         onDragStart={(e) => {
             // 1. Internal ID for moving folders
             e.dataTransfer.setData("text/item-id", item.id);
             e.dataTransfer.effectAllowed = "all";
 
             // 2. External Drag Logic
-            if (item.type === 'image' && (item.url || item.thumbnail)) {
-                // Find the image element in the DOM
+            if (item.type === 'image') {
+                const url = item.url || item.thumbnail || "";
+                
+                // Get extension
+                let mime = 'image/png';
+                if (item.name.toLowerCase().endsWith('.jpg') || item.name.toLowerCase().endsWith('.jpeg')) mime = 'image/jpeg';
+                else if (item.name.toLowerCase().endsWith('.webp')) mime = 'image/webp';
+                else if (item.name.toLowerCase().endsWith('.gif')) mime = 'image/gif';
+                
+                // Find visible image for ghost
                 const imgEl = document.getElementById(`item-${item.id}`)?.querySelector('img') as HTMLImageElement;
+                if (imgEl) e.dataTransfer.setDragImage(imgEl, imgEl.width / 2, imgEl.height / 2);
 
-                if (imgEl && imgEl.complete && imgEl.naturalWidth > 0) {
-                    try {
-                        // Get extension
-                        let mime = 'image/png';
-                        if (item.name.toLowerCase().endsWith('.jpg') || item.name.toLowerCase().endsWith('.jpeg')) mime = 'image/jpeg';
-                        else if (item.name.toLowerCase().endsWith('.webp')) mime = 'image/webp';
-                        else if (item.name.toLowerCase().endsWith('.gif')) mime = 'image/gif';
-                        else if (item.name.toLowerCase().endsWith('.svg')) mime = 'image/svg+xml';
-
-                        // Draw to canvas to get Data URL (base64)
-                        const canvas = document.createElement('canvas');
-                        canvas.width = imgEl.naturalWidth;
-                        canvas.height = imgEl.naturalHeight;
-                        const ctx = canvas.getContext('2d');
-                        ctx?.drawImage(imgEl, 0, 0);
-                        const base64 = canvas.toDataURL(mime);
-
-                        // Set Drag Image (Ghost)
-                        e.dataTransfer.setDragImage(imgEl, imgEl.width / 2, imgEl.height / 2);
-
-                        // 1. DownloadURL: Allows dragging to Desktop to save file
-                        // Format: mime:filename:base64
-                        e.dataTransfer.setData("DownloadURL", `${mime}:${item.name}:${base64}`);
-
-                        // 2. text/html: Allows dragging to Word/Docs/Gmail
-                        e.dataTransfer.setData("text/html", `<img src="${base64}" alt="${item.name}" />`);
-
-                        // 3. URI List
-                        e.dataTransfer.setData("text/uri-list", base64);
-                    } catch (err) {
-                        console.warn("Drag export: Canvas tainted or failed.", err);
-                        // Fallback to URL if canvas fails
-                        const url = item.url || item.thumbnail || "";
-                        e.dataTransfer.setData("text/uri-list", url);
-                        e.dataTransfer.setData("text/plain", url);
-                    }
+                // USE CACHED BLOB IF AVAILABLE (Best for Desktop Drop)
+                if (cachedBlob) {
+                     e.dataTransfer.setData("DownloadURL", `${mime}:${item.name}:${cachedBlob}`);
+                     e.dataTransfer.setData("text/html", `<img src="${cachedBlob}" alt="${item.name}" />`);
+                     e.dataTransfer.setData("text/uri-list", cachedBlob); // Base64 uri
+                } else {
+                     // Fallback to URL (Link Drop)
+                     e.dataTransfer.setData("text/uri-list", url);
+                     e.dataTransfer.setData("text/plain", url);
                 }
             } else if (item.type === 'note' && item.content) {
                  e.dataTransfer.setData("text/plain", stripHtml(item.content));
@@ -1389,11 +1407,12 @@ const DragHandle = ({ item }: { item: Item }) => (
             e.stopPropagation();
         }}
         // Prevent interfering with parent pointer events (selection)
-        onPointerDown={(e) => e.stopPropagation()}
+        onPointerDown={(e) => { prepareDragData(); e.stopPropagation(); }}
     >
         <GripVertical size={18} />
     </div>
-);
+    );
+};
 
 const FolderItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect, isRecycleBin, isDropTarget }: any) => (
     <div 
