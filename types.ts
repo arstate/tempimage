@@ -44,3 +44,20 @@ export interface DownloadItem {
   progress: number; // 0 - 100
   error?: string;
 }
+
+// System Database Types
+export interface FolderNode {
+  id: string;
+  name: string;
+  parentId: string;
+}
+
+export interface FolderMap {
+  [id: string]: FolderNode;
+}
+
+export interface SystemDB {
+  fileId: string | null; // ID of the JSON file on Drive
+  map: FolderMap;
+  lastSync: number;
+}

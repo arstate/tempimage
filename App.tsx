@@ -4,11 +4,11 @@ import {
   Folder, FileText, Image as ImageIcon, MoreVertical, 
   ArrowLeft, Plus, Trash2, Copy, Move, Edit, CheckSquare, 
   Loader2, Home, Upload, ChevronRight, X, AlertCircle, Download, CornerUpLeft,
-  CheckCircle, XCircle, Image, RotateCcw, Ban, GripVertical
+  CheckCircle, XCircle, Image, RotateCcw, Ban, GripVertical, Database
 } from 'lucide-react';
 import * as API from './services/api';
 import * as DB from './services/db';
-import { Item, StoredNote, DownloadItem } from './types';
+import { Item, StoredNote, DownloadItem, FolderMap, SystemDB } from './types';
 import { TextEditor } from './components/TextEditor';
 import { UploadProgress, UploadItem } from './components/UploadProgress';
 import { DownloadProgress } from './components/DownloadProgress';
@@ -51,9 +51,14 @@ const App = () => {
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(false); 
   
+  // --- SYSTEM DB STATE ---
+  const [systemMap, setSystemMap] = useState<FolderMap>({});
+  const [dbFileId, setDbFileId] = useState<string | null>(null);
+  const [isSystemInitialized, setIsSystemInitialized] = useState(false);
+
   // --- GLOBAL LOADING OVERLAY (BLOCKING) ---
-  const [isGlobalLoading, setIsGlobalLoading] = useState(false);
-  const [globalLoadingMessage, setGlobalLoadingMessage] = useState("");
+  const [isGlobalLoading, setIsGlobalLoading] = useState(true); // Start true for DB Init
+  const [globalLoadingMessage, setGlobalLoadingMessage] = useState("Menghubungkan ke Database...");
 
   // --- PROCESSING STATE (NON-BLOCKING ACTIONS) ---
   const [isProcessingAction, setIsProcessingAction] = useState(false);
@@ -86,6 +91,7 @@ const App = () => {
   const lastTouchedIdRef = useRef<string | null>(null);
   const isPaintingRef = useRef<boolean>(false); 
   const longPressTimerRef = useRef<any>(null);
+  const activeFolderIdRef = useRef<string>(currentFolderId);
 
   // --- EDITOR & MODALS ---
   const [modal, setModal] = useState<ModalState | null>(null);
@@ -94,56 +100,166 @@ const App = () => {
   
   const inputRef = useRef<HTMLInputElement>(null);
   const selectRef = useRef<HTMLSelectElement>(null);
-  const activeFolderIdRef = useRef<string>(currentFolderId);
 
   // Update ref whenever state changes
   useEffect(() => {
     activeFolderIdRef.current = currentFolderId;
   }, [currentFolderId]);
 
-  // --- ROUTING & PERSISTENCE ---
-  
-  // 1. Load State from LocalStorage on Mount (Restore Session)
-  useEffect(() => {
-      const savedState = localStorage.getItem('zombio_nav_state');
-      if (savedState) {
-          try {
-              const parsed = JSON.parse(savedState);
-              if (parsed.currentFolderId !== undefined && parsed.folderHistory) {
-                  setCurrentFolderId(parsed.currentFolderId);
-                  setFolderHistory(parsed.folderHistory);
-                  return; // Skip URL params check if state restored
-              }
-          } catch(e) { console.error("Failed to restore state", e); }
-      }
-      
-      // Fallback: Check URL Params (Legacy)
-      const params = new URLSearchParams(window.location.search);
-      const folderIdParam = params.get('folder');
-      if (folderIdParam && folderIdParam !== currentFolderId) {
-          setCurrentFolderId(folderIdParam);
-      }
+  // --- INITIALIZATION & ROUTING LOGIC ---
+
+  const syncMapToDrive = useCallback(async (newMap: FolderMap, fileId: string | null) => {
+     if (!fileId) return;
+     try {
+        console.log("Syncing DB to Drive...");
+        await API.updateSystemDBFile(fileId, newMap);
+        await DB.saveSystemMap({ fileId, map: newMap, lastSync: Date.now() });
+        console.log("DB Synced.");
+     } catch (e) {
+        console.error("Failed to sync DB to Drive", e);
+     }
   }, []);
 
-  // 2. Sync URL & LocalStorage when Navigation Changes
+  // Initialize System: Load Map from IDB or Drive
   useEffect(() => {
-    // Save to LocalStorage
-    localStorage.setItem('zombio_nav_state', JSON.stringify({
-        currentFolderId,
-        folderHistory
-    }));
+    const initSystem = async () => {
+       try {
+           // 1. Try Load from IndexedDB
+           const cachedDB = await DB.getSystemMap();
+           let currentMap: FolderMap = cachedDB ? cachedDB.map : {};
+           let currentFileId = cachedDB ? cachedDB.fileId : null;
 
-    // Construct URL Path: domain.com/PROPERTY/ALANA
-    // We ignore the actual domain, just manipulating path
+           // 2. If no cache, or to ensure freshness, check Drive Root for DB File
+           if (!cachedDB) {
+               setGlobalLoadingMessage("Mencari Database di Drive...");
+               const dbFile = await API.findSystemDBFile();
+               
+               if (dbFile) {
+                   setGlobalLoadingMessage("Mengunduh Database...");
+                   currentFileId = dbFile.id;
+                   const content = await API.getFileContent(dbFile.id);
+                   try {
+                       currentMap = JSON.parse(content);
+                   } catch(e) { console.warn("Corrupt DB, resetting map"); currentMap = {}; }
+               } else {
+                   setGlobalLoadingMessage("Membuat Database Baru...");
+                   // Create new DB file
+                   currentMap = { "root": { id: "root", name: "Home", parentId: "" } };
+                   const newId = await API.createSystemDBFile(currentMap);
+                   currentFileId = newId;
+               }
+               // Save to Cache
+               await DB.saveSystemMap({ fileId: currentFileId, map: currentMap, lastSync: Date.now() });
+           }
+
+           setSystemMap(currentMap);
+           setDbFileId(currentFileId);
+           setIsSystemInitialized(true);
+
+           // 3. Resolve URL to Folder ID
+           const path = window.location.pathname.split('/').filter(p => p);
+           if (path.length > 0) {
+               let foundId = "";
+               let parentSearchId = "root"; // Start search from root (assuming map has root links or implicit)
+               
+               // Logic to trace path: /FolderA/FolderB
+               // Note: Map is by ID. We need to find ID by Name + ParentID.
+               // This is O(N*M) where N is depth and M is folders. Efficient enough for thousands.
+               
+               let validPath = true;
+               const traceHistory: {id:string, name:string}[] = [];
+
+               for (const segment of path) {
+                   const decodedName = decodeURIComponent(segment);
+                   // Find folder in map that matches name and parent
+                   const entryId = Object.keys(currentMap).find(key => {
+                       const node = currentMap[key];
+                       // Treat "" as root parent in map if strictly defined, or implied
+                       const nodeParent = node.parentId || "root";
+                       const searchParent = parentSearchId || "root";
+                       return node.name === decodedName && (nodeParent === searchParent || (searchParent === "root" && !node.parentId));
+                   });
+
+                   if (entryId) {
+                       parentSearchId = entryId;
+                       traceHistory.push({ id: entryId, name: decodedName });
+                       foundId = entryId;
+                   } else {
+                       validPath = false;
+                       break;
+                   }
+               }
+
+               if (validPath && foundId) {
+                   setFolderHistory(traceHistory);
+                   setCurrentFolderId(foundId);
+               } else {
+                   // Path invalid, go home
+                   setCurrentFolderId("");
+                   setFolderHistory([]);
+                   window.history.replaceState(null, '', '/');
+               }
+           } else {
+               setCurrentFolderId("");
+           }
+
+       } catch (err) {
+           console.error("System Init Failed", err);
+           addNotification("Gagal memuat database sistem", 'error');
+           setCurrentFolderId("");
+       } finally {
+           setIsGlobalLoading(false);
+       }
+    };
+
+    initSystem();
+  }, []);
+
+  // Sync URL when Folder Changes
+  useEffect(() => {
+    if (!isSystemInitialized) return;
+    
+    // Construct Path string from history
     const pathSegments = folderHistory.map(f => encodeURIComponent(f.name));
     const newPath = '/' + pathSegments.join('/');
     
-    // Update Browser URL without reloading
-    // Note: We don't put ID in URL to keep it clean as requested. 
-    // We rely on localStorage to restore the ID on refresh.
-    window.history.pushState({ currentFolderId, folderHistory }, '', newPath || '/');
-    
-  }, [currentFolderId, folderHistory]);
+    if (window.location.pathname !== newPath) {
+        window.history.pushState({ currentFolderId, folderHistory }, '', newPath || '/');
+    }
+  }, [currentFolderId, folderHistory, isSystemInitialized]);
+
+
+  // Helper to Update Map locally and schedule Sync
+  const updateMap = (action: 'add' | 'remove' | 'update' | 'move', items: {id: string, name?: string, parentId?: string}[]) => {
+      setSystemMap(prev => {
+          const next = { ...prev };
+          items.forEach(item => {
+              if (action === 'add' || action === 'update') {
+                  if (item.name && item.parentId !== undefined) {
+                      next[item.id] = { id: item.id, name: item.name, parentId: item.parentId };
+                  }
+              } else if (action === 'remove') {
+                  delete next[item.id];
+                  // Also remove children? Technically yes, but standard Drive behavior might vary.
+                  // For simplicity, we assume deleteItems handles backend recursive delete.
+                  // We should cleanup orphan keys in map if we want to be strict.
+              } else if (action === 'move') {
+                   if (next[item.id] && item.parentId) {
+                       next[item.id] = { ...next[item.id], parentId: item.parentId };
+                   }
+              }
+          });
+          
+          // Debounced Sync
+          if (dbFileId) {
+            // We use a timeout outside React lifecycle or just fire and forget for now
+            // For robustness, ideally use a queue. Here we just call the sync function.
+            syncMapToDrive(next, dbFileId);
+          }
+          
+          return next;
+      });
+  };
 
   // --- SAFETY: PREVENT ACCIDENTAL CLOSE ---
   useEffect(() => {
@@ -238,7 +354,7 @@ const App = () => {
       
       if (res.status === 'success') {
         const freshItems: Item[] = (Array.isArray(res.data) ? res.data : [])
-            .filter((i: any) => i && i.id && i.name);
+            .filter((i: any) => i && i.id && i.name && i.name !== "system_zombio_db.json"); // Hide DB file from view
 
         setParentFolderId(res.parentFolderId || ""); 
 
@@ -262,6 +378,14 @@ const App = () => {
         });
 
         setItems(mergedItems);
+        
+        // --- SYNC MAP WITH FETCHED CONTENT ---
+        // Ensure map knows about these folders
+        const folders = freshItems.filter(i => i.type === 'folder');
+        if (folders.length > 0) {
+            updateMap('add', folders.map(f => ({ id: f.id, name: f.name, parentId: folderId || "root" })));
+        }
+
         await DB.cacheFolderContents(folderId, mergedItems);
         const notesMissingContent = mergedItems.filter(i => i.type === 'note' && !i.content);
         prefetchNoteContents(folderId, notesMissingContent);
@@ -275,11 +399,14 @@ const App = () => {
           setLoading(false);
       }
     }
-  }, []);
+  }, [dbFileId]); // Re-create if dbFileId changes (unlikely but safe)
 
   useEffect(() => {
-    loadFolder(currentFolderId);
-  }, [currentFolderId, loadFolder]);
+    // Only load folder after system is init to prevent race condition on root
+    if (isSystemInitialized) {
+        loadFolder(currentFolderId);
+    }
+  }, [currentFolderId, loadFolder, isSystemInitialized]);
 
   // --- RECYCLE BIN ---
   const getOrCreateRecycleBin = async (): Promise<string> => {
@@ -454,6 +581,12 @@ const App = () => {
           setIsProcessingAction(true);
           try {
               await API.moveItems(idsToMove, dropTargetId);
+              // Update Map for Folders
+              const foldersMoved = items.filter(i => idsToMove.includes(i.id) && i.type === 'folder');
+              if (foldersMoved.length > 0) {
+                  updateMap('move', foldersMoved.map(f => ({ id: f.id, parentId: dropTargetId })));
+              }
+
               updateNotification(notifId, 'Berhasil dipindahkan', 'success');
               await loadFolder(currentFolderId);
           } catch(err) {
@@ -711,6 +844,7 @@ const App = () => {
                 if (isPermanent) {
                     const notifId = addNotification(`Menghapus ${ids.length} item...`, 'loading');
                     await API.deleteItems(ids);
+                    updateMap('remove', ids.map(id => ({id}))); // Update Map
                     for(const id of ids) await DB.removeDeletedMeta(id);
                     updateNotification(notifId, 'Berhasil dihapus permanen', 'success');
                 } else {
@@ -777,6 +911,11 @@ const App = () => {
                   const notifId = addNotification('Memindahkan item...', 'loading');
                   try {
                       await API.moveItems(ids, targetId);
+                      
+                      // Update Map
+                      const foldersMoved = items.filter(i => ids.includes(i.id) && i.type === 'folder');
+                      if (foldersMoved.length > 0) updateMap('move', foldersMoved.map(f => ({ id: f.id, parentId: targetId })));
+
                       updateNotification(notifId, 'Berhasil dipindahkan', 'success');
                       loadFolder(currentFolderId);
                   } catch(e) { updateNotification(notifId, 'Gagal memindahkan', 'error'); }
@@ -797,6 +936,9 @@ const App = () => {
                      const notifId = addNotification('Mengganti nama...', 'loading');
                      try {
                          await API.renameItem(targetItem.id, newName);
+                         if (targetItem.type === 'folder') {
+                             updateMap('update', [{ id: targetItem.id, name: newName, parentId: currentFolderId || "root" }]);
+                         }
                          updateNotification(notifId, 'Nama berhasil diganti', 'success');
                          loadFolder(currentFolderId);
                      } catch(e) { updateNotification(notifId, 'Gagal ganti nama', 'error'); }
@@ -816,7 +958,10 @@ const App = () => {
                      setModal(null); setIsProcessingAction(true);
                      const notifId = addNotification('Membuat folder...', 'loading');
                      try {
-                         await API.createFolder(currentFolderId, name);
+                         const res = await API.createFolder(currentFolderId, name);
+                         if (res.status === 'success' && res.data) {
+                             updateMap('add', [{ id: res.data.id, name: name, parentId: currentFolderId || "root" }]);
+                         }
                          updateNotification(notifId, 'Folder berhasil dibuat', 'success');
                          loadFolder(currentFolderId);
                      } catch(e) { updateNotification(notifId, 'Gagal buat folder', 'error'); }
@@ -918,6 +1063,13 @@ const App = () => {
             setIsProcessingAction(true);
             try {
                 await API.moveItems([movedItemId], targetFolderId);
+                
+                // Update Map (Assume folder moved)
+                const movedItem = items.find(i => i.id === movedItemId);
+                if (movedItem && movedItem.type === 'folder') {
+                    updateMap('move', [{ id: movedItem.id, parentId: targetFolderId }]);
+                }
+
                 updateNotification(notifId, 'Berhasil dipindahkan', 'success');
                 await loadFolder(currentFolderId);
             } catch(err) { updateNotification(notifId, 'Gagal pindah', 'error'); }
@@ -1021,8 +1173,13 @@ const App = () => {
       )}
 
       {isGlobalLoading && (
-          <div className="fixed inset-0 z-[999] bg-black/70 backdrop-blur-sm flex flex-col items-center justify-center cursor-wait">
-              <Loader2 size={48} className="animate-spin text-blue-500 mb-4"/>
+          <div className="fixed inset-0 z-[999] bg-black/70 backdrop-blur-sm flex flex-col items-center justify-center cursor-wait animate-in fade-in">
+              <div className="relative">
+                 <Loader2 size={48} className="animate-spin text-blue-500 mb-4"/>
+                 <div className="absolute inset-0 flex items-center justify-center">
+                    <Database size={20} className="text-blue-300 opacity-80" />
+                 </div>
+              </div>
               <p className="text-white font-semibold text-lg animate-pulse">{globalLoadingMessage}</p>
           </div>
       )}
@@ -1176,6 +1333,7 @@ const App = () => {
         )}
       </main>
 
+      {/* FOOTER / RECYCLE BIN BUTTON */}
       {currentFolderId !== recycleBinId && (
           <div 
              className="fixed bottom-6 left-6 z-[250] group"

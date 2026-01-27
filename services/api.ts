@@ -1,8 +1,10 @@
 
-import { Item } from '../types';
+import { Item, FolderMap } from '../types';
 
 // URL Final Baru (File Manager Backend)
 const API_URL = "https://script.google.com/macros/s/AKfycbw-khPTpmPiuUhTzo-vqtkHZTqJ3MLqZtP-btpHLbnBVyJ13Z6k5glBBpMWomP8p6BIog/exec";
+
+const DB_FILENAME = "system_zombio_db.json";
 
 interface ApiResponse {
   status: 'success' | 'error';
@@ -49,7 +51,7 @@ export const fileToBase64 = (file: File | Blob): Promise<string> => {
 
 // --- FILE MANAGER API ACTIONS ---
 
-// 1. Get Folder Contents (Files + Subfolders)
+// 1. Get Folder Contents
 export const getFolderContents = async (folderId: string = ""): Promise<ApiResponse> => {
   return callGoogleScript({
     action: "getFolderContents",
@@ -75,7 +77,7 @@ export const renameItem = async (itemId: string, newName: string): Promise<ApiRe
   });
 };
 
-// 4. Delete Items (Bulk)
+// 4. Delete Items
 export const deleteItems = async (itemIds: string[]): Promise<ApiResponse> => {
   return callGoogleScript({
     action: "deleteItems",
@@ -100,7 +102,7 @@ export const duplicateItems = async (itemIds: string[]): Promise<ApiResponse> =>
   });
 };
 
-// 7. Get File Content (for Notes)
+// 7. Get File Content
 export const getFileContent = async (fileId: string): Promise<string> => {
   const result = await callGoogleScript({
     action: "getFileContent",
@@ -114,13 +116,13 @@ export const getFileContent = async (fileId: string): Promise<string> => {
   }
 };
 
-// 8. Upload Image (With Folder ID)
+// 8. Upload Image
 export const uploadToDrive = async (file: File, folderId: string): Promise<any> => {
   const base64 = await fileToBase64(file);
   
   const result = await callGoogleScript({
     action: "uploadImage",
-    folderId: folderId, // Now uses ID, not name
+    folderId: folderId, 
     fileName: file.name,
     mimeType: file.type || "image/jpeg",
     base64: base64
@@ -132,7 +134,7 @@ export const uploadToDrive = async (file: File, folderId: string): Promise<any> 
   return result.data;
 };
 
-// 9. Save Note (With Folder ID)
+// 9. Save Note
 export const saveNoteToDrive = async (title: string, content: string, folderId: string, fileId?: string): Promise<any> => {
   const result = await callGoogleScript({
     action: "saveNote", 
@@ -144,4 +146,31 @@ export const saveNoteToDrive = async (title: string, content: string, folderId: 
 
   if (result.status === 'error') throw new Error(result.message);
   return result.data;
+};
+
+// --- SYSTEM DATABASE (JSON ON DRIVE) ---
+
+export const findSystemDBFile = async (): Promise<{ id: string } | null> => {
+  // Search in root
+  const res = await getFolderContents("");
+  if (res.status === 'success' && Array.isArray(res.data)) {
+    const dbFile = res.data.find((i: any) => i.name === DB_FILENAME && i.type === 'note'); // Note/Text file
+    if (dbFile) return { id: dbFile.id };
+  }
+  return null;
+};
+
+export const createSystemDBFile = async (initialMap: FolderMap): Promise<string> => {
+  const content = JSON.stringify(initialMap);
+  const res = await saveNoteToDrive(DB_FILENAME.replace('.json',''), content, ""); // Save to root
+  // Note: saveNote appends .txt usually, but we treat it as our JSON store. 
+  // Ideally backend should allow generic text file, but saveNote works for string content.
+  if (res && res.id) return res.id;
+  throw new Error("Failed to create system DB file");
+};
+
+export const updateSystemDBFile = async (fileId: string, map: FolderMap): Promise<void> => {
+  const content = JSON.stringify(map);
+  // Re-save using the same fileId to overwrite
+  await saveNoteToDrive(DB_FILENAME.replace('.json',''), content, "", fileId); 
 };

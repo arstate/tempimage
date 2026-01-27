@@ -1,11 +1,12 @@
 
-import { Gallery, StoredImage, StoredNote, Item } from '../types';
+import { Gallery, StoredImage, StoredNote, Item, SystemDB, FolderMap } from '../types';
 
-const DB_NAME = 'ZombioGalleryDB_V3'; // Keep Name, Increment Version internally if needed, or change name to force reset
+const DB_NAME = 'ZombioGalleryDB_V3'; // Keep Name
 const STORE_GALLERIES = 'galleries';
 const STORE_FOLDER_CACHE = 'folder_cache';
-const STORE_DELETED_META = 'deleted_meta'; // Stores { id: itemId, originalParentId: folderId }
-const DB_VERSION = 5; // Incremented
+const STORE_DELETED_META = 'deleted_meta'; 
+const STORE_SYSTEM_MAP = 'system_map'; // New Store for Folder Mapping
+const DB_VERSION = 6; // Incremented
 
 export const initDB = (): Promise<IDBDatabase> => {
   return new Promise((resolve, reject) => {
@@ -24,6 +25,10 @@ export const initDB = (): Promise<IDBDatabase> => {
 
       if (!db.objectStoreNames.contains(STORE_DELETED_META)) {
         db.createObjectStore(STORE_DELETED_META, { keyPath: 'id' });
+      }
+
+      if (!db.objectStoreNames.contains(STORE_SYSTEM_MAP)) {
+        db.createObjectStore(STORE_SYSTEM_MAP, { keyPath: 'key' }); // Singleton store
       }
     };
 
@@ -82,7 +87,7 @@ export const clearCache = async (): Promise<void> => {
     return new Promise((resolve) => { tx.oncomplete = () => resolve(); });
 };
 
-// --- DELETED META FUNCTIONS (For Restore) ---
+// --- DELETED META FUNCTIONS ---
 
 export const saveDeletedMeta = async (itemId: string, originalParentId: string): Promise<void> => {
   const db = await initDB();
@@ -109,5 +114,28 @@ export const removeDeletedMeta = async (itemId: string): Promise<void> => {
   const db = await initDB();
   const tx = db.transaction(STORE_DELETED_META, 'readwrite');
   tx.objectStore(STORE_DELETED_META).delete(itemId);
+  return new Promise((resolve) => { tx.oncomplete = () => resolve(); });
+};
+
+// --- SYSTEM MAP FUNCTIONS (DB CACHE) ---
+
+export const getSystemMap = async (): Promise<SystemDB | null> => {
+  const db = await initDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction(STORE_SYSTEM_MAP, 'readonly');
+    const store = tx.objectStore(STORE_SYSTEM_MAP);
+    const request = store.get('main_map');
+    request.onsuccess = () => {
+      resolve(request.result ? request.result.data : null);
+    };
+    request.onerror = () => resolve(null);
+  });
+};
+
+export const saveSystemMap = async (data: SystemDB): Promise<void> => {
+  const db = await initDB();
+  const tx = db.transaction(STORE_SYSTEM_MAP, 'readwrite');
+  const store = tx.objectStore(STORE_SYSTEM_MAP);
+  store.put({ key: 'main_map', data: data });
   return new Promise((resolve) => { tx.oncomplete = () => resolve(); });
 };
