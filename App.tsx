@@ -4,7 +4,7 @@ import {
   Folder, FileText, Image as ImageIcon, MoreVertical, 
   ArrowLeft, Plus, Trash2, Copy, Move, Edit, CheckSquare, 
   Loader2, Home, Upload, ChevronRight, X, AlertCircle, Download, CornerUpLeft,
-  CheckCircle, XCircle, Image
+  CheckCircle, XCircle, Image, RotateCcw, Ban
 } from 'lucide-react';
 import * as API from './services/api';
 import * as DB from './services/db';
@@ -31,6 +31,8 @@ interface Notification {
   type: 'loading' | 'success' | 'error';
 }
 
+const RECYCLE_BIN_NAME = "Recycle Bin";
+
 // --- HELPER: STRIP HTML ---
 const stripHtml = (html: string) => {
   if (!html) return "";
@@ -43,6 +45,7 @@ const App = () => {
   // --- CORE STATE ---
   const [currentFolderId, setCurrentFolderId] = useState<string>(""); 
   const [parentFolderId, setParentFolderId] = useState<string>(""); 
+  const [recycleBinId, setRecycleBinId] = useState<string>(""); // Store Recycle Bin ID
   const [folderHistory, setFolderHistory] = useState<{id:string, name:string}[]>([]);
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(false); 
@@ -54,7 +57,7 @@ const App = () => {
   // --- UI STATE ---
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [lastSelectedId, setLastSelectedId] = useState<string | null>(null); 
-  const [contextMenu, setContextMenu] = useState<{x:number, y:number, targetItem?: Item} | null>(null);
+  const [contextMenu, setContextMenu] = useState<{x:number, y:number, targetItem?: Item, isRecycleBinBtn?: boolean} | null>(null);
   const [isDraggingFile, setIsDraggingFile] = useState(false); 
   const [isNewDropdownOpen, setIsNewDropdownOpen] = useState(false);
   
@@ -173,11 +176,23 @@ const App = () => {
       setLoading(false);
       
       if (res.status === 'success') {
-        // ROBUSTNESS: Ensure data is array and filter out nulls to prevent "Uncaught" errors during render
         const freshItems: Item[] = (Array.isArray(res.data) ? res.data : [])
-            .filter((i: any) => i && i.id && i.name); // Filter invalid items
+            .filter((i: any) => i && i.id && i.name);
 
         setParentFolderId(res.parentFolderId || ""); 
+
+        // SORTING: 0-9 then A-Z (Case Insensitive)
+        freshItems.sort((a, b) => {
+            return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
+        });
+
+        // RECYCLE BIN DISCOVERY (If in root)
+        if (folderId === "") {
+            const bin = freshItems.find(i => i.name === RECYCLE_BIN_NAME && i.type === 'folder');
+            if (bin) {
+                setRecycleBinId(bin.id);
+            }
+        }
 
         const mergedItems = freshItems.map(newItem => {
             const cachedItem = cachedItems?.find(c => c.id === newItem.id);
@@ -206,6 +221,29 @@ const App = () => {
   useEffect(() => {
     loadFolder(currentFolderId);
   }, [currentFolderId, loadFolder]);
+
+  // --- RECYCLE BIN HELPERS ---
+  const getOrCreateRecycleBin = async (): Promise<string> => {
+      if (recycleBinId) return recycleBinId;
+
+      // Check root folder explicitly if we haven't found it yet
+      const res = await API.getFolderContents("");
+      const rootItems: Item[] = Array.isArray(res.data) ? res.data : [];
+      const existingBin = rootItems.find(i => i.name === RECYCLE_BIN_NAME && i.type === 'folder');
+      
+      if (existingBin) {
+          setRecycleBinId(existingBin.id);
+          return existingBin.id;
+      }
+
+      // Create if not exists
+      const createRes = await API.createFolder("", RECYCLE_BIN_NAME);
+      if (createRes.status === 'success' && createRes.data) {
+          setRecycleBinId(createRes.data.id);
+          return createRes.data.id;
+      }
+      throw new Error("Could not create Recycle Bin");
+  };
 
   // --- EVENT LISTENERS ---
   useEffect(() => {
@@ -370,7 +408,6 @@ const App = () => {
   
   const getBlobFromUrl = async (url: string): Promise<Blob> => {
       try {
-          // Method 1: Fetch directly (Works if CORS headers are correct)
           const response = await fetch(url, {
               mode: 'cors',
               credentials: 'omit',
@@ -380,11 +417,8 @@ const App = () => {
           return await response.blob();
       } catch (fetchError) {
           console.warn("Fetch failed, trying Canvas fallback...", fetchError);
-          // Method 2: Load via HTML Image (Bypasses some fetch restrictions for displayable images)
           return new Promise((resolve, reject) => {
               const img = new window.Image();
-              // Note: If we use Anonymous, it might fail on Drive images. If we don't, we can draw but not export.
-              // Try Anonymous first for the blob access.
               img.crossOrigin = "Anonymous";
               img.referrerPolicy = "no-referrer";
               img.src = url;
@@ -428,7 +462,6 @@ const App = () => {
         removeNotification(notifId);
     } catch (e) {
         console.error(e);
-        // Fallback to new tab if everything fails
         window.open(url, '_blank');
         removeNotification(notifId);
     }
@@ -451,7 +484,6 @@ const App = () => {
       } catch (err) {
           console.error("Clipboard Error:", err);
           updateNotification(notifId, 'Membuka gambar (Silahkan salin manual)', 'error');
-          // Fallback: Open in new tab so user can right-click copy
           setTimeout(() => window.open(url, '_blank'), 1000);
       }
   };
@@ -459,6 +491,7 @@ const App = () => {
   const executeAction = async (action: string) => {
     const ids = Array.from(selectedIds) as string[];
     const targetItem = contextMenu?.targetItem || (ids.length === 1 ? items.find(i => i.id === ids[0]) : null);
+    const isRecycleBin = currentFolderId === recycleBinId;
     
     setContextMenu(null);
     setIsNewDropdownOpen(false);
@@ -469,36 +502,154 @@ const App = () => {
     else if (action === 'copy_image' && targetItem) {
         handleCopyImage(targetItem);
     }
-    // --- OPTIMISTIC DELETE ---
-    else if (action === 'delete') {
+    
+    // --- DELETE LOGIC (SOFT VS PERMANENT) ---
+    else if (action === 'delete' || action === 'delete_permanent') {
        if (ids.length === 0) return;
+       
+       const isPermanent = action === 'delete_permanent' || isRecycleBin;
+       const title = isPermanent ? 'Hapus Permanen?' : 'Pindah ke Sampah?';
+       const confirmMsg = isPermanent 
+          ? `Hapus ${ids.length} item selamanya? Tidak bisa dikembalikan.`
+          : `Pindahkan ${ids.length} item ke Recycle Bin?`;
+
        setModal({
          type: 'confirm',
-         title: 'Hapus Item?',
-         message: `Yakin ingin menghapus ${ids.length} item?`,
+         title: title,
+         message: confirmMsg,
          confirmText: 'Hapus',
          isDanger: true,
          onConfirm: async () => {
             setModal(null);
             
-            const previousItems = [...items];
-            setItems(prev => prev.filter(i => !ids.includes(i.id)));
+            // UI Feedback: Set status to 'deleting'
+            setItems(prev => prev.map(i => ids.includes(i.id) ? { ...i, status: 'deleting' } : i));
             setSelectedIds(new Set());
             
-            const notifId = addNotification(`Menghapus ${ids.length} item...`, 'loading');
-
             try {
-                await API.deleteItems(ids);
-                updateNotification(notifId, 'Berhasil dihapus', 'success');
-                const remainingItems = previousItems.filter(i => !ids.includes(i.id));
-                await DB.cacheFolderContents(currentFolderId, remainingItems);
+                if (isPermanent) {
+                     // 1. Permanent Delete
+                    const notifId = addNotification(`Menghapus ${ids.length} item permanen...`, 'loading');
+                    await API.deleteItems(ids);
+                    
+                    // Cleanup DB metadata
+                    for(const id of ids) await DB.removeDeletedMeta(id);
+
+                    updateNotification(notifId, 'Berhasil dihapus permanen', 'success');
+                } else {
+                    // 2. Soft Delete (Move to Recycle Bin)
+                    const notifId = addNotification(`Memindahkan ke sampah...`, 'loading');
+                    const binId = await getOrCreateRecycleBin();
+                    
+                    // Save metadata for restore
+                    for(const id of ids) {
+                        await DB.saveDeletedMeta(id, currentFolderId);
+                    }
+
+                    await API.moveItems(ids, binId);
+                    updateNotification(notifId, 'Dipindahkan ke Recycle Bin', 'success');
+                }
+                
+                // Refresh
+                await loadFolder(currentFolderId);
+
             } catch (e) {
-                setItems(previousItems);
-                updateNotification(notifId, 'Gagal menghapus', 'error');
+                // Revert status on error
+                setItems(prev => prev.map(i => ids.includes(i.id) ? { ...i, status: undefined } : i));
+                addNotification('Gagal menghapus', 'error');
             }
          }
        });
-    } 
+    }
+    
+    // --- RESTORE LOGIC ---
+    else if (action === 'restore') {
+        if (ids.length === 0) return;
+        
+        // UI Feedback: Set status to 'restoring'
+        setItems(prev => prev.map(i => ids.includes(i.id) ? { ...i, status: 'restoring' } : i));
+        setSelectedIds(new Set());
+
+        const notifId = addNotification(`Mengembalikan ${ids.length} item...`, 'loading');
+
+        try {
+            // Restore sequentially to handle different destinations
+            for (const id of ids) {
+                let originalParent = await DB.getDeletedMeta(id);
+                if (!originalParent) originalParent = ""; // Default to root
+                await API.moveItems([id], originalParent);
+                await DB.removeDeletedMeta(id);
+            }
+            updateNotification(notifId, 'Item berhasil dikembalikan', 'success');
+            await loadFolder(currentFolderId);
+
+        } catch(e) {
+             setItems(prev => prev.map(i => ids.includes(i.id) ? { ...i, status: undefined } : i));
+             updateNotification(notifId, 'Gagal restore', 'error');
+        }
+    }
+
+    // --- RECYCLE BIN BULK ACTIONS ---
+    else if (action === 'empty_bin') {
+        if (!recycleBinId) return;
+        // Fetch items inside bin first to get IDs (we might be in root, triggering this via context menu)
+        const res = await API.getFolderContents(recycleBinId);
+        const binItems: Item[] = Array.isArray(res.data) ? res.data : [];
+        const binIds = binItems.map(i => i.id);
+
+        if (binIds.length === 0) {
+            addNotification("Recycle Bin sudah kosong", 'success');
+            return;
+        }
+
+        setModal({
+            type: 'confirm',
+            title: 'Kosongkan Recycle Bin?',
+            message: `Hapus semua ${binIds.length} item secara permanen?`,
+            confirmText: 'Kosongkan',
+            isDanger: true,
+            onConfirm: async () => {
+                setModal(null);
+                const notifId = addNotification("Mengosongkan Recycle Bin...", 'loading');
+                try {
+                    await API.deleteItems(binIds);
+                    for(const id of binIds) await DB.removeDeletedMeta(id);
+                    updateNotification(notifId, 'Recycle Bin dikosongkan', 'success');
+                    if (currentFolderId === recycleBinId) loadFolder(recycleBinId);
+                } catch(e) { updateNotification(notifId, 'Gagal mengosongkan', 'error'); }
+            }
+        });
+    }
+
+    else if (action === 'restore_all') {
+         if (!recycleBinId) return;
+         const res = await API.getFolderContents(recycleBinId);
+         const binItems: Item[] = Array.isArray(res.data) ? res.data : [];
+         const binIds = binItems.map(i => i.id);
+
+         if (binIds.length === 0) {
+             addNotification("Tidak ada item untuk direstore", 'success');
+             return;
+         }
+
+         const notifId = addNotification("Mengembalikan semua item...", 'loading');
+         try {
+             // If we are currently IN the recycle bin, show loading UI on items
+             if (currentFolderId === recycleBinId) {
+                 setItems(prev => prev.map(i => ({...i, status: 'restoring'})));
+             }
+
+             for (const id of binIds) {
+                 let originalParent = await DB.getDeletedMeta(id);
+                 if (!originalParent) originalParent = "";
+                 await API.moveItems([id], originalParent);
+                 await DB.removeDeletedMeta(id);
+             }
+             updateNotification(notifId, 'Semua item dikembalikan', 'success');
+             if (currentFolderId === recycleBinId) loadFolder(recycleBinId);
+         } catch(e) { updateNotification(notifId, 'Gagal restore all', 'error'); }
+    }
+
     else if (action === 'duplicate') {
         if (ids.length === 0) return;
         const notifId = addNotification(`Menduplikasi ${ids.length} item...`, 'loading');
@@ -579,28 +730,26 @@ const App = () => {
     }
   };
 
-  // --- UPLOAD LOGIC (PARALLEL) ---
+  // --- UPLOAD LOGIC (SEQUENTIAL) ---
   const handleUploadFiles = async (files: File[]) => {
       const newUploads: UploadItem[] = files.map(f => ({
           id: Math.random().toString(36).substr(2, 9),
           file: f,
           status: 'uploading',
-          progress: 10 // Initial fake progress
+          progress: 5 
       }));
 
       setUploadQueue(prev => [...prev, ...newUploads]);
 
-      // Process parallel
-      newUploads.forEach(async (item) => {
+      for (const item of newUploads) {
           try {
-              // Simulated progress interval since fetch doesn't support progress events easily with GAS
               const progressInterval = setInterval(() => {
                   setUploadQueue(prev => prev.map(u => 
-                      u.id === item.id && u.progress < 90 
+                      u.id === item.id && u.status === 'uploading' && u.progress < 90 
                       ? { ...u, progress: u.progress + 10 } 
                       : u
                   ));
-              }, 500);
+              }, 300);
 
               await API.uploadToDrive(item.file, currentFolderId);
               
@@ -608,23 +757,21 @@ const App = () => {
               setUploadQueue(prev => prev.map(u => 
                   u.id === item.id ? { ...u, status: 'success', progress: 100 } : u
               ));
-              
-              // If this was the last pending, refresh folder
-              loadFolder(currentFolderId); 
 
           } catch (err) {
+              console.error("Upload failed for:", item.file.name, err);
               setUploadQueue(prev => prev.map(u => 
                   u.id === item.id ? { ...u, status: 'error', progress: 0 } : u
               ));
           }
-      });
+      }
+      loadFolder(currentFolderId); 
   };
 
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setIsDraggingFile(false);
     
-    // FIX: Don't trigger upload if dragging internal items
     if (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes("text/item-id")) {
         const movedItemId = e.dataTransfer.getData("text/item-id");
         let targetElement = e.target as HTMLElement;
@@ -644,7 +791,6 @@ const App = () => {
         return;
     }
 
-    // Handle File Drop
     if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       handleUploadFiles(Array.from(e.dataTransfer.files));
     }
@@ -652,10 +798,8 @@ const App = () => {
 
   // --- NOTE HANDLING ---
   const handleOpenNote = async (item: Item) => {
-      // Show blocking overlay
       setIsGlobalLoading(true);
       setGlobalLoadingMessage("Membuka catatan...");
-      
       try {
           if (item.content) {
               setEditingNote({ id: item.id, galleryId: currentFolderId, title: item.name.replace('.txt', ''), content: item.content, timestamp: item.lastUpdated });
@@ -680,10 +824,8 @@ const App = () => {
   };
 
   const handleSaveNote = async (id: string, title: string, content: string) => {
-      // BLOCKING OVERLAY
       setIsGlobalLoading(true);
       setGlobalLoadingMessage("Menyimpan catatan...");
-      
       try {
           const isNew = id.startsWith('temp-');
           const fileId = isNew ? undefined : id;
@@ -709,10 +851,16 @@ const App = () => {
      else { const target = folderHistory[index]; setFolderHistory(prev => prev.slice(0, index + 1)); setCurrentFolderId(target.id); }
   };
 
+  // Filter items. If we are NOT in the recycle bin, hide the "Recycle Bin" folder itself from the view to avoid confusion
+  const filteredItems = items.filter(i => {
+      if (currentFolderId === "" && i.name === RECYCLE_BIN_NAME) return false;
+      return true;
+  });
+
   const groupedItems = {
-      folders: items.filter(i => i.type === 'folder'),
-      notes: items.filter(i => i.type === 'note'),
-      images: items.filter(i => i.type === 'image')
+      folders: filteredItems.filter(i => i.type === 'folder'),
+      notes: filteredItems.filter(i => i.type === 'note'),
+      images: filteredItems.filter(i => i.type === 'image')
   };
 
   return (
@@ -722,8 +870,7 @@ const App = () => {
       onContextMenu={(e) => handleContextMenu(e)} 
       onDragOver={(e) => { 
           e.preventDefault(); 
-          e.stopPropagation(); // FIX: Prevent event bubbling that causes overlay flicker
-          // FIX: Only show overlay if dragging FILES (not internal items)
+          e.stopPropagation(); 
           if (e.dataTransfer && !e.dataTransfer.types.includes("text/item-id")) {
             setIsDraggingFile(true); 
           }
@@ -757,6 +904,7 @@ const App = () => {
          onClear={() => setSelectedIds(new Set())}
          onAction={executeAction}
          containerRef={containerRef}
+         isInRecycleBin={currentFolderId === recycleBinId}
       />
 
       {/* UPLOAD PROGRESS WIDGET */}
@@ -766,7 +914,7 @@ const App = () => {
         onRemove={(id) => setUploadQueue(prev => prev.filter(u => u.id !== id))} 
       />
 
-      {/* NOTIFICATIONS (Toast) */}
+      {/* NOTIFICATIONS */}
       <div className="fixed bottom-6 right-6 z-[300] flex flex-col gap-2 pointer-events-none">
           {notifications.map(n => (
               <div key={n.id} className="bg-slate-800/90 backdrop-blur-md border border-slate-700 text-white px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3 animate-in slide-in-from-bottom-5 fade-in duration-300">
@@ -794,6 +942,8 @@ const App = () => {
            ))}
         </div>
 
+        {/* Hide 'New' button in Recycle Bin */}
+        {currentFolderId !== recycleBinId && (
         <div className="flex items-center gap-2 new-dropdown-container">
             <div className="relative">
                 <button onClick={() => setIsNewDropdownOpen(!isNewDropdownOpen)} className={`px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold shadow-lg transition-all border border-transparent ${isNewDropdownOpen ? 'bg-slate-800 border-slate-700 text-white' : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-900/20'}`}>
@@ -821,6 +971,7 @@ const App = () => {
                 )}
             </div>
         </div>
+        )}
       </header>
 
       {/* MAIN CONTENT */}
@@ -830,11 +981,11 @@ const App = () => {
                 <Loader2 size={32} className="animate-spin text-blue-500"/>
                 <p className="text-sm">Memuat isi folder...</p>
             </div>
-        ) : items.length === 0 ? (
+        ) : filteredItems.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-20 text-slate-600 border-2 border-dashed border-slate-800 rounded-2xl">
                 <Folder size={64} className="mb-4 opacity-20" />
-                <p className="font-medium">Folder Kosong</p>
-                <p className="text-xs mt-1 text-slate-500">Klik kanan untuk opsi baru</p>
+                <p className="font-medium">{currentFolderId === recycleBinId ? "Recycle Bin Kosong" : "Folder Kosong"}</p>
+                {currentFolderId !== recycleBinId && <p className="text-xs mt-1 text-slate-500">Klik kanan untuk opsi baru</p>}
             </div>
         ) : (
             <>
@@ -881,6 +1032,40 @@ const App = () => {
         )}
       </main>
 
+      {/* RECYCLE BIN FLOATING BUTTON */}
+      {currentFolderId !== recycleBinId && (
+          <div 
+             className="fixed bottom-6 left-6 z-[250] group"
+             onContextMenu={(e) => { 
+                 e.preventDefault(); 
+                 e.stopPropagation();
+                 setContextMenu({ x: e.pageX, y: e.pageY, isRecycleBinBtn: true });
+             }}
+          >
+              <button 
+                  onClick={() => {
+                      if (recycleBinId) {
+                           setFolderHistory(prev => [...prev, { id: recycleBinId, name: RECYCLE_BIN_NAME }]);
+                           setCurrentFolderId(recycleBinId);
+                      } else {
+                           // Try to find/create it then go
+                           getOrCreateRecycleBin().then(id => {
+                               setFolderHistory(prev => [...prev, { id: id, name: RECYCLE_BIN_NAME }]);
+                               setCurrentFolderId(id);
+                           });
+                      }
+                  }}
+                  className="bg-slate-800 border border-slate-700 p-3 rounded-full shadow-2xl hover:bg-slate-700 hover:border-slate-500 transition-all active:scale-95 flex items-center justify-center relative overflow-hidden"
+              >
+                  <Trash2 size={24} className="text-slate-400 group-hover:text-red-400 transition-colors" />
+                  <div className="absolute inset-0 bg-red-500/10 opacity-0 group-hover:opacity-100 transition-opacity rounded-full"></div>
+              </button>
+              <div className="absolute left-full ml-3 top-1/2 -translate-y-1/2 px-2 py-1 bg-slate-900 border border-slate-700 rounded text-xs text-slate-300 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none whitespace-nowrap">
+                  Recycle Bin
+              </div>
+          </div>
+      )}
+
       {/* OVERLAYS */}
       {isDraggingFile && (
         <div className="fixed inset-0 z-50 bg-blue-500/20 backdrop-blur-sm border-4 border-blue-500 border-dashed m-4 rounded-3xl flex flex-col items-center justify-center pointer-events-none animate-in fade-in zoom-in-95">
@@ -895,39 +1080,70 @@ const App = () => {
         <>
             <div className="fixed inset-0 z-[99]" onClick={() => setContextMenu(null)} onContextMenu={(e) => { e.preventDefault(); setContextMenu(null); }}></div>
             <div className="fixed z-[100] bg-slate-800 border border-slate-700 rounded-lg shadow-2xl py-1.5 min-w-[200px] animate-in fade-in zoom-in-95 duration-100 overflow-hidden" style={{ top: Math.min(contextMenu.y, window.innerHeight - 300), left: Math.min(contextMenu.x, window.innerWidth - 220) }}>
-            {contextMenu.targetItem ? (
+            
+            {/* RECYCLE BIN BUTTON CONTEXT MENU */}
+            {contextMenu.isRecycleBinBtn ? (
+                <>
+                <div className="px-3 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-700/50 mb-1">Recycle Bin Options</div>
+                <button onClick={() => executeAction('empty_bin')} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-400 hover:text-red-300 flex items-center gap-3 text-sm transition-colors"><Trash2 size={16}/> Empty Recycle Bin</button>
+                <button onClick={() => executeAction('restore_all')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><RotateCcw size={16} className="text-green-400"/> Restore All Items</button>
+                </>
+            ) : contextMenu.targetItem ? (
                 <>
                 <div className="px-3 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-700/50 mb-1 truncate max-w-[200px]">{contextMenu.targetItem.name}</div>
-                <button onClick={() => executeAction('rename')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Edit size={16} className="text-slate-400"/> Rename</button>
-                <button onClick={() => executeAction('duplicate')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Copy size={16} className="text-slate-400"/> Copy</button>
-                <button onClick={() => executeAction('move')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Move size={16} className="text-slate-400"/> Move</button>
-                {contextMenu.targetItem.type !== 'folder' && (
+                
+                {/* RECYCLE BIN ITEM CONTEXT MENU */}
+                {currentFolderId === recycleBinId ? (
+                     <>
+                     <button onClick={() => executeAction('restore')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><RotateCcw size={16} className="text-green-400"/> Restore</button>
+                     <button onClick={() => executeAction('delete_permanent')} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-400 hover:text-red-300 flex items-center gap-3 text-sm transition-colors"><Ban size={16}/> Delete Permanently</button>
+                     </>
+                ) : (
+                    // NORMAL ITEM CONTEXT MENU
                     <>
-                    <button onClick={() => executeAction('download')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Download size={16} className="text-slate-400"/> Download</button>
-                    {contextMenu.targetItem.type === 'image' && (
-                        <button onClick={() => executeAction('copy_image')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Image size={16} className="text-slate-400"/> Copy Image</button>
+                    <button onClick={() => executeAction('rename')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Edit size={16} className="text-slate-400"/> Rename</button>
+                    <button onClick={() => executeAction('duplicate')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Copy size={16} className="text-slate-400"/> Copy</button>
+                    <button onClick={() => executeAction('move')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Move size={16} className="text-slate-400"/> Move</button>
+                    {contextMenu.targetItem.type !== 'folder' && (
+                        <>
+                        <button onClick={() => executeAction('download')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Download size={16} className="text-slate-400"/> Download</button>
+                        {contextMenu.targetItem.type === 'image' && (
+                            <button onClick={() => executeAction('copy_image')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Image size={16} className="text-slate-400"/> Copy Image</button>
+                        )}
+                        </>
                     )}
+                    <div className="h-px bg-slate-700 my-1"/>
+                    <button onClick={() => executeAction('delete')} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-400 hover:text-red-300 flex items-center gap-3 text-sm transition-colors"><Trash2 size={16}/> Delete</button>
                     </>
                 )}
-                <div className="h-px bg-slate-700 my-1"/>
-                <button onClick={() => executeAction('delete')} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-400 hover:text-red-300 flex items-center gap-3 text-sm transition-colors"><Trash2 size={16}/> Delete</button>
                 </>
             ) : (
-                <>
-                <button onClick={() => executeAction('new_folder')} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Folder size={16} className="text-blue-400"/> New Folder</button>
-                <button onClick={handleCreateNote} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><FileText size={16} className="text-yellow-400"/> New Note</button>
-                <label className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 cursor-pointer transition-colors">
-                    <Upload size={16} className="text-green-400"/> Upload File
-                    <input type="file" multiple className="hidden" onChange={(e) => {
-                        setContextMenu(null);
-                        if(e.target.files) {
-                            handleUploadFiles(Array.from(e.target.files));
-                        }
-                    }} />
-                </label>
-                <div className="h-px bg-slate-700 my-1"/>
-                <button onClick={() => { setContextMenu(null); loadFolder(currentFolderId); }} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Loader2 size={16} className="text-slate-400"/> Refresh</button>
-                </>
+                // NORMAL BACKGROUND CONTEXT MENU (New Folder, etc)
+                // If in recycle bin, restrict options
+                currentFolderId === recycleBinId ? (
+                     <>
+                     <button onClick={() => executeAction('empty_bin')} className="w-full text-left px-3 py-2.5 hover:bg-red-500/10 text-red-400 hover:text-red-300 flex items-center gap-3 text-sm transition-colors"><Trash2 size={16}/> Empty Recycle Bin</button>
+                     <button onClick={() => executeAction('restore_all')} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><RotateCcw size={16} className="text-green-400"/> Restore All Items</button>
+                     <div className="h-px bg-slate-700 my-1"/>
+                     <button onClick={() => { setContextMenu(null); loadFolder(currentFolderId); }} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Loader2 size={16} className="text-slate-400"/> Refresh</button>
+                     </>
+                ) : (
+                    <>
+                    <button onClick={() => executeAction('new_folder')} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Folder size={16} className="text-blue-400"/> New Folder</button>
+                    <button onClick={handleCreateNote} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><FileText size={16} className="text-yellow-400"/> New Note</button>
+                    <label className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 cursor-pointer transition-colors">
+                        <Upload size={16} className="text-green-400"/> Upload File
+                        <input type="file" multiple className="hidden" onChange={(e) => {
+                            setContextMenu(null);
+                            if(e.target.files) {
+                                handleUploadFiles(Array.from(e.target.files));
+                            }
+                        }} />
+                    </label>
+                    <div className="h-px bg-slate-700 my-1"/>
+                    <button onClick={() => { setContextMenu(null); loadFolder(currentFolderId); }} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Loader2 size={16} className="text-slate-400"/> Refresh</button>
+                    </>
+                )
             )}
             </div>
         </>
@@ -985,7 +1201,7 @@ const App = () => {
 };
 
 // --- FLOATING SELECTION MENU COMPONENT ---
-const SelectionFloatingMenu = ({ selectedIds, items, onClear, onAction, containerRef }: { selectedIds: Set<string>, items: Item[], onClear: () => void, onAction: (a: string) => void, containerRef: React.RefObject<HTMLDivElement> }) => {
+const SelectionFloatingMenu = ({ selectedIds, items, onClear, onAction, containerRef, isInRecycleBin }: { selectedIds: Set<string>, items: Item[], onClear: () => void, onAction: (a: string) => void, containerRef: React.RefObject<HTMLDivElement>, isInRecycleBin: boolean }) => {
     const [pos, setPos] = useState<{top?: number, left?: number, bottom?: number, x?:number}>({ bottom: 24, left: window.innerWidth / 2 }); 
     const [styleType, setStyleType] = useState<'contextual' | 'dock'>('dock');
     const menuRef = useRef<HTMLDivElement>(null);
@@ -1006,7 +1222,6 @@ const SelectionFloatingMenu = ({ selectedIds, items, onClear, onAction, containe
                  return;
             }
 
-            // Viewport Coordinates of the Selection Bounding Box
             const viewMinY = Math.min(...rects.map(r => r.top));
             const viewMaxY = Math.max(...rects.map(r => r.bottom));
             const viewMinX = Math.min(...rects.map(r => r.left));
@@ -1016,41 +1231,28 @@ const SelectionFloatingMenu = ({ selectedIds, items, onClear, onAction, containe
             const viewportHeight = window.innerHeight;
             const selectionHeight = viewMaxY - viewMinY;
 
-            // --- DOCK MODE LOGIC ---
-            // If many items (>8) OR selection spans significant vertical space (> 40% viewport)
             if (selectedIds.size > 8 || selectionHeight > (viewportHeight * 0.4)) {
                 setStyleType('dock');
                 setPos({ bottom: 32, left: window.innerWidth / 2 });
                 return;
             }
 
-            // --- CONTEXTUAL MODE LOGIC ---
-            // Dimensions and Safe Zones
-            const headerHeight = 80; // Approx safety from top (header + spacing)
+            const headerHeight = 80;
             const menuHeight = menuRef.current ? menuRef.current.offsetHeight : 60;
             const gap = 12;
 
-            // Decision: Above or Below?
-            // Preference: ABOVE the items
             let targetTop;
-            
-            // If there is enough space ABOVE the selection (viewMinY) relative to header
             if (viewMinY > (headerHeight + menuHeight + gap)) {
-                // Place ABOVE: 
-                // We add window.scrollY to make it absolute to document
                 targetTop = window.scrollY + viewMinY - menuHeight - gap;
             } else {
-                // Not enough space above (blocked by header/top edge), place BELOW
                 targetTop = window.scrollY + viewMaxY + gap;
             }
 
-            // --- CLAMPING LOGIC FOR MOBILE (HORIZONTAL) ---
             let finalLeft = centerX;
             if (menuRef.current) {
                 const menuWidth = menuRef.current.offsetWidth;
                 const screenWidth = window.innerWidth;
-                const padding = 16; // Margin from screen edge
-
+                const padding = 16;
                 const minSafe = (menuWidth / 2) + padding;
                 const maxSafe = screenWidth - (menuWidth / 2) - padding;
 
@@ -1066,8 +1268,6 @@ const SelectionFloatingMenu = ({ selectedIds, items, onClear, onAction, containe
         };
 
         updatePosition();
-        
-        // Listener for resize/orientation change
         window.addEventListener('resize', updatePosition);
         return () => window.removeEventListener('resize', updatePosition);
 
@@ -1075,12 +1275,8 @@ const SelectionFloatingMenu = ({ selectedIds, items, onClear, onAction, containe
 
     if (selectedIds.size === 0) return null;
 
-    // dockStyle: FIXED position (doesn't add to scroll height, stays in viewport)
     const dockStyle = "fixed z-50 transform -translate-x-1/2 flex items-center gap-1 bg-slate-900/90 backdrop-blur-md border border-blue-500/50 p-2 rounded-2xl shadow-2xl shadow-blue-500/10 animate-in zoom-in-95 slide-in-from-bottom-5 duration-200 transition-all max-w-[95vw] overflow-x-auto";
-    
-    // contextStyle: ABSOLUTE position (follows document flow)
     const contextStyle = "absolute z-50 transform -translate-x-1/2 flex items-center gap-1 bg-slate-900/90 backdrop-blur-md border border-blue-500/50 p-1.5 rounded-full shadow-2xl shadow-blue-500/20 animate-in fade-in zoom-in-95 duration-150 transition-all duration-300 ease-out max-w-[95vw] overflow-x-auto";
-
     const isContext = styleType === 'contextual';
 
     return (
@@ -1089,7 +1285,7 @@ const SelectionFloatingMenu = ({ selectedIds, items, onClear, onAction, containe
             className={isContext ? contextStyle : dockStyle}
             style={{ 
                 top: isContext ? pos.top : undefined, 
-                left: isContext ? pos.left : '50%', // Dock is always center
+                left: isContext ? pos.left : '50%', 
                 bottom: isContext ? undefined : pos.bottom 
             }}
         >
@@ -1098,26 +1294,47 @@ const SelectionFloatingMenu = ({ selectedIds, items, onClear, onAction, containe
                 <button onClick={(e) => { e.stopPropagation(); onClear(); }} className="p-1 hover:bg-white/10 rounded-full transition-colors"><X size={14} /></button>
             </div>
             
-            <button onClick={(e) => { e.stopPropagation(); onAction('duplicate'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Duplicate"><Copy size={18}/></button>
-            <button onClick={(e) => { e.stopPropagation(); onAction('move'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Move"><Move size={18}/></button>
-            
-            {selectedIds.size === 1 && (
+            {isInRecycleBin ? (
                 <>
-                <button onClick={(e) => { e.stopPropagation(); onAction('rename'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Rename"><Edit size={18}/></button>
-                <button onClick={(e) => { e.stopPropagation(); onAction('download'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Download"><Download size={18}/></button>
+                <button onClick={(e) => { e.stopPropagation(); onAction('restore'); }} className="p-2 hover:bg-green-500/20 hover:text-green-400 rounded-lg transition-colors tooltip" title="Restore"><RotateCcw size={18}/></button>
+                <div className="w-px h-6 bg-white/10 mx-1"></div>
+                <button onClick={(e) => { e.stopPropagation(); onAction('delete_permanent'); }} className="p-2 hover:bg-red-500/20 text-red-400 hover:text-red-300 rounded-lg transition-colors tooltip" title="Delete Permanently"><Ban size={18}/></button>
+                </>
+            ) : (
+                <>
+                <button onClick={(e) => { e.stopPropagation(); onAction('duplicate'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Duplicate"><Copy size={18}/></button>
+                <button onClick={(e) => { e.stopPropagation(); onAction('move'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Move"><Move size={18}/></button>
+                {selectedIds.size === 1 && (
+                    <>
+                    <button onClick={(e) => { e.stopPropagation(); onAction('rename'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Rename"><Edit size={18}/></button>
+                    <button onClick={(e) => { e.stopPropagation(); onAction('download'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Download"><Download size={18}/></button>
+                    </>
+                )}
+                <div className="w-px h-6 bg-white/10 mx-1"></div>
+                <button onClick={(e) => { e.stopPropagation(); onAction('delete'); }} className="p-2 hover:bg-red-500/20 text-red-400 hover:text-red-300 rounded-lg transition-colors tooltip" title="Delete"><Trash2 size={18}/></button>
                 </>
             )}
-            
-            <div className="w-px h-6 bg-white/10 mx-1"></div>
-            <button onClick={(e) => { e.stopPropagation(); onAction('delete'); }} className="p-2 hover:bg-red-500/20 text-red-400 hover:text-red-300 rounded-lg transition-colors tooltip" title="Delete"><Trash2 size={18}/></button>
         </div>
     );
 };
 
 // --- SUB COMPONENTS FOR GRID ITEMS ---
 
+const ItemOverlay = ({ status }: { status?: string }) => {
+    if (!status || status === 'idle') return null;
+    return (
+        <div className="absolute inset-0 bg-black/60 backdrop-blur-sm z-20 flex flex-col items-center justify-center rounded-xl animate-in fade-in">
+            <Loader2 size={24} className="text-blue-400 animate-spin mb-1" />
+            <span className="text-[10px] font-bold text-white uppercase tracking-wider">
+                {status === 'deleting' ? 'Deleting...' : 'Restoring...'}
+            </span>
+        </div>
+    );
+};
+
 const FolderItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }: any) => (
     <div id={`item-${item.id}`} data-folder-id={item.id} draggable onDragStart={(e) => e.dataTransfer.setData("text/item-id", item.id)} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col items-center gap-2 item-clickable ${selected ? 'bg-blue-500/20 border-blue-500 shadow-md ring-1 ring-blue-500' : 'bg-slate-900 border-slate-800 hover:bg-slate-800 hover:border-slate-600'}`}>
+        <ItemOverlay status={item.status} />
         <div className={`absolute top-2 left-2 z-10 transition-opacity ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
             <CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/>
         </div>
@@ -1130,6 +1347,7 @@ const NoteItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onTog
     const preview = stripHtml(item.content || item.snippet || "").substring(0, 150);
     return (
         <div id={`item-${item.id}`} draggable onDragStart={(e) => e.dataTransfer.setData("text/item-id", item.id)} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col gap-2 h-40 overflow-hidden shadow-sm item-clickable ${selected ? 'ring-2 ring-blue-500 shadow-lg scale-[1.02]' : 'hover:-translate-y-1 hover:shadow-lg'}`} style={{ backgroundColor: '#fff9c4', color: '#333' }}>
+            <ItemOverlay status={item.status} />
             <div className={`absolute top-2 left-2 z-10 transition-opacity ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
                 <CheckSquare size={18} className={selected ? "text-blue-600" : "text-slate-400"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/>
             </div>
@@ -1142,6 +1360,7 @@ const NoteItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onTog
 
 const ImageItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }: any) => (
     <div id={`item-${item.id}`} draggable onDragStart={(e) => e.dataTransfer.setData("text/item-id", item.id)} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} className={`group relative rounded-xl border overflow-hidden transition-all cursor-pointer aspect-square bg-slate-950 shadow-sm item-clickable ${selected ? 'border-blue-500 ring-2 ring-blue-500' : 'border-slate-800 hover:border-slate-600'}`}>
+        <ItemOverlay status={item.status} />
         <div className={`absolute top-2 left-2 z-10 transition-opacity ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
             <CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-white drop-shadow-md"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/>
         </div>
@@ -1151,7 +1370,6 @@ const ImageItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onTo
             className="w-full h-full object-cover select-none" 
             loading="lazy" 
             referrerPolicy="no-referrer" 
-            // Removed crossOrigin="anonymous" to fix display issues with non-CORS images
         />
         <div className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm p-2 translate-y-full group-hover:translate-y-0 transition-transform">
             <p className="text-[10px] text-white truncate text-center select-none">{item.name}</p>
