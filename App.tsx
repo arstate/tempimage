@@ -144,42 +144,27 @@ const App = () => {
   }, [dbFileId]);
 
   // BACKGROUND SYNC POLLING (Realtime-ish Update)
-  // Checks for updates every 60 seconds if system is idle
   useEffect(() => {
     if (!isSystemInitialized || !dbFileId || isSavingDB) return;
 
     const interval = setInterval(async () => {
         try {
-            console.log("Checking for remote DB updates...");
-            // We fetch the content to see if it changed. 
-            // Ideally we check metadata 'modifiedTime' but to be safe and simple we just fetch content
-            // since the JSON isn't massive yet.
             const content = await API.getFileContent(dbFileId);
             const remoteMap = JSON.parse(content);
-            
-            // Simple check: if keys count different or just overwrite?
-            // Since this is a "single source of truth" system, we assume Cloud is Truth.
-            // But we don't want to overwrite local unsaved changes if any (though updateMap handles local first).
-            // A deep compare or version timestamp would be better, but for now, let's sync down.
-            
-            // Only update if we are not currently saving
             if (!isSavingDB) {
-                // If remote has essentially different content, update
                 if (JSON.stringify(remoteMap) !== JSON.stringify(systemMapRef.current)) {
                     console.log("Remote DB changed, updating local...");
                     systemMapRef.current = remoteMap;
                     setSystemMap(remoteMap);
                     setLastCloudSyncTime(Date.now());
                     await DB.saveSystemMap({ fileId: dbFileId, map: remoteMap, lastSync: Date.now() });
-                    
-                    // Optional: Reload current folder if it was affected
                     if (currentFolderId) loadFolder(currentFolderId);
                 }
             }
         } catch (e) {
             console.warn("Background sync failed", e);
         }
-    }, 60000); // 1 minute interval
+    }, 60000); 
 
     return () => clearInterval(interval);
   }, [isSystemInitialized, dbFileId, isSavingDB, currentFolderId]);
@@ -189,16 +174,14 @@ const App = () => {
   useEffect(() => {
     const initSystem = async () => {
        try {
-           // 1. Try Load from IndexedDB (Fast Load)
            const cachedDB = await DB.getSystemMap();
            let currentMap: FolderMap = cachedDB ? cachedDB.map : {};
            
            setGlobalLoadingMessage("Sinkronisasi Cloud...");
            
-           // 2. Locate DB File using logic
            const location = await API.locateSystemDB();
            let sysFolderId = location.systemFolderId;
-           let currentFileId = location.fileId; // This is the ID from Cloud
+           let currentFileId = location.fileId; 
 
            if (!sysFolderId) {
                setGlobalLoadingMessage("Membuat Folder System...");
@@ -207,14 +190,12 @@ const App = () => {
            setSystemFolderId(sysFolderId);
 
            if (!currentFileId) {
-               // Only create NEW if ABSOLUTELY NOT FOUND
                setGlobalLoadingMessage("Membuat Database Baru...");
                if (!cachedDB) currentMap = { "root": { id: "root", name: "Home", parentId: "" } };
                
                const newId = await API.createSystemDBFile(currentMap, sysFolderId);
                currentFileId = newId;
            } else {
-               // FOUND EXISTING DB -> ALWAYS LOAD IT (Realtime logic for device switch)
                setGlobalLoadingMessage("Mengunduh Database Terbaru...");
                try {
                    const content = await API.getFileContent(currentFileId);
@@ -225,14 +206,12 @@ const App = () => {
                }
            }
 
-           // Update Cache & Refs
            await DB.saveSystemMap({ fileId: currentFileId, map: currentMap, lastSync: Date.now() });
            systemMapRef.current = currentMap;
            setSystemMap(currentMap);
            setDbFileId(currentFileId);
            setIsSystemInitialized(true);
 
-           // 4. Resolve HASH URL
            const hash = window.location.hash.replace(/^#/, ''); 
            const path = hash.split('/').filter(p => p);
 
@@ -324,8 +303,6 @@ const App = () => {
       DB.saveSystemMap({ fileId: dbFileId, map: nextMap, lastSync: Date.now() });
       triggerCloudSync();
   };
-
-  // ... (Sisa kode sama, hanya update logika) ...
 
   // --- SAFETY: PREVENT ACCIDENTAL CLOSE ---
   useEffect(() => {
@@ -488,10 +465,6 @@ const App = () => {
       throw new Error("Could not create Recycle Bin");
   };
 
-  // ... (Pointer Events, Actions, etc - sama seperti sebelumnya) ...
-  // Saya persingkat bagian yang tidak berubah untuk menghemat token, 
-  // namun pastikan semua handler (handlePointerDown, executeAction, dll) tetap ada.
-  
   const handlePointerDown = (e: React.PointerEvent) => {
      if ((e.target as HTMLElement).closest('button, .item-handle')) return;
      if (!e.isPrimary) return;
@@ -547,7 +520,7 @@ const App = () => {
          const x = Math.min(dragStartPos.current.x, currentX); const y = Math.min(dragStartPos.current.y, currentY);
          const width = Math.abs(currentX - dragStartPos.current.x); const height = Math.abs(currentY - dragStartPos.current.y);
          setSelectionBox({ x, y, width, height });
-         // ... (selection logic omitted for brevity, same as before)
+         
          const newSelected = new Set(selectedIds);
          items.forEach(item => {
             const el = document.getElementById(`item-${item.id}`);
@@ -597,7 +570,6 @@ const App = () => {
   const handleItemClick = (e: React.MouseEvent, item: Item) => {
     if (isPaintingRef.current || customDragItem) return;
     if (e.shiftKey && lastSelectedId) {
-        // ... (shift select logic)
         const lastIndex = items.findIndex(i => i.id === lastSelectedId);
         const currentIndex = items.findIndex(i => i.id === item.id);
         if (lastIndex !== -1 && currentIndex !== -1) {
@@ -624,7 +596,7 @@ const App = () => {
         }
         setFolderHistory(prev => [...prev, { id: item.id, name: item.name }]); setCurrentFolderId(item.id);
     } else if (item.type === 'note') {
-        if (item.name.includes(DB_FILENAME_BASE)) { // Check includes instead of startsWith for robustness
+        if (item.name.includes(DB_FILENAME_BASE)) {
             const notifId = addNotification('Membaca Database...', 'loading');
             try {
                 let content = item.content;
@@ -642,19 +614,8 @@ const App = () => {
     else { setContextMenu({ x: e.pageX, y: e.pageY, targetItem: undefined }); }
   };
   
-  // NOTE: Saya sertakan fungsi yang perlu ada.
   const getBlobFromUrl = async (url: string): Promise<Blob> => { try { const response = await fetch(url, { mode: 'cors', credentials: 'omit', referrerPolicy: 'no-referrer' }); if (response.ok) return await response.blob(); } catch (e) { /* */ } try { const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`; const response = await fetch(proxyUrl); if (!response.ok) throw new Error(""); return await response.blob(); } catch (e) { throw new Error("Gagal download"); } };
   
-  const processDownloadItem = async (downloadItem: DownloadItem, itemData: Item) => {
-      // Simulate download process (or real logic if needed)
-      // Since specific logic was omitted in original file due to brevity, I'll keep it minimal or restore it if needed.
-      // Assuming this logic exists or is a placeholder in original.
-  };
-
-  const handleBulkDownload = async (ids: string[]) => {
-      // Logic for bulk download
-  };
-
   const handleDownload = (url: string | null) => {
       if (!url) return;
       const link = document.createElement('a');
@@ -665,19 +626,29 @@ const App = () => {
       document.body.removeChild(link);
   };
   
-  const handleCopyImage = async (itemOrUrl: Item | string) => {
-      // Logic for copy image
+  const handleCopyImage = async (url: string) => {
+      try {
+           const blob = await getBlobFromUrl(url);
+           await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+           addNotification('Gambar disalin ke clipboard', 'success');
+       } catch (e) {
+           addNotification('Gagal menyalin gambar', 'error');
+       }
   };
 
   const executeAction = async (action: string) => {
-      if (!contextMenu) return;
-      const item = contextMenu.targetItem;
-      const ids = selectedIds.size > 0 ? Array.from(selectedIds) : (item ? [item.id] : []);
-
-      setContextMenu(null);
-
-      if (action === 'new_folder') {
-          setModal({
+    // 1. Determine Target Items
+    // If contextMenu is open, use its target (for right-click specific actions).
+    // Otherwise, use selection (for floating menu actions).
+    const contextItem = contextMenu?.targetItem;
+    const ids = selectedIds.size > 0 ? Array.from(selectedIds) : (contextItem ? [contextItem.id] : []);
+    
+    // Close context menu immediately
+    setContextMenu(null);
+    
+    // 2. Handle Global Actions (No ID needed)
+    if (action === 'new_folder') {
+        setModal({
               type: 'input', title: 'Folder Baru', message: 'Masukkan nama folder:', inputValue: 'New Folder',
               onConfirm: async (name) => {
                   if (name) {
@@ -695,7 +666,56 @@ const App = () => {
                   }
               }
           });
-      } else if (action === 'rename') {
+        return;
+    }
+
+    if (action === 'empty_bin') {
+        setModal({
+            type: 'confirm', title: 'Kosongkan Sampah?', message: 'Semua item di Recycle Bin akan dihapus permanen.', confirmText: 'Kosongkan', isDanger: true,
+            onConfirm: async () => {
+                setModal(null);
+                const notifId = addNotification('Mengosongkan sampah...', 'loading');
+                try {
+                    // Get all items in bin
+                    const binItems = items.map(i => i.id);
+                    if (binItems.length === 0) { updateNotification(notifId, 'Sampah sudah kosong', 'success'); return; }
+                    await API.deleteItems(binItems);
+                    // Update map
+                    const foldersRemoved = items.filter(i => i.type === 'folder');
+                    if (foldersRemoved.length > 0) updateMap('remove', foldersRemoved.map(f => ({ id: f.id })));
+                    
+                    updateNotification(notifId, 'Sampah dikosongkan', 'success');
+                    loadFolder(currentFolderId);
+                } catch(e) { updateNotification(notifId, 'Gagal mengosongkan', 'error'); }
+            }
+        });
+        return;
+    }
+    if (action === 'restore_all') {
+         const allIds = items.map(i => i.id);
+         if (allIds.length === 0) return;
+         
+         const notifId = addNotification(`Mengembalikan ${allIds.length} item...`, 'loading');
+         try {
+             await Promise.all(allIds.map(async (id) => {
+                 const originalParent = await DB.getDeletedMeta(id) || "";
+                 const target = systemMapRef.current[originalParent] ? originalParent : "";
+                 await API.moveItems([id], target);
+                 await DB.removeDeletedMeta(id);
+                 const item = items.find(i => i.id === id);
+                 if (item && item.type === 'folder') updateMap('move', [{ id, parentId: target }]);
+             }));
+             updateNotification(notifId, 'Semua item dikembalikan', 'success');
+             loadFolder(currentFolderId);
+         } catch(e) { updateNotification(notifId, 'Gagal restore', 'error'); }
+         return;
+    }
+
+    // 3. Handle Item Actions
+    if (ids.length === 0) return;
+
+    switch (action) {
+        case 'rename': {
            const targetItem = items.find(i => i.id === ids[0]);
            if (targetItem) {
                setModal({
@@ -714,28 +734,144 @@ const App = () => {
                    }
                });
            }
-      } else if (action === 'delete') {
-          setModal({
-              type: 'confirm', title: 'Hapus Item?', message: `Yakin ingin menghapus ${ids.length} item?`, confirmText: 'Hapus', isDanger: true,
-              onConfirm: async () => {
-                  setModal(null);
-                  const notifId = addNotification(`Menghapus ${ids.length} item...`, 'loading');
-                  try {
-                      // Move to Recycle Bin logic (Move to trash folder)
-                      // Or simply move to recycleBinId if implemented as a move
-                      if (recycleBinId) {
-                         await API.moveItems(ids, recycleBinId);
-                         // Update Map if folders are deleted (moved to bin)
-                         const foldersDeleted = items.filter(i => ids.includes(i.id) && i.type === 'folder');
-                         if (foldersDeleted.length > 0) updateMap('move', foldersDeleted.map(f => ({ id: f.id, parentId: recycleBinId })));
-                      }
-                      updateNotification(notifId, 'Item dihapus', 'success');
-                      loadFolder(currentFolderId);
-                  } catch (e) { updateNotification(notifId, 'Gagal menghapus', 'error'); }
-              }
-          });
-      }
-      // ... other actions (restore, delete_permanent, etc.) would go here
+           break;
+        }
+        case 'delete': {
+            setModal({
+                type: 'confirm', title: 'Hapus Item?', message: `Pindahkan ${ids.length} item ke sampah?`, confirmText: 'Hapus', isDanger: true,
+                onConfirm: async () => {
+                    setModal(null);
+                    const notifId = addNotification(`Menghapus ${ids.length} item...`, 'loading');
+                    try {
+                        let binId = recycleBinId;
+                        if (!binId) binId = await getOrCreateRecycleBin();
+                        
+                        await API.moveItems(ids, binId);
+                        
+                        // Save Metadata for Restore
+                        await Promise.all(ids.map(async (id) => {
+                            await DB.saveDeletedMeta(id, currentFolderId);
+                        }));
+
+                        const foldersMoved = items.filter(i => ids.includes(i.id) && i.type === 'folder');
+                        if (foldersMoved.length > 0) updateMap('move', foldersMoved.map(f => ({ id: f.id, parentId: binId })));
+                        
+                        updateNotification(notifId, 'Item dipindahkan ke sampah', 'success');
+                        loadFolder(currentFolderId);
+                    } catch (e) { updateNotification(notifId, 'Gagal menghapus', 'error'); }
+                }
+            });
+            break;
+        }
+        case 'move': {
+            // Generate folder options from systemMap
+            const allFolders = Object.values(systemMapRef.current || {}).filter(f => f.id !== currentFolderId);
+            const validFolders = allFolders.filter(f => !ids.includes(f.id));
+            const options = [{ label: '🏠 Home', value: '' }, ...validFolders.map(f => ({ label: `📁 ${f.name}`, value: f.id }))];
+            
+            setModal({
+                type: 'select', title: 'Pindahkan ke...', options: options, confirmText: 'Pindahkan',
+                onConfirm: async (targetId) => {
+                    if (targetId === undefined) return;
+                    setModal(null);
+                    const notifId = addNotification(`Memindahkan ${ids.length} item...`, 'loading');
+                    try {
+                        await API.moveItems(ids, targetId);
+                        const foldersMoved = items.filter(i => ids.includes(i.id) && i.type === 'folder');
+                        if (foldersMoved.length > 0) updateMap('move', foldersMoved.map(f => ({ id: f.id, parentId: targetId })));
+                        updateNotification(notifId, 'Berhasil dipindahkan', 'success');
+                        loadFolder(currentFolderId);
+                    } catch(e) { updateNotification(notifId, 'Gagal memindahkan', 'error'); }
+                }
+            });
+            break;
+        }
+        case 'duplicate': {
+            const notifId = addNotification(`Menduplikasi ${ids.length} item...`, 'loading');
+            try {
+                await API.duplicateItems(ids);
+                updateNotification(notifId, 'Berhasil diduplikasi', 'success');
+                loadFolder(currentFolderId);
+            } catch (e) { updateNotification(notifId, 'Gagal duplikasi', 'error'); }
+            break;
+        }
+        case 'download': {
+            const notifId = addNotification('Menyiapkan download...', 'loading');
+            let successCount = 0;
+            for (const id of ids) {
+                const item = items.find(i => i.id === id);
+                if (item) {
+                   try {
+                       if (item.type === 'folder') continue; // Skip folders for now
+                       if (item.url) {
+                           handleDownload(item.url);
+                           successCount++;
+                       } else if (item.content || item.type === 'note') {
+                           // Fetch if content missing?
+                           let content = item.content;
+                           if (!content) content = await API.getFileContent(item.id);
+                           const blob = new Blob([content], { type: 'text/plain' });
+                           const url = URL.createObjectURL(blob);
+                           const a = document.createElement('a');
+                           a.href = url;
+                           a.download = item.name.endsWith('.txt') ? item.name : `${item.name}.txt`;
+                           document.body.appendChild(a);
+                           a.click();
+                           document.body.removeChild(a);
+                           URL.revokeObjectURL(url);
+                           successCount++;
+                       }
+                   } catch(e) { console.error(e); }
+                }
+            }
+            if (successCount > 0) updateNotification(notifId, `${successCount} file didownload`, 'success');
+            else updateNotification(notifId, 'Gagal download', 'error');
+            break;
+        }
+        case 'copy_image': {
+            if (ids.length === 1) {
+                const item = items.find(i => i.id === ids[0]);
+                if (item && item.url) {
+                   await handleCopyImage(item.url);
+                }
+            }
+            break;
+        }
+        case 'delete_permanent': {
+            setModal({
+                type: 'confirm', title: 'Hapus Permanen?', message: 'Item akan dihapus selamanya.', confirmText: 'Hapus Selamanya', isDanger: true,
+                onConfirm: async () => {
+                    setModal(null);
+                    const notifId = addNotification('Menghapus permanen...', 'loading');
+                    try {
+                        await API.deleteItems(ids);
+                        const foldersRemoved = items.filter(i => ids.includes(i.id) && i.type === 'folder');
+                        if (foldersRemoved.length > 0) updateMap('remove', foldersRemoved.map(f => ({ id: f.id })));
+                        await Promise.all(ids.map(id => DB.removeDeletedMeta(id)));
+                        updateNotification(notifId, 'Dihapus permanen', 'success');
+                        loadFolder(currentFolderId);
+                    } catch (e) { updateNotification(notifId, 'Gagal menghapus', 'error'); }
+                }
+            });
+            break;
+        }
+        case 'restore': {
+             const notifId = addNotification('Mengembalikan item...', 'loading');
+             try {
+                 await Promise.all(ids.map(async (id) => {
+                     const originalParent = await DB.getDeletedMeta(id) || "";
+                     const target = systemMapRef.current[originalParent] ? originalParent : "";
+                     await API.moveItems([id], target);
+                     await DB.removeDeletedMeta(id);
+                     const item = items.find(i => i.id === id);
+                     if (item && item.type === 'folder') updateMap('move', [{ id, parentId: target }]);
+                 }));
+                 updateNotification(notifId, 'Item dikembalikan', 'success');
+                 loadFolder(currentFolderId);
+             } catch (e) { updateNotification(notifId, 'Gagal restore', 'error'); }
+             break;
+        }
+    }
   };
 
   const handleUploadFiles = async (files: File[]) => {
@@ -777,7 +913,6 @@ const App = () => {
   return (
     <div className="min-h-screen bg-slate-950 text-slate-200 relative select-none" ref={containerRef} onContextMenu={(e) => handleContextMenu(e)} onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); if (e.dataTransfer && e.dataTransfer.types.includes("Files") && !e.dataTransfer.types.includes("text/item-id")) setIsDraggingFile(true); }} onDragLeave={() => setIsDraggingFile(false)} onDrop={handleDrop} onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp} onPointerCancel={handlePointerUp}>
       
-      {/* ... (Custom Drag Layer & Selection Box omitted - same as before) ... */}
       {customDragItem && customDragPos && (<div className="fixed z-[999] pointer-events-none p-4 rounded-xl border border-blue-500 bg-slate-800/90 shadow-2xl flex flex-col items-center gap-2 w-32 backdrop-blur-sm" style={{ left: customDragPos.x, top: customDragPos.y, transform: 'translate(-50%, -50%) rotate(5deg)' }}>{customDragItem.type === 'folder' ? <Folder size={32} className="text-blue-500"/> : customDragItem.type === 'note' ? <FileText size={32} className="text-yellow-500"/> : (customDragItem.thumbnail ? <img src={customDragItem.thumbnail} className="w-16 h-16 object-cover rounded"/> : <ImageIcon size={32} className="text-purple-500"/>)}<span className="text-[10px] font-bold text-slate-200 truncate w-full text-center">{selectedIds.size > 1 ? `${selectedIds.size} Items` : customDragItem.name}</span></div>)}
       {selectionBox && (<div className="fixed z-50 bg-blue-500/20 border border-blue-400 pointer-events-none" style={{ left: selectionBox.x, top: selectionBox.y, width: selectionBox.width, height: selectionBox.height }} />)}
       {isGlobalLoading && (<div className="fixed inset-0 z-[999] bg-black/70 backdrop-blur-sm flex flex-col items-center justify-center cursor-wait animate-in fade-in"><div className="relative"><Loader2 size={48} className="animate-spin text-blue-500 mb-4"/><div className="absolute inset-0 flex items-center justify-center"><Database size={20} className="text-blue-300 opacity-80" /></div></div><p className="text-white font-semibold text-lg animate-pulse">{globalLoadingMessage}</p></div>)}
@@ -850,10 +985,6 @@ const App = () => {
           </div>
       )}
 
-      {/* ... (Modals, Context Menus, Image Preview, Note Editor - same as before) ... */}
-      {/* ... (These are kept identical to preserve functionality but omitted here for brevity unless changes were requested) ... */}
-      {/* For completeness in XML output, I will include standard implementations of sub-components and modals */}
-      
       {contextMenu && ( <><div className="fixed inset-0 z-[99]" onClick={() => setContextMenu(null)} onContextMenu={(e) => { e.preventDefault(); setContextMenu(null); }}></div><div className="fixed z-[100] bg-slate-800 border border-slate-700 rounded-lg shadow-2xl py-1.5 min-w-[200px] animate-in fade-in zoom-in-95 duration-100 overflow-hidden" style={{ top: Math.min(contextMenu.y, window.innerHeight - 300), left: Math.min(contextMenu.x, window.innerWidth - 220) }}>{contextMenu.isRecycleBinBtn ? (<> <div className="px-3 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-700/50 mb-1">Recycle Bin Options</div><button onClick={() => executeAction('empty_bin')} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-400 hover:text-red-300 flex items-center gap-3 text-sm transition-colors"><Trash2 size={16}/> Empty Recycle Bin</button><button onClick={() => executeAction('restore_all')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><RotateCcw size={16} className="text-green-400"/> Restore All Items</button> </>) : contextMenu.targetItem ? (<> <div className="px-3 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-700/50 mb-1 truncate max-w-[200px]">{contextMenu.targetItem.name}</div>{(contextMenu.targetItem.id === recycleBinId || contextMenu.targetItem.id === systemFolderId || contextMenu.targetItem.name === SYSTEM_FOLDER_NAME) ? (<div className="px-3 py-2 text-xs text-slate-500 italic">System Folder (Protected)</div>) : (currentFolderId === recycleBinId ? (<> <button onClick={() => executeAction('restore')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><RotateCcw size={16} className="text-green-400"/> Restore</button><button onClick={() => executeAction('delete_permanent')} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-400 hover:text-red-300 flex items-center gap-3 text-sm transition-colors"><Ban size={16}/> Delete Permanently</button> </>) : isSystemFolder ? (<> <button onClick={() => executeAction('download')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Download size={16} className="text-slate-400"/> Download</button> {contextMenu.targetItem.type === 'image' && (<button onClick={() => executeAction('copy_image')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Image size={16} className="text-slate-400"/> Copy Image</button>)} <div className="px-3 py-2 text-xs text-amber-500/70 italic flex items-center gap-1"><Lock size={12}/> Read-Only</div> </>) : (<> <button onClick={() => executeAction('rename')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Edit size={16} className="text-slate-400"/> Rename</button><button onClick={() => executeAction('duplicate')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Copy size={16} className="text-slate-400"/> Copy</button><button onClick={() => executeAction('move')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Move size={16} className="text-slate-400"/> Move</button>{contextMenu.targetItem.type !== 'folder' && (<><button onClick={() => executeAction('download')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Download size={16} className="text-slate-400"/> Download</button>{contextMenu.targetItem.type === 'image' && (<button onClick={() => executeAction('copy_image')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Image size={16} className="text-slate-400"/> Copy Image</button>)}</>)}<div className="h-px bg-slate-700 my-1"/><button onClick={() => executeAction('delete')} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-400 hover:text-red-300 flex items-center gap-3 text-sm transition-colors"><Trash2 size={16}/> Delete</button></>))} </>) : (<> {currentFolderId === recycleBinId ? (<> <button onClick={() => executeAction('empty_bin')} className="w-full text-left px-3 py-2.5 hover:bg-red-500/10 text-red-400 hover:text-red-300 flex items-center gap-3 text-sm transition-colors"><Trash2 size={16}/> Empty Recycle Bin</button><button onClick={() => executeAction('restore_all')} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><RotateCcw size={16} className="text-green-400"/> Restore All Items</button><div className="h-px bg-slate-700 my-1"/><button onClick={() => { setContextMenu(null); loadFolder(currentFolderId); }} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Loader2 size={16} className="text-slate-400"/> Refresh</button> </>) : isSystemFolder ? (<> <div className="px-3 py-2.5 text-xs text-amber-500 flex items-center gap-2"><Lock size={14}/> System Folder Protected</div><div className="h-px bg-slate-700 my-1"/><button onClick={() => { setContextMenu(null); loadFolder(currentFolderId); }} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Loader2 size={16} className="text-slate-400"/> Refresh</button> </>) : (<> <button onClick={() => executeAction('new_folder')} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Folder size={16} className="text-blue-400"/> New Folder</button><button onClick={handleCreateNote} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><FileText size={16} className="text-yellow-400"/> New Note</button><label className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 cursor-pointer transition-colors"><Upload size={16} className="text-green-400"/> Upload File<input type="file" multiple className="hidden" onChange={(e) => { setContextMenu(null); if(e.target.files) handleUploadFiles(Array.from(e.target.files)); }} /></label><div className="h-px bg-slate-700 my-1"/><button onClick={() => { setContextMenu(null); loadFolder(currentFolderId); }} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Loader2 size={16} className="text-slate-400"/> Refresh</button> </>) } </>) }</div></>)}
       
       {viewingRawFile && (<div className="fixed inset-0 z-[200] flex items-center justify-center p-4"><div className="absolute inset-0 bg-black/80 backdrop-blur-sm animate-in fade-in" onClick={() => setViewingRawFile(null)} /><div className="relative w-full max-w-4xl h-[80vh] bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95"><div className="bg-slate-950 px-4 py-3 border-b border-slate-800 flex items-center justify-between"><div className="flex items-center gap-3"><FileJson size={20} className="text-blue-400" /><h3 className="text-sm font-bold text-slate-200">{viewingRawFile.title}</h3><span className="px-2 py-0.5 bg-slate-800 rounded text-[10px] text-slate-500 uppercase">Read Only</span></div><button onClick={() => setViewingRawFile(null)} className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors"><X size={20} /></button></div><div className="flex-1 overflow-auto p-4 bg-[#0d1117]"><pre className="text-xs md:text-sm font-mono text-slate-300 whitespace-pre-wrap break-all leading-relaxed">{viewingRawFile.content}</pre></div></div></div>)}
@@ -865,11 +996,101 @@ const App = () => {
 };
 
 // --- SUB COMPONENTS (KEEP SAME) ---
-const ItemOverlay = ({ status }: { status?: string }) => { if (!status || status === 'idle') return null; return ( <div className="absolute inset-0 bg-black/60 backdrop-blur-sm z-20 flex flex-col items-center justify-center rounded-xl animate-in fade-in"><Loader2 size={24} className="text-blue-400 animate-spin mb-1" /><span className="text-[10px] font-bold text-white uppercase tracking-wider">{status === 'deleting' ? 'Deleting...' : 'Restoring...'}</span></div> ); };
-const DragHandle = ({ item }: { item: Item }) => { return (<div className="absolute top-2 right-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity p-2 bg-slate-800/80 rounded-lg hover:bg-slate-700 cursor-grab active:cursor-grabbing text-slate-400 item-handle backdrop-blur-sm border border-slate-600/30 shadow-lg" draggable={true} onDragStart={(e) => { e.dataTransfer.setData("text/item-id", item.id); if (item.type === 'image') { /* */ } else if (item.type === 'note' && item.content) { e.dataTransfer.setData("text/plain", stripHtml(item.content)); } e.stopPropagation(); }}><GripVertical size={18} /></div>); };
-const FolderItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect, isRecycleBin, isSystem, isDropTarget }: any) => ( <div id={`item-${item.id}`} data-folder-id={item.id} data-item-id={item.id} draggable={false} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} style={{ touchAction: 'pan-y' }} className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col items-center gap-2 item-clickable select-none ${isDropTarget ? 'bg-blue-500/40 border-blue-400 scale-105 shadow-xl ring-2 ring-blue-400 z-30' : selected ? 'bg-blue-500/20 border-blue-500 shadow-md ring-1 ring-blue-500' : 'bg-slate-900 border-slate-800 hover:bg-slate-800 hover:border-slate-600'}`}> <ItemOverlay status={item.status} /> <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/></div> {!isRecycleBin && !isSystem && <DragHandle item={item} />} {isRecycleBin ? (<Trash2 size={48} className="text-red-500 fill-red-500/10 drop-shadow-md pointer-events-none" />) : isSystem ? (<div className="relative"><Folder size={48} className="text-slate-500 fill-slate-500/10 drop-shadow-md pointer-events-none" /><Lock size={16} className="absolute bottom-0 right-0 text-amber-400 bg-slate-900 rounded-full p-0.5 border border-slate-800" /></div>) : (<Folder size={48} className="text-blue-500 fill-blue-500/10 drop-shadow-md pointer-events-none" />)} <span className={`text-xs font-medium text-center truncate w-full px-1 ${isRecycleBin ? 'text-red-400' : isSystem ? 'text-slate-400' : 'text-slate-200'}`}>{item.name}</span> </div> );
-const NoteItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }: any) => { const isDBFile = item.name.includes(DB_FILENAME_BASE); const cleanText = stripHtml(item.content || item.snippet || "").slice(0, 150); return ( <div id={`item-${item.id}`} data-item-id={item.id} draggable={false} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} style={{ touchAction: 'pan-y' }} className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col gap-2 item-clickable select-none aspect-square shadow-lg hover:shadow-xl hover:-translate-y-1 hover:rotate-1 duration-200 ${selected ? 'bg-yellow-200 border-blue-500 ring-2 ring-blue-500 scale-[1.02] z-10' : isDBFile ? 'bg-slate-800 border-slate-700 hover:border-blue-500/50' : 'bg-[#fff9c4] border-transparent hover:border-yellow-300'}`}> <ItemOverlay status={item.status} /> <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><CheckSquare size={18} className={selected ? "text-blue-600 bg-white rounded shadow-sm" : "text-slate-600/50 hover:text-slate-900"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/></div> <DragHandle item={item} /> {isDBFile ? (<div className="flex-1 w-full flex flex-col items-center justify-center text-slate-400"><Database size={32} className="mb-2 text-blue-500" /><span className="text-xs font-mono font-bold text-center break-all">{item.name}</span></div>) : (<><div className="flex-1 w-full overflow-hidden flex flex-col"><h4 className="text-sm font-bold text-slate-900 mb-1.5 truncate border-b border-slate-800/10 pb-1">{item.name.replace('.txt', '')}</h4><p className="text-xs text-slate-800/90 leading-relaxed font-sans font-medium break-words whitespace-pre-wrap line-clamp-6">{cleanText || <span className="italic text-slate-500">Kosong...</span>}</p></div><div className="flex items-center justify-between w-full pt-2 mt-auto opacity-50"><FileText size={10} className="text-slate-600" /><span className="text-[9px] text-slate-600">{new Date(item.lastUpdated).toLocaleDateString()}</span></div></>)} </div> ); };
-const ImageItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }: any) => ( <div id={`item-${item.id}`} data-item-id={item.id} draggable={false} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} style={{ touchAction: 'pan-y' }} className={`group relative rounded-xl border transition-all cursor-pointer overflow-hidden aspect-square flex flex-col items-center justify-center bg-slate-950 item-clickable select-none ${selected ? 'border-blue-500 shadow-md ring-1 ring-blue-500' : 'border-slate-800 hover:border-slate-600'}`}> <ItemOverlay status={item.status} /> <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300 shadow-sm"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/></div> <DragHandle item={item} /> {item.thumbnail || item.url ? (<img src={item.thumbnail || item.url} alt={item.name} className="w-full h-full object-cover pointer-events-none" loading="lazy" referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.style.display = 'none'; e.currentTarget.parentElement?.classList.add('bg-slate-800'); }} />) : (<ImageIcon size={32} className="text-slate-600 pointer-events-none" />)} <div className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm p-1.5 truncate pointer-events-none"><span className="text-[10px] font-medium text-slate-200 block text-center truncate">{item.name}</span></div> </div> );
+
+interface ItemComponentProps {
+  item: Item;
+  selected?: boolean;
+  onClick: (e: React.MouseEvent, item: Item) => void;
+  onDoubleClick: (e: React.MouseEvent, item: Item) => void;
+  onContextMenu: (e: React.MouseEvent, item: Item) => void;
+  onToggleSelect: () => void;
+  isRecycleBin?: boolean;
+  isSystem?: boolean;
+  isDropTarget?: boolean;
+}
+
+const ItemOverlay = ({ status }: { status?: string }) => { 
+  if (!status || status === 'idle') return null; 
+  return ( 
+    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm z-20 flex flex-col items-center justify-center rounded-xl animate-in fade-in">
+      <Loader2 size={24} className="text-blue-400 animate-spin mb-1" />
+      <span className="text-[10px] font-bold text-white uppercase tracking-wider">{status === 'deleting' ? 'Deleting...' : 'Restoring...'}</span>
+    </div> 
+  ); 
+};
+
+const DragHandle = ({ item }: { item: Item }) => { 
+  return (
+    <div className="absolute top-2 right-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity p-2 bg-slate-800/80 rounded-lg hover:bg-slate-700 cursor-grab active:cursor-grabbing text-slate-400 item-handle backdrop-blur-sm border border-slate-600/30 shadow-lg" 
+      draggable={true} 
+      onDragStart={(e) => { 
+        e.dataTransfer.setData("text/item-id", item.id); 
+        if (item.type === 'image') { /* */ } 
+        else if (item.type === 'note' && item.content) { e.dataTransfer.setData("text/plain", stripHtml(item.content)); } 
+        e.stopPropagation(); 
+      }}
+    >
+      <GripVertical size={18} />
+    </div>
+  ); 
+};
+
+const FolderItem: React.FC<ItemComponentProps> = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect, isRecycleBin, isSystem, isDropTarget }) => ( 
+  <div id={`item-${item.id}`} data-folder-id={item.id} data-item-id={item.id} draggable={false} 
+    onClick={(e) => onClick(e, item)} 
+    onDoubleClick={(e) => onDoubleClick(e, item)} 
+    onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} 
+    style={{ touchAction: 'pan-y' }} 
+    className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col items-center gap-2 item-clickable select-none ${isDropTarget ? 'bg-blue-500/40 border-blue-400 scale-105 shadow-xl ring-2 ring-blue-400 z-30' : selected ? 'bg-blue-500/20 border-blue-500 shadow-md ring-1 ring-blue-500' : 'bg-slate-900 border-slate-800 hover:bg-slate-800 hover:border-slate-600'}`}
+  > 
+    <ItemOverlay status={item.status} /> 
+    <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+      <CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/>
+    </div> 
+    {!isRecycleBin && !isSystem && <DragHandle item={item} />} 
+    {isRecycleBin ? (<Trash2 size={48} className="text-red-500 fill-red-500/10 drop-shadow-md pointer-events-none" />) : isSystem ? (<div className="relative"><Folder size={48} className="text-slate-500 fill-slate-500/10 drop-shadow-md pointer-events-none" /><Lock size={16} className="absolute bottom-0 right-0 text-amber-400 bg-slate-900 rounded-full p-0.5 border border-slate-800" /></div>) : (<Folder size={48} className="text-blue-500 fill-blue-500/10 drop-shadow-md pointer-events-none" />)} 
+    <span className={`text-xs font-medium text-center truncate w-full px-1 ${isRecycleBin ? 'text-red-400' : isSystem ? 'text-slate-400' : 'text-slate-200'}`}>{item.name}</span> 
+  </div> 
+);
+
+const NoteItem: React.FC<ItemComponentProps> = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }) => { 
+  const isDBFile = item.name.includes(DB_FILENAME_BASE); 
+  const cleanText = stripHtml(item.content || item.snippet || "").slice(0, 150); 
+  return ( 
+    <div id={`item-${item.id}`} data-item-id={item.id} draggable={false} 
+      onClick={(e) => onClick(e, item)} 
+      onDoubleClick={(e) => onDoubleClick(e, item)} 
+      onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} 
+      style={{ touchAction: 'pan-y' }} 
+      className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col gap-2 item-clickable select-none aspect-square shadow-lg hover:shadow-xl hover:-translate-y-1 hover:rotate-1 duration-200 ${selected ? 'bg-yellow-200 border-blue-500 ring-2 ring-blue-500 scale-[1.02] z-10' : isDBFile ? 'bg-slate-800 border-slate-700 hover:border-blue-500/50' : 'bg-[#fff9c4] border-transparent hover:border-yellow-300'}`}
+    > 
+      <ItemOverlay status={item.status} /> 
+      <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+        <CheckSquare size={18} className={selected ? "text-blue-600 bg-white rounded shadow-sm" : "text-slate-600/50 hover:text-slate-900"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/>
+      </div> 
+      <DragHandle item={item} /> 
+      {isDBFile ? (<div className="flex-1 w-full flex flex-col items-center justify-center text-slate-400"><Database size={32} className="mb-2 text-blue-500" /><span className="text-xs font-mono font-bold text-center break-all">{item.name}</span></div>) : (<><div className="flex-1 w-full overflow-hidden flex flex-col"><h4 className="text-sm font-bold text-slate-900 mb-1.5 truncate border-b border-slate-800/10 pb-1">{item.name.replace('.txt', '')}</h4><p className="text-xs text-slate-800/90 leading-relaxed font-sans font-medium break-words whitespace-pre-wrap line-clamp-6">{cleanText || <span className="italic text-slate-500">Kosong...</span>}</p></div><div className="flex items-center justify-between w-full pt-2 mt-auto opacity-50"><FileText size={10} className="text-slate-600" /><span className="text-[9px] text-slate-600">{new Date(item.lastUpdated).toLocaleDateString()}</span></div></>)} 
+    </div> 
+  ); 
+};
+
+const ImageItem: React.FC<ItemComponentProps> = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }: ItemComponentProps) => ( 
+  <div id={`item-${item.id}`} data-item-id={item.id} draggable={false} 
+    onClick={(e) => onClick(e, item)} 
+    onDoubleClick={(e) => onDoubleClick(e, item)} 
+    onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} 
+    style={{ touchAction: 'pan-y' }} 
+    className={`group relative rounded-xl border transition-all cursor-pointer overflow-hidden aspect-square flex flex-col items-center justify-center bg-slate-950 item-clickable select-none ${selected ? 'border-blue-500 shadow-md ring-1 ring-blue-500' : 'border-slate-800 hover:border-slate-600'}`}
+  > 
+    <ItemOverlay status={item.status} /> 
+    <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
+      <CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300 shadow-sm"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/>
+    </div> 
+    <DragHandle item={item} /> 
+    {item.thumbnail || item.url ? (<img src={item.thumbnail || item.url} alt={item.name} className="w-full h-full object-cover pointer-events-none" loading="lazy" referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.style.display = 'none'; e.currentTarget.parentElement?.classList.add('bg-slate-800'); }} />) : (<ImageIcon size={32} className="text-slate-600 pointer-events-none" />)} 
+    <div className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm p-1.5 truncate pointer-events-none"><span className="text-[10px] font-medium text-slate-200 block text-center truncate">{item.name}</span></div> 
+  </div> 
+);
 
 // --- FLOATING MENU (SAME) ---
 const SelectionFloatingMenu = ({ selectedIds, items, onClear, onAction, containerRef, isInRecycleBin, recycleBinId, isSystemFolder, systemFolderId }: { selectedIds: Set<string>, items: Item[], onClear: () => void, onAction: (a: string) => void, containerRef: React.RefObject<HTMLDivElement>, isInRecycleBin: boolean, recycleBinId: string, isSystemFolder: boolean, systemFolderId: string | null }) => {
