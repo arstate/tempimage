@@ -1272,7 +1272,12 @@ const App = () => {
                     <X size={24}/>
                  </button>
             </div>
-            <img src={previewImage} className="max-w-full max-h-full object-contain rounded-lg shadow-2xl" onClick={(e) => e.stopPropagation()} referrerPolicy="no-referrer" crossOrigin="anonymous" />
+            <img 
+                src={previewImage} 
+                className="max-w-full max-h-full object-contain rounded-lg shadow-2xl" 
+                onClick={(e) => e.stopPropagation()} 
+                referrerPolicy="no-referrer"
+            />
         </div>
       )}
 
@@ -1497,7 +1502,10 @@ const ImageItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onTo
                 className="w-full h-full object-cover pointer-events-none" 
                 loading="lazy" 
                 referrerPolicy="no-referrer"
-                crossOrigin="anonymous"
+                onError={(e) => {
+                    e.currentTarget.style.display = 'none';
+                    e.currentTarget.parentElement?.classList.add('bg-slate-800');
+                }}
              />
         ) : (
              <ImageIcon size={32} className="text-slate-600 pointer-events-none" />
