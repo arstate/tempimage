@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { X, Save, Bold, Italic, Copy, Scissors, Trash2, Type, AlignLeft, AlertCircle } from 'lucide-react';
 import { StoredNote } from '../types';
 
@@ -12,7 +12,7 @@ interface TextEditorProps {
 interface SelectionMenuPos {
   x: number;
   y: number;
-  isFixed: boolean;
+  isFixedBottom: boolean;
 }
 
 export const TextEditor: React.FC<TextEditorProps> = ({ note, onSave, onClose }) => {
@@ -22,6 +22,7 @@ export const TextEditor: React.FC<TextEditorProps> = ({ note, onSave, onClose })
   const [selectionPos, setSelectionPos] = useState<SelectionMenuPos | null>(null);
   
   const editorRef = useRef<HTMLDivElement>(null);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
   const initialContentRef = useRef(note.content);
 
   // 1. Lock Background Scroll
@@ -41,7 +42,7 @@ export const TextEditor: React.FC<TextEditorProps> = ({ note, onSave, onClose })
   }, []);
 
   // --- SELECTION LOGIC ---
-  const handleSelectionChange = () => {
+  const handleSelectionChange = useCallback(() => {
     const selection = window.getSelection();
     
     if (!selection || selection.isCollapsed || !selection.toString().trim()) {
@@ -50,28 +51,48 @@ export const TextEditor: React.FC<TextEditorProps> = ({ note, onSave, onClose })
     }
 
     // Ensure selection is inside our editor
-    const range = selection.getRangeAt(0);
-    if (!editorRef.current?.contains(range.commonAncestorContainer)) {
+    try {
+      const range = selection.getRangeAt(0);
+      if (!editorRef.current?.contains(range.commonAncestorContainer)) {
+        setSelectionPos(null);
+        return;
+      }
+
+      const rect = range.getBoundingClientRect();
+      const viewportHeight = window.innerHeight;
+      
+      // Get container bounds to hide menu if selection scrolls out of view
+      const containerRect = scrollContainerRef.current?.getBoundingClientRect();
+      if (containerRect) {
+        // If selection is completely above or below the visible area of the scroll container
+        if (rect.bottom < containerRect.top || rect.top > containerRect.bottom) {
+          setSelectionPos(null);
+          return;
+        }
+      }
+
+      // Logic: If selection height > 40% of viewport, stick to bottom
+      if (rect.height > viewportHeight * 0.4) {
+        setSelectionPos({ x: 0, y: 0, isFixedBottom: true });
+      } else {
+        // Floating position (Above selection) using fixed coordinates
+        let topPos = rect.top - 55;
+        
+        // Ensure it doesn't go above the container/header
+        if (containerRect && topPos < containerRect.top) {
+           topPos = rect.bottom + 10; // Show below if no space above
+        }
+
+        setSelectionPos({
+          x: rect.left + rect.width / 2,
+          y: topPos,
+          isFixedBottom: false
+        });
+      }
+    } catch (e) {
       setSelectionPos(null);
-      return;
     }
-
-    const rect = range.getBoundingClientRect();
-    const viewportHeight = window.innerHeight;
-
-    // Logic: If selection height > 40% of viewport, stick to bottom
-    if (rect.height > viewportHeight * 0.4) {
-      setSelectionPos({ x: 0, y: 0, isFixed: true });
-    } else {
-      // Floating position (Above selection)
-      // Check if there is space above, else show below or fixed bottom
-      setSelectionPos({
-        x: rect.left + rect.width / 2,
-        y: rect.top - 55, // Distance above the text
-        isFixed: false
-      });
-    }
-  };
+  }, []);
 
   // Detect content changes
   const handleInput = () => {
@@ -93,7 +114,8 @@ export const TextEditor: React.FC<TextEditorProps> = ({ note, onSave, onClose })
     document.execCommand(command, false, value);
     editorRef.current?.focus();
     handleInput();
-    setSelectionPos(null); // Hide menu after action
+    // Re-calculate selection position after format as it might change layout
+    setTimeout(handleSelectionChange, 10);
   };
 
   // Specialized Selection Actions
@@ -191,9 +213,10 @@ export const TextEditor: React.FC<TextEditorProps> = ({ note, onSave, onClose })
 
         {/* Editor Area */}
         <div 
+          ref={scrollContainerRef}
           className="flex-1 bg-white overflow-y-auto cursor-text relative" 
           onClick={() => editorRef.current?.focus()}
-          onScroll={() => setSelectionPos(null)} // Hide on scroll to prevent misalignment
+          onScroll={handleSelectionChange}
         >
           <div 
             ref={editorRef}
@@ -209,13 +232,13 @@ export const TextEditor: React.FC<TextEditorProps> = ({ note, onSave, onClose })
           {/* --- SMART SELECTION TOOLBAR --- */}
           {selectionPos && (
             <div 
-              className={`z-[250] flex items-center gap-1 bg-slate-900/95 backdrop-blur-md border border-slate-700 p-1.5 rounded-full shadow-2xl animate-in fade-in zoom-in-95 duration-150 transition-all ${selectionPos.isFixed ? 'fixed bottom-8 left-1/2 -translate-x-1/2' : 'absolute'}`}
-              style={!selectionPos.isFixed ? { 
+              className={`fixed z-[250] flex items-center gap-1 bg-slate-900/95 backdrop-blur-md border border-slate-700 p-1.5 rounded-full shadow-2xl animate-in fade-in zoom-in-95 duration-150 transition-all ${selectionPos.isFixedBottom ? 'bottom-8 left-1/2 -translate-x-1/2' : ''}`}
+              style={!selectionPos.isFixedBottom ? { 
                 top: selectionPos.y, 
                 left: selectionPos.x, 
                 transform: 'translateX(-50%)' 
               } : {}}
-              onMouseDown={(e) => e.preventDefault()} // Prevent losing selection
+              onMouseDown={(e) => e.preventDefault()} // Prevent losing selection on click
             >
               <button onClick={() => executeSelectionAction('copy')} className="flex items-center gap-2 px-3 py-1.5 hover:bg-slate-800 rounded-full text-xs font-semibold text-slate-200 transition-colors">
                 <Copy size={14} className="text-blue-400" /> Copy
