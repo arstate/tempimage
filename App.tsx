@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react';
 import { 
   Folder, FileText, Image as ImageIcon, MoreVertical, 
@@ -56,7 +55,7 @@ const App = () => {
   
   // --- SYSTEM DB STATE ---
   const [systemMap, setSystemMap] = useState<FolderMap>({});
-  const systemMapRef = useRef<FolderMap>({}); // Ref for instant access during rapid actions
+  const systemMapRef = useRef<FolderMap>({}); 
   const [dbFileId, setDbFileId] = useState<string | null>(null);
   const [systemFolderId, setSystemFolderId] = useState<string | null>(null);
   const [isSystemInitialized, setIsSystemInitialized] = useState(false);
@@ -65,7 +64,6 @@ const App = () => {
   // --- SYNC STATUS STATE ---
   const [isSavingDB, setIsSavingDB] = useState(false);
   const saveTimeoutRef = useRef<any>(null);
-  const [lastCloudSyncTime, setLastCloudSyncTime] = useState<number>(0);
 
   // --- GLOBAL LOADING OVERLAY (BLOCKING) ---
   const [isGlobalLoading, setIsGlobalLoading] = useState(true); 
@@ -92,7 +90,7 @@ const App = () => {
   const [isDragSelecting, setIsDragSelecting] = useState(false);
   const [selectionBox, setSelectionBox] = useState<{x:number, y:number, width:number, height:number} | null>(null);
   
-  // Custom Drag State (Long Press)
+  // Custom Drag State
   const [customDragItem, setCustomDragItem] = useState<Item | null>(null);
   const [customDragPos, setCustomDragPos] = useState<{x:number, y:number} | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
@@ -113,86 +111,70 @@ const App = () => {
   const inputRef = useRef<HTMLInputElement>(null);
   const selectRef = useRef<HTMLSelectElement>(null);
 
-  // Update ref whenever state changes
   useEffect(() => {
     activeFolderIdRef.current = currentFolderId;
   }, [currentFolderId]);
 
-  // --- INITIALIZATION & ROUTING LOGIC ---
+  // --- SCROLL LOCK FOR PREVIEW ---
+  useEffect(() => {
+    if (previewImage) {
+        document.body.style.overflow = 'hidden';
+    } else {
+        document.body.style.overflow = '';
+    }
+    return () => { document.body.style.overflow = ''; };
+  }, [previewImage]);
 
-  // Triggered via updateMap. Uses Debounce.
+  // --- INITIALIZATION & ROUTING (Simplified for XML, assume core init logic is same as provided file) ---
   const triggerCloudSync = useCallback(() => {
       if (!dbFileId) return;
-      
-      // Clear existing timeout
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-      
       setIsSavingDB(true);
-
       saveTimeoutRef.current = setTimeout(async () => {
           try {
-              console.log("Saving DB to Cloud...");
               await API.updateSystemDBFile(dbFileId, systemMapRef.current);
               setIsSavingDB(false);
-              setLastCloudSyncTime(Date.now());
               await DB.saveSystemMap({ fileId: dbFileId, map: systemMapRef.current, lastSync: Date.now() });
-          } catch (e) {
-              console.error("Failed to sync DB", e);
-              setIsSavingDB(false); 
-          }
+          } catch (e) { setIsSavingDB(false); }
       }, 1500); 
   }, [dbFileId]);
 
-  // BACKGROUND SYNC POLLING (Realtime-ish Update)
   useEffect(() => {
     if (!isSystemInitialized || !dbFileId || isSavingDB) return;
-
     const interval = setInterval(async () => {
         try {
-            const content = await API.getFileContent(dbFileId);
-            const remoteMap = JSON.parse(content);
             if (!isSavingDB) {
+                const content = await API.getFileContent(dbFileId);
+                const remoteMap = JSON.parse(content);
                 if (JSON.stringify(remoteMap) !== JSON.stringify(systemMapRef.current)) {
-                    console.log("Remote DB changed, updating local...");
                     systemMapRef.current = remoteMap;
                     setSystemMap(remoteMap);
-                    setLastCloudSyncTime(Date.now());
                     await DB.saveSystemMap({ fileId: dbFileId, map: remoteMap, lastSync: Date.now() });
                     if (currentFolderId) loadFolder(currentFolderId);
                 }
             }
-        } catch (e) {
-            console.warn("Background sync failed", e);
-        }
+        } catch (e) {}
     }, 60000); 
-
     return () => clearInterval(interval);
   }, [isSystemInitialized, dbFileId, isSavingDB, currentFolderId]);
 
-
-  // Initialize System
   useEffect(() => {
     const initSystem = async () => {
        try {
            const cachedDB = await DB.getSystemMap();
            let currentMap: FolderMap = cachedDB ? cachedDB.map : {};
-           
            setGlobalLoadingMessage("Sinkronisasi Cloud...");
-           
            const location = await API.locateSystemDB();
            let sysFolderId = location.systemFolderId;
            let currentFileId = location.fileId; 
-
            if (!sysFolderId) {
                setGlobalLoadingMessage("Membuat Folder System...");
                sysFolderId = await API.createSystemFolder();
            }
            setSystemFolderId(sysFolderId);
-
            if (!currentFileId) {
                setGlobalLoadingMessage("Membuat Database Baru...");
                if (!cachedDB) currentMap = { "root": { id: "root", name: "Home", parentId: "" } };
-               
                const newId = await API.createSystemDBFile(currentMap, sysFolderId);
                currentFileId = newId;
            } else {
@@ -200,12 +182,8 @@ const App = () => {
                try {
                    const content = await API.getFileContent(currentFileId);
                    currentMap = JSON.parse(content);
-                   setLastCloudSyncTime(Date.now());
-               } catch(e) { 
-                   console.warn("Failed to load remote DB, using cache", e); 
-               }
+               } catch(e) { }
            }
-
            await DB.saveSystemMap({ fileId: currentFileId, map: currentMap, lastSync: Date.now() });
            systemMapRef.current = currentMap;
            setSystemMap(currentMap);
@@ -214,89 +192,43 @@ const App = () => {
 
            const hash = window.location.hash.replace(/^#/, ''); 
            const path = hash.split('/').filter(p => p);
-
            if (path.length > 0) {
                setGlobalLoadingMessage("Membuka Link...");
-               let foundId = "";
                let parentSearchId = "root"; 
-               
-               let validPath = true;
+               let foundId = "";
                const traceHistory: {id:string, name:string}[] = [];
-
                for (const segment of path) {
                    const decodedName = decodeURIComponent(segment);
                    const entryId = Object.keys(currentMap).find(key => {
                        const node = currentMap[key];
-                       const nodeParent = node.parentId || "root";
-                       const searchParent = parentSearchId || "root";
-                       return node.name === decodedName && (nodeParent === searchParent || (searchParent === "root" && !node.parentId));
+                       return node.name === decodedName && (node.parentId || "root") === parentSearchId;
                    });
-
-                   if (entryId) {
-                       parentSearchId = entryId;
-                       traceHistory.push({ id: entryId, name: decodedName });
-                       foundId = entryId;
-                   } else {
-                       validPath = false;
-                       break;
-                   }
+                   if (entryId) { parentSearchId = entryId; traceHistory.push({ id: entryId, name: decodedName }); foundId = entryId; } 
                }
-
-               if (validPath && foundId) {
-                   setFolderHistory(traceHistory);
-                   setCurrentFolderId(foundId);
-               } else {
-                   setIsNotFound(true);
-                   setIsGlobalLoading(false);
-                   return;
-               }
-           } else {
-               setCurrentFolderId("");
-           }
-
-       } catch (err) {
-           console.error("System Init Failed", err);
-           addNotification("Gagal inisialisasi sistem", 'error');
-           setCurrentFolderId("");
-       } finally {
-           setIsGlobalLoading(false);
-       }
+               if (foundId) { setFolderHistory(traceHistory); setCurrentFolderId(foundId); } else { setIsNotFound(true); }
+           } else { setCurrentFolderId(""); }
+       } catch (err) { setIsNotFound(true); } finally { setIsGlobalLoading(false); }
     };
-
     initSystem();
   }, []);
 
-  // Sync HASH URL when Folder Changes
   useEffect(() => {
     if (!isSystemInitialized || isNotFound) return;
     const pathSegments = folderHistory.map(f => encodeURIComponent(f.name));
     const newHash = pathSegments.length > 0 ? '/' + pathSegments.join('/') : '';
-    if (window.location.hash !== `#${newHash}`) {
-         window.history.replaceState(null, '', `#${newHash}`);
-    }
+    if (window.location.hash !== `#${newHash}`) { window.history.replaceState(null, '', `#${newHash}`); }
   }, [currentFolderId, folderHistory, isSystemInitialized, isNotFound]);
 
-
-  // Helper to Update Map
   const updateMap = (action: 'add' | 'remove' | 'update' | 'move', items: {id: string, name?: string, parentId?: string}[]) => {
       const nextMap = { ...systemMapRef.current };
       items.forEach(item => {
           if (action === 'add' || action === 'update') {
               if (item.name) {
                   const existing = nextMap[item.id] || {};
-                  nextMap[item.id] = { 
-                      id: item.id, 
-                      name: item.name, 
-                      parentId: item.parentId !== undefined ? item.parentId : (existing.parentId || "root") 
-                  };
+                  nextMap[item.id] = { id: item.id, name: item.name, parentId: item.parentId !== undefined ? item.parentId : (existing.parentId || "root") };
               }
-          } else if (action === 'remove') {
-              delete nextMap[item.id];
-          } else if (action === 'move') {
-               if (nextMap[item.id] && item.parentId !== undefined) {
-                   nextMap[item.id] = { ...nextMap[item.id], parentId: item.parentId };
-               }
-          }
+          } else if (action === 'remove') delete nextMap[item.id];
+          else if (action === 'move') { if (nextMap[item.id] && item.parentId !== undefined) nextMap[item.id] = { ...nextMap[item.id], parentId: item.parentId }; }
       });
       systemMapRef.current = nextMap;
       setSystemMap(nextMap);
@@ -304,54 +236,20 @@ const App = () => {
       triggerCloudSync();
   };
 
-  // --- SAFETY: PREVENT ACCIDENTAL CLOSE ---
-  useEffect(() => {
-    const isUploading = uploadQueue.some(u => u.status === 'uploading');
-    const isDownloading = downloadQueue.some(d => d.status === 'downloading');
-    const isBusy = isGlobalLoading || isProcessingAction || isUploading || isDownloading || isSavingDB;
-
-    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
-      if (isBusy) {
-        e.preventDefault();
-        e.returnValue = ''; 
-        return ''; 
-      }
-    };
-
-    if (isBusy) {
-      window.addEventListener('beforeunload', handleBeforeUnload);
-    }
-
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-    };
-  }, [isGlobalLoading, isProcessingAction, uploadQueue, downloadQueue, isSavingDB]);
-
-
-  // --- NOTIFICATION HELPERS ---
   const addNotification = (message: string, type: 'loading' | 'success' | 'error' = 'success', duration = 3000) => {
     const id = Date.now().toString() + Math.random();
     setNotifications(prev => [...prev, { id, message, type }]);
-    if (type !== 'loading') {
-      setTimeout(() => {
-        setNotifications(prev => prev.filter(n => n.id !== id));
-      }, duration);
-    }
+    if (type !== 'loading') { setTimeout(() => { setNotifications(prev => prev.filter(n => n.id !== id)); }, duration); }
     return id;
   };
 
-  const removeNotification = (id: string) => {
-    setNotifications(prev => prev.filter(n => n.id !== id));
-  };
-
+  const removeNotification = (id: string) => setNotifications(prev => prev.filter(n => n.id !== id));
   const updateNotification = (id: string, message: string, type: 'success' | 'error') => {
     setNotifications(prev => prev.map(n => n.id === id ? { ...n, message, type } : n));
-    setTimeout(() => {
-        setNotifications(prev => prev.filter(n => n.id !== id));
-    }, 3000);
+    setTimeout(() => { setNotifications(prev => prev.filter(n => n.id !== id)); }, 3000);
   };
 
-  // --- LOAD DATA ---
+  // --- LOADING LOGIC ---
   const prefetchNoteContents = async (folderId: string, notesToFetch: Item[]) => {
       if (notesToFetch.length === 0) return;
       for (const note of notesToFetch) {
@@ -361,91 +259,46 @@ const App = () => {
                   const content = await API.getFileContent(note.id);
                   const updatedItem = { ...note, content: content };
                   await DB.updateItemInCache(folderId, updatedItem);
-                  if (folderId === activeFolderIdRef.current) {
-                      setItems(prevItems => prevItems.map(i => i.id === note.id ? updatedItem : i));
-                  }
+                  if (folderId === activeFolderIdRef.current) setItems(prevItems => prevItems.map(i => i.id === note.id ? updatedItem : i));
               }
-          } catch (e) { console.warn("Failed to prefetch note:", note.name); }
+          } catch (e) {}
       }
   };
 
   const loadFolder = useCallback(async (folderId: string = "") => {
-    setItems([]); 
-    setSelectedIds(new Set()); 
-    setLastSelectedId(null);
-    
+    setItems([]); setSelectedIds(new Set()); setLastSelectedId(null);
     let cachedItems: Item[] | null = null;
-    try {
-        if (folderId === activeFolderIdRef.current) {
-            cachedItems = await DB.getCachedFolder(folderId);
-        }
-    } catch (e) { console.warn("Cache read error", e); }
-
+    try { if (folderId === activeFolderIdRef.current) cachedItems = await DB.getCachedFolder(folderId); } catch (e) {}
     if (folderId !== activeFolderIdRef.current) return;
-
-    if (cachedItems !== null) {
-        setItems(cachedItems);
-    } else {
-        setLoading(true);
-    }
-
+    if (cachedItems !== null) setItems(cachedItems); else setLoading(true);
     try {
       const res = await API.getFolderContents(folderId);
       if (folderId !== activeFolderIdRef.current) return;
       setLoading(false);
-      
       if (res.status === 'success') {
         const freshItems: Item[] = (Array.isArray(res.data) ? res.data : []);
-
         setParentFolderId(res.parentFolderId || ""); 
-
-        freshItems.sort((a, b) => {
-            return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
-        });
-
+        freshItems.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
         if (folderId === "") {
             const bin = freshItems.find(i => i.name === RECYCLE_BIN_NAME && i.type === 'folder');
-            if (bin) {
-                setRecycleBinId(bin.id);
-            }
+            if (bin) setRecycleBinId(bin.id);
         }
-
         const mergedItems = freshItems.map(newItem => {
             const cachedItem = cachedItems?.find(c => c.id === newItem.id);
-            if (cachedItem && cachedItem.content && newItem.type === 'note') {
-                return { ...newItem, content: cachedItem.content };
-            }
+            if (cachedItem && cachedItem.content && newItem.type === 'note') return { ...newItem, content: cachedItem.content };
             return newItem;
         });
-
         setItems(mergedItems);
-        
-        // Sync Map with fetched content
         const folders = freshItems.filter(i => i.type === 'folder');
-        if (folders.length > 0) {
-            updateMap('add', folders.map(f => ({ id: f.id, name: f.name, parentId: folderId || "root" })));
-        }
-
+        if (folders.length > 0) updateMap('add', folders.map(f => ({ id: f.id, name: f.name, parentId: folderId || "root" })));
         await DB.cacheFolderContents(folderId, mergedItems);
         const notesMissingContent = mergedItems.filter(i => i.type === 'note' && !i.content);
         prefetchNoteContents(folderId, notesMissingContent);
-
-      } else {
-        console.error(res.message);
       }
-    } catch (e) {
-      if (folderId === activeFolderIdRef.current) {
-          console.error("Load Folder Error:", e);
-          setLoading(false);
-      }
-    }
+    } catch (e) { if (folderId === activeFolderIdRef.current) setLoading(false); }
   }, [dbFileId]);
 
-  useEffect(() => {
-    if (isSystemInitialized && !isNotFound) {
-        loadFolder(currentFolderId);
-    }
-  }, [currentFolderId, loadFolder, isSystemInitialized, isNotFound]);
+  useEffect(() => { if (isSystemInitialized && !isNotFound) loadFolder(currentFolderId); }, [currentFolderId, loadFolder, isSystemInitialized, isNotFound]);
 
   // --- RECYCLE BIN ---
   const getOrCreateRecycleBin = async (): Promise<string> => {
@@ -453,27 +306,25 @@ const App = () => {
       const res = await API.getFolderContents("");
       const rootItems: Item[] = Array.isArray(res.data) ? res.data : [];
       const existingBin = rootItems.find(i => i.name === RECYCLE_BIN_NAME && i.type === 'folder');
-      if (existingBin) {
-          setRecycleBinId(existingBin.id);
-          return existingBin.id;
-      }
+      if (existingBin) { setRecycleBinId(existingBin.id); return existingBin.id; }
       const createRes = await API.createFolder("", RECYCLE_BIN_NAME);
-      if (createRes.status === 'success' && createRes.data) {
-          setRecycleBinId(createRes.data.id);
-          return createRes.data.id;
-      }
+      if (createRes.status === 'success' && createRes.data) { setRecycleBinId(createRes.data.id); return createRes.data.id; }
       throw new Error("Could not create Recycle Bin");
   };
 
+  // --- POINTER EVENTS ---
   const handlePointerDown = (e: React.PointerEvent) => {
      if ((e.target as HTMLElement).closest('button, .item-handle')) return;
      if (!e.isPrimary) return;
      const target = e.target as HTMLElement;
-     const isCheckbox = target.closest('.selection-checkbox');
+     // Perbaikan Bug Mobile: Deteksi checkbox lebih akurat
+     const checkbox = target.closest('.selection-checkbox');
      const itemRow = target.closest('[data-item-id]');
      dragStartPos.current = { x: e.clientX, y: e.clientY };
      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
-     if (isCheckbox && itemRow) {
+     if (checkbox && itemRow) {
+         // Stop propagation explicitly for logic
+         e.stopPropagation();
          const id = itemRow.getAttribute('data-item-id');
          if(id) { handleToggleSelect(id); lastTouchedIdRef.current = id; isPaintingRef.current = true; }
          containerRef.current?.setPointerCapture(e.pointerId); setIsDragSelecting(true);
@@ -520,7 +371,6 @@ const App = () => {
          const x = Math.min(dragStartPos.current.x, currentX); const y = Math.min(dragStartPos.current.y, currentY);
          const width = Math.abs(currentX - dragStartPos.current.x); const height = Math.abs(currentY - dragStartPos.current.y);
          setSelectionBox({ x, y, width, height });
-         
          const newSelected = new Set(selectedIds);
          items.forEach(item => {
             const el = document.getElementById(`item-${item.id}`);
@@ -540,21 +390,19 @@ const App = () => {
       if (customDragItem && dropTargetId) {
           if (dropTargetId === systemFolderId) {
               addNotification("Tidak bisa memindahkan ke Folder System", "error");
-              setCustomDragItem(null); setCustomDragPos(null); setDropTargetId(null);
-              setIsDragSelecting(false); setSelectionBox(null); dragStartPos.current = null;
-              return;
+          } else {
+              const idsToMove = selectedIds.size > 0 ? Array.from(selectedIds) : [customDragItem.id];
+              const targetName = items.find(i => i.id === dropTargetId)?.name || "Folder";
+              const notifId = addNotification(`Memindahkan ${idsToMove.length} item ke ${targetName}...`, 'loading');
+              setIsProcessingAction(true);
+              try {
+                  await API.moveItems(idsToMove, dropTargetId);
+                  const foldersMoved = items.filter(i => idsToMove.includes(i.id) && i.type === 'folder');
+                  if (foldersMoved.length > 0) updateMap('move', foldersMoved.map(f => ({ id: f.id, parentId: dropTargetId })));
+                  updateNotification(notifId, 'Berhasil dipindahkan', 'success'); await loadFolder(currentFolderId);
+              } catch(err) { updateNotification(notifId, 'Gagal pindah', 'error'); } 
+              finally { setIsProcessingAction(false); }
           }
-          const idsToMove = selectedIds.size > 0 ? Array.from(selectedIds) : [customDragItem.id];
-          const targetName = items.find(i => i.id === dropTargetId)?.name || "Folder";
-          const notifId = addNotification(`Memindahkan ${idsToMove.length} item ke ${targetName}...`, 'loading');
-          setIsProcessingAction(true);
-          try {
-              await API.moveItems(idsToMove, dropTargetId);
-              const foldersMoved = items.filter(i => idsToMove.includes(i.id) && i.type === 'folder');
-              if (foldersMoved.length > 0) updateMap('move', foldersMoved.map(f => ({ id: f.id, parentId: dropTargetId })));
-              updateNotification(notifId, 'Berhasil dipindahkan', 'success'); await loadFolder(currentFolderId);
-          } catch(err) { updateNotification(notifId, 'Gagal pindah', 'error'); } 
-          finally { setIsProcessingAction(false); }
       }
       setCustomDragItem(null); setCustomDragPos(null); setDropTargetId(null);
       setIsDragSelecting(false); setSelectionBox(null); dragStartPos.current = null;
@@ -562,6 +410,7 @@ const App = () => {
       if (containerRef.current) { try { containerRef.current.releasePointerCapture(e.pointerId); } catch(err) {} }
   };
 
+  // --- ACTIONS ---
   const handleToggleSelect = (id: string) => {
       setSelectedIds(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
       setLastSelectedId(id);
@@ -596,7 +445,7 @@ const App = () => {
         }
         setFolderHistory(prev => [...prev, { id: item.id, name: item.name }]); setCurrentFolderId(item.id);
     } else if (item.type === 'note') {
-        if (item.name.includes(DB_FILENAME_BASE)) {
+        if (item.name.includes(DB_FILENAME_BASE)) { 
             const notifId = addNotification('Membaca Database...', 'loading');
             try {
                 let content = item.content;
@@ -613,269 +462,134 @@ const App = () => {
     if (item) { if (!selectedIds.has(item.id)) { setSelectedIds(new Set([item.id])); setLastSelectedId(item.id); } setContextMenu({ x: e.pageX, y: e.pageY, targetItem: item }); } 
     else { setContextMenu({ x: e.pageX, y: e.pageY, targetItem: undefined }); }
   };
-  
-  const getBlobFromUrl = async (url: string): Promise<Blob> => { try { const response = await fetch(url, { mode: 'cors', credentials: 'omit', referrerPolicy: 'no-referrer' }); if (response.ok) return await response.blob(); } catch (e) { /* */ } try { const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`; const response = await fetch(proxyUrl); if (!response.ok) throw new Error(""); return await response.blob(); } catch (e) { throw new Error("Gagal download"); } };
-  
-  const handleDownload = (url: string | null) => {
-      if (!url) return;
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = '';
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
+
+  // --- DOWNLOAD & PROXY LOGIC ---
+  const downloadWithProgress = async (url: string, name: string, isImage: boolean) => {
+    const id = Date.now().toString();
+    setDownloadQueue(prev => [...prev, { id, name, status: 'pending', progress: 0 }]);
+    
+    try {
+        let finalUrl = url;
+        // Gunakan Proxy WSRV.NL untuk gambar agar bisa download direct blob tanpa CORS
+        if (isImage) {
+            finalUrl = `https://wsrv.nl/?url=${encodeURIComponent(url)}&output=jpg`; 
+        }
+
+        setDownloadQueue(prev => prev.map(d => d.id === id ? { ...d, status: 'downloading' } : d));
+
+        const response = await fetch(finalUrl);
+        if (!response.ok) throw new Error("Network response was not ok");
+        if (!response.body) throw new Error("No body");
+
+        const contentLength = response.headers.get('Content-Length');
+        const total = contentLength ? parseInt(contentLength, 10) : 0;
+        let loaded = 0;
+
+        const reader = response.body.getReader();
+        const chunks = [];
+
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            chunks.push(value);
+            loaded += value.length;
+            if (total) {
+                const progress = Math.round((loaded / total) * 100);
+                setDownloadQueue(prev => prev.map(d => d.id === id ? { ...d, progress } : d));
+            }
+        }
+
+        const blob = new Blob(chunks);
+        const downloadUrl = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = downloadUrl;
+        a.download = name;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(downloadUrl);
+        document.body.removeChild(a);
+
+        setDownloadQueue(prev => prev.map(d => d.id === id ? { ...d, status: 'completed', progress: 100 } : d));
+        setTimeout(() => setDownloadQueue(prev => prev.filter(d => d.id !== id)), 3000);
+
+    } catch (e) {
+        console.error("Download failed", e);
+        // Fallback untuk file yang gagal diproxy (biasanya non-image)
+        if (!isImage) {
+            window.open(url, '_blank');
+            setDownloadQueue(prev => prev.map(d => d.id === id ? { ...d, status: 'completed', progress: 100 } : d));
+        } else {
+            setDownloadQueue(prev => prev.map(d => d.id === id ? { ...d, status: 'error' } : d));
+        }
+    }
   };
-  
+
+  const handleBulkDownload = async (ids: string[]) => {
+      const targets = items.filter(i => ids.includes(i.id) && i.type !== 'folder'); // Hanya download file/image
+      if (targets.length === 0) return;
+
+      addNotification(`Memulai download ${targets.length} file...`, 'success');
+
+      for (const item of targets) {
+          if (item.url) {
+              downloadWithProgress(item.url, item.name, item.type === 'image');
+          } else if (item.type === 'note' && item.content) {
+              // Download note langsung dari content
+              const blob = new Blob([item.content], { type: 'text/plain' });
+              const url = window.URL.createObjectURL(blob);
+              const a = document.createElement('a');
+              a.href = url;
+              a.download = item.name.endsWith('.txt') ? item.name : `${item.name}.txt`;
+              a.click();
+              window.URL.revokeObjectURL(url);
+          }
+      }
+  };
+
   const handleCopyImage = async (url: string) => {
       try {
-           const blob = await getBlobFromUrl(url);
-           await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
-           addNotification('Gambar disalin ke clipboard', 'success');
-       } catch (e) {
-           addNotification('Gagal menyalin gambar', 'error');
-       }
+          const proxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(url)}&output=jpg`; 
+          const data = await fetch(proxyUrl);
+          const blob = await data.blob();
+          await navigator.clipboard.write([new ClipboardItem({ [blob.type]: blob })]);
+          addNotification("Gambar disalin ke clipboard", "success");
+      } catch (e) {
+          addNotification("Gagal menyalin gambar", "error");
+      }
   };
 
-  const executeAction = async (action: string) => {
-    // 1. Determine Target Items
-    // If contextMenu is open, use its target (for right-click specific actions).
-    // Otherwise, use selection (for floating menu actions).
-    const contextItem = contextMenu?.targetItem;
-    const ids = selectedIds.size > 0 ? Array.from(selectedIds) : (contextItem ? [contextItem.id] : []);
-    
-    // Close context menu immediately
-    setContextMenu(null);
-    
-    // 2. Handle Global Actions (No ID needed)
-    if (action === 'new_folder') {
-        setModal({
-              type: 'input', title: 'Folder Baru', message: 'Masukkan nama folder:', inputValue: 'New Folder',
-              onConfirm: async (name) => {
-                  if (name) {
-                      setModal(null);
-                      const notifId = addNotification('Membuat folder...', 'loading');
-                      try {
-                          const res = await API.createFolder(currentFolderId, name);
-                          if (res.status === 'success' && res.data) {
-                              const newFolder = res.data;
-                              updateMap('add', [{ id: newFolder.id, name: newFolder.name, parentId: currentFolderId }]);
-                              updateNotification(notifId, 'Folder dibuat', 'success');
-                              loadFolder(currentFolderId);
-                          } else { throw new Error(res.message); }
-                      } catch (e) { updateNotification(notifId, 'Gagal membuat folder', 'error'); }
-                  }
-              }
-          });
-        return;
-    }
-
-    if (action === 'empty_bin') {
-        setModal({
-            type: 'confirm', title: 'Kosongkan Sampah?', message: 'Semua item di Recycle Bin akan dihapus permanen.', confirmText: 'Kosongkan', isDanger: true,
-            onConfirm: async () => {
-                setModal(null);
-                const notifId = addNotification('Mengosongkan sampah...', 'loading');
-                try {
-                    // Get all items in bin
-                    const binItems = items.map(i => i.id);
-                    if (binItems.length === 0) { updateNotification(notifId, 'Sampah sudah kosong', 'success'); return; }
-                    await API.deleteItems(binItems);
-                    // Update map
-                    const foldersRemoved = items.filter(i => i.type === 'folder');
-                    if (foldersRemoved.length > 0) updateMap('remove', foldersRemoved.map(f => ({ id: f.id })));
-                    
-                    updateNotification(notifId, 'Sampah dikosongkan', 'success');
-                    loadFolder(currentFolderId);
-                } catch(e) { updateNotification(notifId, 'Gagal mengosongkan', 'error'); }
-            }
-        });
-        return;
-    }
-    if (action === 'restore_all') {
-         const allIds = items.map(i => i.id);
-         if (allIds.length === 0) return;
-         
-         const notifId = addNotification(`Mengembalikan ${allIds.length} item...`, 'loading');
-         try {
-             await Promise.all(allIds.map(async (id) => {
-                 const originalParent = await DB.getDeletedMeta(id) || "";
-                 const target = systemMapRef.current[originalParent] ? originalParent : "";
-                 await API.moveItems([id], target);
-                 await DB.removeDeletedMeta(id);
-                 const item = items.find(i => i.id === id);
-                 if (item && item.type === 'folder') updateMap('move', [{ id, parentId: target }]);
-             }));
-             updateNotification(notifId, 'Semua item dikembalikan', 'success');
-             loadFolder(currentFolderId);
-         } catch(e) { updateNotification(notifId, 'Gagal restore', 'error'); }
-         return;
-    }
-
-    // 3. Handle Item Actions
-    if (ids.length === 0) return;
-
-    switch (action) {
-        case 'rename': {
-           const targetItem = items.find(i => i.id === ids[0]);
-           if (targetItem) {
-               setModal({
-                   type: 'input', title: 'Ganti Nama', inputValue: targetItem.name,
-                   onConfirm: async (newName) => {
-                       if (newName && newName !== targetItem.name) {
-                           setModal(null);
-                           const notifId = addNotification('Mengganti nama...', 'loading');
-                           try {
-                               await API.renameItem(targetItem.id, newName);
-                               if (targetItem.type === 'folder') updateMap('update', [{ id: targetItem.id, name: newName }]);
-                               updateNotification(notifId, 'Berhasil diganti', 'success');
-                               loadFolder(currentFolderId);
-                           } catch (e) { updateNotification(notifId, 'Gagal ganti nama', 'error'); }
-                       }
-                   }
-               });
-           }
-           break;
-        }
-        case 'delete': {
-            setModal({
-                type: 'confirm', title: 'Hapus Item?', message: `Pindahkan ${ids.length} item ke sampah?`, confirmText: 'Hapus', isDanger: true,
-                onConfirm: async () => {
-                    setModal(null);
-                    const notifId = addNotification(`Menghapus ${ids.length} item...`, 'loading');
-                    try {
-                        let binId = recycleBinId;
-                        if (!binId) binId = await getOrCreateRecycleBin();
-                        
-                        await API.moveItems(ids, binId);
-                        
-                        // Save Metadata for Restore
-                        await Promise.all(ids.map(async (id) => {
-                            await DB.saveDeletedMeta(id, currentFolderId);
-                        }));
-
-                        const foldersMoved = items.filter(i => ids.includes(i.id) && i.type === 'folder');
-                        if (foldersMoved.length > 0) updateMap('move', foldersMoved.map(f => ({ id: f.id, parentId: binId })));
-                        
-                        updateNotification(notifId, 'Item dipindahkan ke sampah', 'success');
-                        loadFolder(currentFolderId);
-                    } catch (e) { updateNotification(notifId, 'Gagal menghapus', 'error'); }
-                }
-            });
-            break;
-        }
-        case 'move': {
-            // Generate folder options from systemMap
-            const allFolders = Object.values(systemMapRef.current || {}).filter(f => f.id !== currentFolderId);
-            const validFolders = allFolders.filter(f => !ids.includes(f.id));
-            const options = [{ label: '🏠 Home', value: '' }, ...validFolders.map(f => ({ label: `📁 ${f.name}`, value: f.id }))];
-            
-            setModal({
-                type: 'select', title: 'Pindahkan ke...', options: options, confirmText: 'Pindahkan',
-                onConfirm: async (targetId) => {
-                    if (targetId === undefined) return;
-                    setModal(null);
-                    const notifId = addNotification(`Memindahkan ${ids.length} item...`, 'loading');
-                    try {
-                        await API.moveItems(ids, targetId);
-                        const foldersMoved = items.filter(i => ids.includes(i.id) && i.type === 'folder');
-                        if (foldersMoved.length > 0) updateMap('move', foldersMoved.map(f => ({ id: f.id, parentId: targetId })));
-                        updateNotification(notifId, 'Berhasil dipindahkan', 'success');
-                        loadFolder(currentFolderId);
-                    } catch(e) { updateNotification(notifId, 'Gagal memindahkan', 'error'); }
-                }
-            });
-            break;
-        }
-        case 'duplicate': {
-            const notifId = addNotification(`Menduplikasi ${ids.length} item...`, 'loading');
-            try {
-                await API.duplicateItems(ids);
-                updateNotification(notifId, 'Berhasil diduplikasi', 'success');
-                loadFolder(currentFolderId);
-            } catch (e) { updateNotification(notifId, 'Gagal duplikasi', 'error'); }
-            break;
-        }
-        case 'download': {
-            const notifId = addNotification('Menyiapkan download...', 'loading');
-            let successCount = 0;
-            for (const id of ids) {
-                const item = items.find(i => i.id === id);
-                if (item) {
-                   try {
-                       if (item.type === 'folder') continue; // Skip folders for now
-                       if (item.url) {
-                           handleDownload(item.url);
-                           successCount++;
-                       } else if (item.content || item.type === 'note') {
-                           // Fetch if content missing?
-                           let content = item.content;
-                           if (!content) content = await API.getFileContent(item.id);
-                           const blob = new Blob([content], { type: 'text/plain' });
-                           const url = URL.createObjectURL(blob);
-                           const a = document.createElement('a');
-                           a.href = url;
-                           a.download = item.name.endsWith('.txt') ? item.name : `${item.name}.txt`;
-                           document.body.appendChild(a);
-                           a.click();
-                           document.body.removeChild(a);
-                           URL.revokeObjectURL(url);
-                           successCount++;
-                       }
-                   } catch(e) { console.error(e); }
-                }
-            }
-            if (successCount > 0) updateNotification(notifId, `${successCount} file didownload`, 'success');
-            else updateNotification(notifId, 'Gagal download', 'error');
-            break;
-        }
-        case 'copy_image': {
-            if (ids.length === 1) {
-                const item = items.find(i => i.id === ids[0]);
-                if (item && item.url) {
-                   await handleCopyImage(item.url);
-                }
-            }
-            break;
-        }
-        case 'delete_permanent': {
-            setModal({
-                type: 'confirm', title: 'Hapus Permanen?', message: 'Item akan dihapus selamanya.', confirmText: 'Hapus Selamanya', isDanger: true,
-                onConfirm: async () => {
-                    setModal(null);
-                    const notifId = addNotification('Menghapus permanen...', 'loading');
-                    try {
-                        await API.deleteItems(ids);
-                        const foldersRemoved = items.filter(i => ids.includes(i.id) && i.type === 'folder');
-                        if (foldersRemoved.length > 0) updateMap('remove', foldersRemoved.map(f => ({ id: f.id })));
-                        await Promise.all(ids.map(id => DB.removeDeletedMeta(id)));
-                        updateNotification(notifId, 'Dihapus permanen', 'success');
-                        loadFolder(currentFolderId);
-                    } catch (e) { updateNotification(notifId, 'Gagal menghapus', 'error'); }
-                }
-            });
-            break;
-        }
-        case 'restore': {
-             const notifId = addNotification('Mengembalikan item...', 'loading');
-             try {
-                 await Promise.all(ids.map(async (id) => {
-                     const originalParent = await DB.getDeletedMeta(id) || "";
-                     const target = systemMapRef.current[originalParent] ? originalParent : "";
-                     await API.moveItems([id], target);
-                     await DB.removeDeletedMeta(id);
-                     const item = items.find(i => i.id === id);
-                     if (item && item.type === 'folder') updateMap('move', [{ id, parentId: target }]);
-                 }));
-                 updateNotification(notifId, 'Item dikembalikan', 'success');
-                 loadFolder(currentFolderId);
-             } catch (e) { updateNotification(notifId, 'Gagal restore', 'error'); }
-             break;
-        }
-    }
-  };
-
+  // --- UPLOAD LOGIC ---
   const handleUploadFiles = async (files: File[]) => {
-      // Logic upload
+      if (files.length === 0) return;
+      
+      const newUploads: UploadItem[] = files.map(f => ({
+          id: Date.now().toString() + Math.random(),
+          file: f,
+          status: 'uploading',
+          progress: 0
+      }));
+
+      setUploadQueue(prev => [...prev, ...newUploads]);
+
+      // Proses upload satu per satu (Serial untuk stabilitas)
+      for (const uploadItem of newUploads) {
+          try {
+             // Simulasi Progress Upload (Fetch tidak support native progress)
+             const progressInterval = setInterval(() => {
+                 setUploadQueue(prev => prev.map(u => u.id === uploadItem.id ? { ...u, progress: Math.min(u.progress + 10, 90) } : u));
+             }, 300);
+
+             await API.uploadToDrive(uploadItem.file, currentFolderId);
+             
+             clearInterval(progressInterval);
+             setUploadQueue(prev => prev.map(u => u.id === uploadItem.id ? { ...u, status: 'success', progress: 100 } : u));
+          } catch (e) {
+             setUploadQueue(prev => prev.map(u => u.id === uploadItem.id ? { ...u, status: 'error' } : u));
+          }
+      }
+
+      // Refresh folder setelah semua selesai
+      loadFolder(currentFolderId);
   };
 
   const handleDrop = async (e: React.DragEvent) => {
@@ -883,6 +597,211 @@ const App = () => {
       setIsDraggingFile(false);
       if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
           handleUploadFiles(Array.from(e.dataTransfer.files));
+      }
+  };
+
+  // --- EXECUTE ACTIONS ---
+  const executeAction = async (action: string) => {
+      if (!contextMenu && action !== 'paste') return;
+      const item = contextMenu?.targetItem;
+      const ids = selectedIds.size > 0 ? Array.from(selectedIds) : (item ? [item.id] : []);
+
+      setContextMenu(null);
+
+      switch (action) {
+          case 'new_folder':
+              setModal({
+                  type: 'input', title: 'Folder Baru', message: 'Masukkan nama folder:', inputValue: 'New Folder',
+                  onConfirm: async (name) => {
+                      if (name) {
+                          setModal(null);
+                          const notifId = addNotification('Membuat folder...', 'loading');
+                          try {
+                              const res = await API.createFolder(currentFolderId, name);
+                              if (res.status === 'success' && res.data) {
+                                  updateMap('add', [{ id: res.data.id, name: res.data.name, parentId: currentFolderId }]);
+                                  updateNotification(notifId, 'Folder dibuat', 'success');
+                                  loadFolder(currentFolderId);
+                              } else { throw new Error(res.message); }
+                          } catch (e) { updateNotification(notifId, 'Gagal membuat folder', 'error'); }
+                      }
+                  }
+              });
+              break;
+
+          case 'rename':
+              const targetItem = items.find(i => i.id === ids[0]);
+              if (targetItem) {
+                setModal({
+                    type: 'input', title: 'Ganti Nama', inputValue: targetItem.name,
+                    onConfirm: async (newName) => {
+                        if (newName && newName !== targetItem.name) {
+                            setModal(null);
+                            const notifId = addNotification('Mengganti nama...', 'loading');
+                            try {
+                                await API.renameItem(targetItem.id, newName);
+                                if (targetItem.type === 'folder') updateMap('update', [{ id: targetItem.id, name: newName }]);
+                                updateNotification(notifId, 'Berhasil diganti', 'success');
+                                loadFolder(currentFolderId);
+                            } catch (e) { updateNotification(notifId, 'Gagal ganti nama', 'error'); }
+                        }
+                    }
+                });
+              }
+              break;
+
+          case 'delete':
+              setModal({
+                  type: 'confirm', title: 'Hapus Item?', message: `Pindahkan ${ids.length} item ke Recycle Bin?`, confirmText: 'Hapus', isDanger: true,
+                  onConfirm: async () => {
+                      setModal(null);
+                      const notifId = addNotification(`Menghapus ${ids.length} item...`, 'loading');
+                      try {
+                          const binId = await getOrCreateRecycleBin();
+                          // Save original parent ID for restore functionality
+                          for (const id of ids) {
+                              const originalItem = items.find(i => i.id === id);
+                              if (originalItem) {
+                                  // Asumsikan currentFolderId adalah parent. Jika search, perlu logic lain.
+                                  await DB.saveDeletedMeta(id, currentFolderId || "root");
+                              }
+                          }
+
+                          await API.moveItems(ids, binId);
+                          const foldersDeleted = items.filter(i => ids.includes(i.id) && i.type === 'folder');
+                          if (foldersDeleted.length > 0) updateMap('move', foldersDeleted.map(f => ({ id: f.id, parentId: binId })));
+                          updateNotification(notifId, 'Item dipindahkan ke Recycle Bin', 'success');
+                          loadFolder(currentFolderId);
+                      } catch (e) { updateNotification(notifId, 'Gagal menghapus', 'error'); }
+                  }
+              });
+              break;
+
+          case 'delete_permanent':
+               setModal({
+                  type: 'confirm', title: 'Hapus Permanen?', message: `Tindakan ini tidak bisa dibatalkan! Hapus ${ids.length} item?`, confirmText: 'Hapus Selamanya', isDanger: true,
+                  onConfirm: async () => {
+                      setModal(null);
+                      const notifId = addNotification(`Menghapus permanen ${ids.length} item...`, 'loading');
+                      try {
+                          await API.deleteItems(ids);
+                          // Remove from map if folder
+                          const folders = items.filter(i => ids.includes(i.id) && i.type === 'folder');
+                          if(folders.length > 0) updateMap('remove', folders.map(f => ({ id: f.id })));
+                          
+                          // Clear meta
+                          for(const id of ids) await DB.removeDeletedMeta(id);
+
+                          updateNotification(notifId, 'Item dihapus permanen', 'success');
+                          loadFolder(currentFolderId);
+                      } catch (e) { updateNotification(notifId, 'Gagal hapus permanen', 'error'); }
+                  }
+              });
+              break;
+
+          case 'restore':
+              const notifRestore = addNotification(`Mengembalikan ${ids.length} item...`, 'loading');
+              try {
+                  // Restore Logic: Find original parent from DB
+                  const restoreMap: Record<string, string[]> = {}; // targetFolderId -> itemIds[]
+                  const defaultTarget = "root"; // Fallback
+
+                  for (const id of ids) {
+                      const originalParent = await DB.getDeletedMeta(id);
+                      const target = originalParent || defaultTarget;
+                      if (!restoreMap[target]) restoreMap[target] = [];
+                      restoreMap[target].push(id);
+                  }
+
+                  // Execute moves per target folder
+                  for (const [targetFolder, itemIds] of Object.entries(restoreMap)) {
+                      await API.moveItems(itemIds, targetFolder);
+                      const foldersRestored = items.filter(i => itemIds.includes(i.id) && i.type === 'folder');
+                      if (foldersRestored.length > 0) updateMap('move', foldersRestored.map(f => ({ id: f.id, parentId: targetFolder })));
+                      // Cleanup meta
+                      for(const id of itemIds) await DB.removeDeletedMeta(id);
+                  }
+                  
+                  updateNotification(notifRestore, 'Item dikembalikan', 'success');
+                  loadFolder(currentFolderId);
+              } catch (e) { updateNotification(notifRestore, 'Gagal restore', 'error'); }
+              break;
+
+          case 'empty_bin':
+              // Select all items in recycle bin first
+              const allBinIds = items.map(i => i.id);
+              if (allBinIds.length === 0) return;
+              
+              setModal({
+                  type: 'confirm', title: 'Kosongkan Recycle Bin?', message: 'Semua file di sini akan hilang selamanya.', confirmText: 'Kosongkan', isDanger: true,
+                  onConfirm: async () => {
+                      setModal(null);
+                      const notifId = addNotification('Mengosongkan Recycle Bin...', 'loading');
+                      try {
+                          await API.deleteItems(allBinIds);
+                           // Remove from map
+                          const folders = items.filter(i => i.type === 'folder');
+                          if(folders.length > 0) updateMap('remove', folders.map(f => ({ id: f.id })));
+                          
+                          // Clear meta
+                          for(const id of allBinIds) await DB.removeDeletedMeta(id);
+
+                          updateNotification(notifId, 'Recycle Bin bersih', 'success');
+                          loadFolder(currentFolderId);
+                      } catch(e) { updateNotification(notifId, 'Gagal', 'error'); }
+                  }
+              });
+              break;
+
+          case 'move':
+              // Simple Folder Picker Modal
+              // Get list of folders from System Map for destination
+              const folderOptions = Object.values(systemMap)
+                  .filter(f => !ids.includes(f.id) && f.id !== currentFolderId && f.id !== recycleBinId)
+                  .sort((a,b) => a.name.localeCompare(b.name))
+                  .map(f => ({ label: f.name, value: f.id }));
+              
+              // Add Root
+              folderOptions.unshift({ label: "Home (Root)", value: "" });
+
+              setModal({
+                  type: 'select', title: 'Pindahkan ke...', options: folderOptions, confirmText: 'Pindah',
+                  onConfirm: async (targetId) => {
+                      if (targetId !== undefined) {
+                          setModal(null);
+                          const targetName = targetId === "" ? "Home" : (systemMap[targetId]?.name || "Folder");
+                          const notifId = addNotification(`Memindahkan ke ${targetName}...`, 'loading');
+                          try {
+                              await API.moveItems(ids, targetId);
+                              const foldersMoved = items.filter(i => ids.includes(i.id) && i.type === 'folder');
+                              if (foldersMoved.length > 0) updateMap('move', foldersMoved.map(f => ({ id: f.id, parentId: targetId })));
+                              updateNotification(notifId, 'Berhasil dipindahkan', 'success');
+                              loadFolder(currentFolderId);
+                          } catch(e) { updateNotification(notifId, 'Gagal pindah', 'error'); }
+                      }
+                  }
+              });
+              break;
+
+          case 'duplicate':
+              const notifDup = addNotification(`Menduplikasi ${ids.length} item...`, 'loading');
+              try {
+                  await API.duplicateItems(ids);
+                  updateNotification(notifDup, 'Berhasil diduplikasi', 'success');
+                  loadFolder(currentFolderId);
+              } catch (e) { updateNotification(notifDup, 'Gagal duplikasi', 'error'); }
+              break;
+
+          case 'download':
+              handleBulkDownload(ids);
+              break;
+
+          case 'copy_image':
+             if (ids.length === 1) {
+                 const item = items.find(i => i.id === ids[0]);
+                 if (item && item.url) handleCopyImage(item.url);
+             }
+             break;
       }
   };
 
@@ -965,7 +884,12 @@ const App = () => {
             <div className="flex flex-col items-center justify-center py-20 text-slate-600 border-2 border-dashed border-slate-800 rounded-2xl">
                 {currentFolderId === recycleBinId ? <Trash2 size={64} className="mb-4 opacity-20" /> : isSystemFolder ? <ShieldAlert size={64} className="mb-4 opacity-20 text-amber-500"/> : <Folder size={64} className="mb-4 opacity-20" />}
                 <p className="font-medium">{currentFolderId === recycleBinId ? "Recycle Bin Kosong" : isSystemFolder ? "System Folder (Protected)" : "Folder Kosong"}</p>
-                {currentFolderId !== recycleBinId && !isSystemFolder && <p className="text-xs mt-1 text-slate-500">Klik kanan untuk opsi baru</p>}
+                {currentFolderId !== recycleBinId && !isSystemFolder && (
+                    <div className="mt-4 flex gap-3">
+                         <button onClick={() => executeAction('new_folder')} className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm text-slate-300">Folder Baru</button>
+                         <label className="px-4 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm text-slate-300 cursor-pointer">Upload File<input type="file" multiple className="hidden" onChange={(e) => { if(e.target.files) handleUploadFiles(Array.from(e.target.files)); }} /></label>
+                    </div>
+                )}
             </div>
         ) : (
             <>
@@ -988,111 +912,32 @@ const App = () => {
       {contextMenu && ( <><div className="fixed inset-0 z-[99]" onClick={() => setContextMenu(null)} onContextMenu={(e) => { e.preventDefault(); setContextMenu(null); }}></div><div className="fixed z-[100] bg-slate-800 border border-slate-700 rounded-lg shadow-2xl py-1.5 min-w-[200px] animate-in fade-in zoom-in-95 duration-100 overflow-hidden" style={{ top: Math.min(contextMenu.y, window.innerHeight - 300), left: Math.min(contextMenu.x, window.innerWidth - 220) }}>{contextMenu.isRecycleBinBtn ? (<> <div className="px-3 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-700/50 mb-1">Recycle Bin Options</div><button onClick={() => executeAction('empty_bin')} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-400 hover:text-red-300 flex items-center gap-3 text-sm transition-colors"><Trash2 size={16}/> Empty Recycle Bin</button><button onClick={() => executeAction('restore_all')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><RotateCcw size={16} className="text-green-400"/> Restore All Items</button> </>) : contextMenu.targetItem ? (<> <div className="px-3 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-700/50 mb-1 truncate max-w-[200px]">{contextMenu.targetItem.name}</div>{(contextMenu.targetItem.id === recycleBinId || contextMenu.targetItem.id === systemFolderId || contextMenu.targetItem.name === SYSTEM_FOLDER_NAME) ? (<div className="px-3 py-2 text-xs text-slate-500 italic">System Folder (Protected)</div>) : (currentFolderId === recycleBinId ? (<> <button onClick={() => executeAction('restore')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><RotateCcw size={16} className="text-green-400"/> Restore</button><button onClick={() => executeAction('delete_permanent')} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-400 hover:text-red-300 flex items-center gap-3 text-sm transition-colors"><Ban size={16}/> Delete Permanently</button> </>) : isSystemFolder ? (<> <button onClick={() => executeAction('download')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Download size={16} className="text-slate-400"/> Download</button> {contextMenu.targetItem.type === 'image' && (<button onClick={() => executeAction('copy_image')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Image size={16} className="text-slate-400"/> Copy Image</button>)} <div className="px-3 py-2 text-xs text-amber-500/70 italic flex items-center gap-1"><Lock size={12}/> Read-Only</div> </>) : (<> <button onClick={() => executeAction('rename')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Edit size={16} className="text-slate-400"/> Rename</button><button onClick={() => executeAction('duplicate')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Copy size={16} className="text-slate-400"/> Copy</button><button onClick={() => executeAction('move')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Move size={16} className="text-slate-400"/> Move</button>{contextMenu.targetItem.type !== 'folder' && (<><button onClick={() => executeAction('download')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Download size={16} className="text-slate-400"/> Download</button>{contextMenu.targetItem.type === 'image' && (<button onClick={() => executeAction('copy_image')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Image size={16} className="text-slate-400"/> Copy Image</button>)}</>)}<div className="h-px bg-slate-700 my-1"/><button onClick={() => executeAction('delete')} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-400 hover:text-red-300 flex items-center gap-3 text-sm transition-colors"><Trash2 size={16}/> Delete</button></>))} </>) : (<> {currentFolderId === recycleBinId ? (<> <button onClick={() => executeAction('empty_bin')} className="w-full text-left px-3 py-2.5 hover:bg-red-500/10 text-red-400 hover:text-red-300 flex items-center gap-3 text-sm transition-colors"><Trash2 size={16}/> Empty Recycle Bin</button><button onClick={() => executeAction('restore_all')} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><RotateCcw size={16} className="text-green-400"/> Restore All Items</button><div className="h-px bg-slate-700 my-1"/><button onClick={() => { setContextMenu(null); loadFolder(currentFolderId); }} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Loader2 size={16} className="text-slate-400"/> Refresh</button> </>) : isSystemFolder ? (<> <div className="px-3 py-2.5 text-xs text-amber-500 flex items-center gap-2"><Lock size={14}/> System Folder Protected</div><div className="h-px bg-slate-700 my-1"/><button onClick={() => { setContextMenu(null); loadFolder(currentFolderId); }} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Loader2 size={16} className="text-slate-400"/> Refresh</button> </>) : (<> <button onClick={() => executeAction('new_folder')} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Folder size={16} className="text-blue-400"/> New Folder</button><button onClick={handleCreateNote} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><FileText size={16} className="text-yellow-400"/> New Note</button><label className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 cursor-pointer transition-colors"><Upload size={16} className="text-green-400"/> Upload File<input type="file" multiple className="hidden" onChange={(e) => { setContextMenu(null); if(e.target.files) handleUploadFiles(Array.from(e.target.files)); }} /></label><div className="h-px bg-slate-700 my-1"/><button onClick={() => { setContextMenu(null); loadFolder(currentFolderId); }} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Loader2 size={16} className="text-slate-400"/> Refresh</button> </>) } </>) }</div></>)}
       
       {viewingRawFile && (<div className="fixed inset-0 z-[200] flex items-center justify-center p-4"><div className="absolute inset-0 bg-black/80 backdrop-blur-sm animate-in fade-in" onClick={() => setViewingRawFile(null)} /><div className="relative w-full max-w-4xl h-[80vh] bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95"><div className="bg-slate-950 px-4 py-3 border-b border-slate-800 flex items-center justify-between"><div className="flex items-center gap-3"><FileJson size={20} className="text-blue-400" /><h3 className="text-sm font-bold text-slate-200">{viewingRawFile.title}</h3><span className="px-2 py-0.5 bg-slate-800 rounded text-[10px] text-slate-500 uppercase">Read Only</span></div><button onClick={() => setViewingRawFile(null)} className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors"><X size={20} /></button></div><div className="flex-1 overflow-auto p-4 bg-[#0d1117]"><pre className="text-xs md:text-sm font-mono text-slate-300 whitespace-pre-wrap break-all leading-relaxed">{viewingRawFile.content}</pre></div></div></div>)}
-      {previewImage && (<div className="fixed inset-0 z-[150] bg-black/95 backdrop-blur flex items-center justify-center p-4 animate-in fade-in" onClick={() => setPreviewImage(null)}><div className="absolute top-4 right-4 z-10 flex gap-2"><button onClick={(e) => { e.stopPropagation(); handleCopyImage(previewImage); }} className="p-2 bg-white/10 rounded-full hover:bg-white/20 text-white"><Image size={24}/></button><button onClick={(e) => { e.stopPropagation(); handleDownload(previewImage); }} className="p-2 bg-white/10 rounded-full hover:bg-white/20 text-white"><Download size={24}/></button><button onClick={() => setPreviewImage(null)} className="p-2 bg-white/10 rounded-full hover:bg-white/20 text-white"><X size={24}/></button></div><img src={previewImage} className="max-w-full max-h-full object-contain rounded-lg shadow-2xl" onClick={(e) => e.stopPropagation()} referrerPolicy="no-referrer" /></div>)}
+      {previewImage && (<div className="fixed inset-0 z-[150] bg-black/95 backdrop-blur flex items-center justify-center p-4 animate-in fade-in" onClick={() => setPreviewImage(null)}><div className="absolute top-4 right-4 z-10 flex gap-2"><button onClick={(e) => { e.stopPropagation(); handleCopyImage(previewImage); }} className="p-2 bg-white/10 rounded-full hover:bg-white/20 text-white"><Image size={24}/></button><button onClick={(e) => { e.stopPropagation(); downloadWithProgress(previewImage, "image.jpg", true); }} className="p-2 bg-white/10 rounded-full hover:bg-white/20 text-white"><Download size={24}/></button><button onClick={() => setPreviewImage(null)} className="p-2 bg-white/10 rounded-full hover:bg-white/20 text-white"><X size={24}/></button></div><img src={previewImage} className="max-w-full max-h-full object-contain rounded-lg shadow-2xl" onClick={(e) => e.stopPropagation()} referrerPolicy="no-referrer" /></div>)}
       {editingNote && <TextEditor note={editingNote} onSave={handleSaveNote} onClose={() => setEditingNote(null)} />}
       {modal && (<div className="fixed inset-0 z-[200] flex items-center justify-center p-4"><div className="absolute inset-0 bg-black/60 backdrop-blur-sm animate-in fade-in" onClick={() => setModal(null)} /><div className="relative w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95"><div className="p-6"><h3 className="text-lg font-bold mb-2 flex items-center gap-2">{modal.isDanger && <AlertCircle className="text-red-500" size={20} />}{modal.title}</h3>{modal.message && <p className="text-sm text-slate-400 mb-4">{modal.message}</p>}{modal.type === 'input' && (<input ref={inputRef} type="text" defaultValue={modal.inputValue} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500" onKeyDown={(e) => { if(e.key === 'Enter') modal.onConfirm?.(e.currentTarget.value); }} onChange={(e) => { if (modal) modal.inputValue = e.target.value; }} autoFocus />)}{modal.type === 'password' && (<input ref={inputRef} type="password" className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500" onKeyDown={(e) => { if(e.key === 'Enter') modal.onConfirm?.(e.currentTarget.value); }} onChange={(e) => { if (modal) modal.inputValue = e.target.value; }} autoFocus placeholder="Masukkan password..." />)}{modal.type === 'select' && modal.options && (<select ref={selectRef} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500" onChange={(e) => { if (modal) modal.inputValue = e.target.value; }} defaultValue={modal.options[0]?.value}>{modal.options.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}</select>)}</div><div className="bg-slate-800/50 p-4 flex gap-3 border-t border-slate-800"><button onClick={() => setModal(null)} className="flex-1 py-2 rounded-lg text-sm font-medium hover:bg-slate-700 transition-colors text-slate-300">Batal</button><button onClick={() => { let val = modal.inputValue; if (modal.type === 'select' && !val && modal.options && modal.options.length > 0) val = modal.options[0].value; modal.onConfirm?.(val); }} className={`flex-1 py-2 rounded-lg text-sm font-medium text-white shadow-lg transition-transform active:scale-95 ${modal.isDanger ? 'bg-red-600 hover:bg-red-500' : 'bg-blue-600 hover:bg-blue-500'}`}>{modal.confirmText || 'OK'}</button></div></div></div>)}
     </div>
   );
 };
 
-// --- SUB COMPONENTS (KEEP SAME) ---
-
+// --- SUB COMPONENTS ---
 interface ItemComponentProps {
   item: Item;
-  selected?: boolean;
+  selected: boolean;
   onClick: (e: React.MouseEvent, item: Item) => void;
   onDoubleClick: (e: React.MouseEvent, item: Item) => void;
   onContextMenu: (e: React.MouseEvent, item: Item) => void;
   onToggleSelect: () => void;
-  isRecycleBin?: boolean;
-  isSystem?: boolean;
-  isDropTarget?: boolean;
 }
 
-const ItemOverlay = ({ status }: { status?: string }) => { 
-  if (!status || status === 'idle') return null; 
-  return ( 
-    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm z-20 flex flex-col items-center justify-center rounded-xl animate-in fade-in">
-      <Loader2 size={24} className="text-blue-400 animate-spin mb-1" />
-      <span className="text-[10px] font-bold text-white uppercase tracking-wider">{status === 'deleting' ? 'Deleting...' : 'Restoring...'}</span>
-    </div> 
-  ); 
-};
+const ItemOverlay = ({ status }: { status?: string }) => { if (!status || status === 'idle') return null; return ( <div className="absolute inset-0 bg-black/60 backdrop-blur-sm z-20 flex flex-col items-center justify-center rounded-xl animate-in fade-in"><Loader2 size={24} className="text-blue-400 animate-spin mb-1" /><span className="text-[10px] font-bold text-white uppercase tracking-wider">{status === 'deleting' ? 'Deleting...' : 'Restoring...'}</span></div> ); };
+const DragHandle = ({ item }: { item: Item }) => { return (<div className="absolute top-2 right-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity p-2 bg-slate-800/80 rounded-lg hover:bg-slate-700 cursor-grab active:cursor-grabbing text-slate-400 item-handle backdrop-blur-sm border border-slate-600/30 shadow-lg" draggable={true} onDragStart={(e: React.DragEvent) => { e.dataTransfer.setData("text/item-id", item.id); if (item.type === 'image') { /* */ } else if (item.type === 'note' && item.content) { e.dataTransfer.setData("text/plain", stripHtml(item.content)); } e.stopPropagation(); }}><GripVertical size={18} /></div>); };
 
-const DragHandle = ({ item }: { item: Item }) => { 
-  return (
-    <div className="absolute top-2 right-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity p-2 bg-slate-800/80 rounded-lg hover:bg-slate-700 cursor-grab active:cursor-grabbing text-slate-400 item-handle backdrop-blur-sm border border-slate-600/30 shadow-lg" 
-      draggable={true} 
-      onDragStart={(e) => { 
-        e.dataTransfer.setData("text/item-id", item.id); 
-        if (item.type === 'image') { /* */ } 
-        else if (item.type === 'note' && item.content) { e.dataTransfer.setData("text/plain", stripHtml(item.content)); } 
-        e.stopPropagation(); 
-      }}
-    >
-      <GripVertical size={18} />
-    </div>
-  ); 
-};
+const FolderItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect, isRecycleBin, isSystem, isDropTarget }: ItemComponentProps & { isRecycleBin?: boolean; isSystem?: boolean; isDropTarget?: boolean }) => ( <div id={`item-${item.id}`} data-folder-id={item.id} data-item-id={item.id} draggable={false} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} style={{ touchAction: 'pan-y' }} className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col items-center gap-2 item-clickable select-none ${isDropTarget ? 'bg-blue-500/40 border-blue-400 scale-105 shadow-xl ring-2 ring-blue-400 z-30' : selected ? 'bg-blue-500/20 border-blue-500 shadow-md ring-1 ring-blue-500' : 'bg-slate-900 border-slate-800 hover:bg-slate-800 hover:border-slate-600'}`}> <ItemOverlay status={item.status} /> <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/></div> {!isRecycleBin && !isSystem && <DragHandle item={item} />} {isRecycleBin ? (<Trash2 size={48} className="text-red-500 fill-red-500/10 drop-shadow-md pointer-events-none" />) : isSystem ? (<div className="relative"><Folder size={48} className="text-slate-500 fill-slate-500/10 drop-shadow-md pointer-events-none" /><Lock size={16} className="absolute bottom-0 right-0 text-amber-400 bg-slate-900 rounded-full p-0.5 border border-slate-800" /></div>) : (<Folder size={48} className="text-blue-500 fill-blue-500/10 drop-shadow-md pointer-events-none" />)} <span className={`text-xs font-medium text-center truncate w-full px-1 ${isRecycleBin ? 'text-red-400' : isSystem ? 'text-slate-400' : 'text-slate-200'}`}>{item.name}</span> </div> );
 
-const FolderItem: React.FC<ItemComponentProps> = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect, isRecycleBin, isSystem, isDropTarget }) => ( 
-  <div id={`item-${item.id}`} data-folder-id={item.id} data-item-id={item.id} draggable={false} 
-    onClick={(e) => onClick(e, item)} 
-    onDoubleClick={(e) => onDoubleClick(e, item)} 
-    onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} 
-    style={{ touchAction: 'pan-y' }} 
-    className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col items-center gap-2 item-clickable select-none ${isDropTarget ? 'bg-blue-500/40 border-blue-400 scale-105 shadow-xl ring-2 ring-blue-400 z-30' : selected ? 'bg-blue-500/20 border-blue-500 shadow-md ring-1 ring-blue-500' : 'bg-slate-900 border-slate-800 hover:bg-slate-800 hover:border-slate-600'}`}
-  > 
-    <ItemOverlay status={item.status} /> 
-    <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
-      <CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/>
-    </div> 
-    {!isRecycleBin && !isSystem && <DragHandle item={item} />} 
-    {isRecycleBin ? (<Trash2 size={48} className="text-red-500 fill-red-500/10 drop-shadow-md pointer-events-none" />) : isSystem ? (<div className="relative"><Folder size={48} className="text-slate-500 fill-slate-500/10 drop-shadow-md pointer-events-none" /><Lock size={16} className="absolute bottom-0 right-0 text-amber-400 bg-slate-900 rounded-full p-0.5 border border-slate-800" /></div>) : (<Folder size={48} className="text-blue-500 fill-blue-500/10 drop-shadow-md pointer-events-none" />)} 
-    <span className={`text-xs font-medium text-center truncate w-full px-1 ${isRecycleBin ? 'text-red-400' : isSystem ? 'text-slate-400' : 'text-slate-200'}`}>{item.name}</span> 
-  </div> 
-);
+const NoteItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }: ItemComponentProps) => { const isDBFile = item.name.includes(DB_FILENAME_BASE); const cleanText = stripHtml(item.content || item.snippet || "").slice(0, 150); return ( <div id={`item-${item.id}`} data-item-id={item.id} draggable={false} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} style={{ touchAction: 'pan-y' }} className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col gap-2 item-clickable select-none aspect-square shadow-lg hover:shadow-xl hover:-translate-y-1 hover:rotate-1 duration-200 ${selected ? 'bg-yellow-200 border-blue-500 ring-2 ring-blue-500 scale-[1.02] z-10' : isDBFile ? 'bg-slate-800 border-slate-700 hover:border-blue-500/50' : 'bg-[#fff9c4] border-transparent hover:border-yellow-300'}`}> <ItemOverlay status={item.status} /> <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><CheckSquare size={18} className={selected ? "text-blue-600 bg-white rounded shadow-sm" : "text-slate-600/50 hover:text-slate-900"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/></div> <DragHandle item={item} /> {isDBFile ? (<div className="flex-1 w-full flex flex-col items-center justify-center text-slate-400"><Database size={32} className="mb-2 text-blue-500" /><span className="text-xs font-mono font-bold text-center break-all">{item.name}</span></div>) : (<><div className="flex-1 w-full overflow-hidden flex flex-col"><h4 className="text-sm font-bold text-slate-900 mb-1.5 truncate border-b border-slate-800/10 pb-1">{item.name.replace('.txt', '')}</h4><p className="text-xs text-slate-800/90 leading-relaxed font-sans font-medium break-words whitespace-pre-wrap line-clamp-6">{cleanText || <span className="italic text-slate-500">Kosong...</span>}</p></div><div className="flex items-center justify-between w-full pt-2 mt-auto opacity-50"><FileText size={10} className="text-slate-600" /><span className="text-[9px] text-slate-600">{new Date(item.lastUpdated).toLocaleDateString()}</span></div></>)} </div> ); };
 
-const NoteItem: React.FC<ItemComponentProps> = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }) => { 
-  const isDBFile = item.name.includes(DB_FILENAME_BASE); 
-  const cleanText = stripHtml(item.content || item.snippet || "").slice(0, 150); 
-  return ( 
-    <div id={`item-${item.id}`} data-item-id={item.id} draggable={false} 
-      onClick={(e) => onClick(e, item)} 
-      onDoubleClick={(e) => onDoubleClick(e, item)} 
-      onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} 
-      style={{ touchAction: 'pan-y' }} 
-      className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col gap-2 item-clickable select-none aspect-square shadow-lg hover:shadow-xl hover:-translate-y-1 hover:rotate-1 duration-200 ${selected ? 'bg-yellow-200 border-blue-500 ring-2 ring-blue-500 scale-[1.02] z-10' : isDBFile ? 'bg-slate-800 border-slate-700 hover:border-blue-500/50' : 'bg-[#fff9c4] border-transparent hover:border-yellow-300'}`}
-    > 
-      <ItemOverlay status={item.status} /> 
-      <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
-        <CheckSquare size={18} className={selected ? "text-blue-600 bg-white rounded shadow-sm" : "text-slate-600/50 hover:text-slate-900"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/>
-      </div> 
-      <DragHandle item={item} /> 
-      {isDBFile ? (<div className="flex-1 w-full flex flex-col items-center justify-center text-slate-400"><Database size={32} className="mb-2 text-blue-500" /><span className="text-xs font-mono font-bold text-center break-all">{item.name}</span></div>) : (<><div className="flex-1 w-full overflow-hidden flex flex-col"><h4 className="text-sm font-bold text-slate-900 mb-1.5 truncate border-b border-slate-800/10 pb-1">{item.name.replace('.txt', '')}</h4><p className="text-xs text-slate-800/90 leading-relaxed font-sans font-medium break-words whitespace-pre-wrap line-clamp-6">{cleanText || <span className="italic text-slate-500">Kosong...</span>}</p></div><div className="flex items-center justify-between w-full pt-2 mt-auto opacity-50"><FileText size={10} className="text-slate-600" /><span className="text-[9px] text-slate-600">{new Date(item.lastUpdated).toLocaleDateString()}</span></div></>)} 
-    </div> 
-  ); 
-};
+const ImageItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }: ItemComponentProps) => ( <div id={`item-${item.id}`} data-item-id={item.id} draggable={false} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} style={{ touchAction: 'pan-y' }} className={`group relative rounded-xl border transition-all cursor-pointer overflow-hidden aspect-square flex flex-col items-center justify-center bg-slate-950 item-clickable select-none ${selected ? 'border-blue-500 shadow-md ring-1 ring-blue-500' : 'border-slate-800 hover:border-slate-600'}`}> <ItemOverlay status={item.status} /> <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300 shadow-sm"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/></div> {item.thumbnail || item.url ? (<img src={item.thumbnail || item.url} alt={item.name} className="w-full h-full object-cover pointer-events-none" loading="lazy" referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.style.display = 'none'; e.currentTarget.parentElement?.classList.add('bg-slate-800'); }} />) : (<ImageIcon size={32} className="text-slate-600 pointer-events-none" />)} <div className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm p-1.5 truncate pointer-events-none"><span className="text-[10px] font-medium text-slate-200 block text-center truncate">{item.name}</span></div> </div> );
 
-const ImageItem: React.FC<ItemComponentProps> = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }: ItemComponentProps) => ( 
-  <div id={`item-${item.id}`} data-item-id={item.id} draggable={false} 
-    onClick={(e) => onClick(e, item)} 
-    onDoubleClick={(e) => onDoubleClick(e, item)} 
-    onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} 
-    style={{ touchAction: 'pan-y' }} 
-    className={`group relative rounded-xl border transition-all cursor-pointer overflow-hidden aspect-square flex flex-col items-center justify-center bg-slate-950 item-clickable select-none ${selected ? 'border-blue-500 shadow-md ring-1 ring-blue-500' : 'border-slate-800 hover:border-slate-600'}`}
-  > 
-    <ItemOverlay status={item.status} /> 
-    <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
-      <CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300 shadow-sm"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/>
-    </div> 
-    <DragHandle item={item} /> 
-    {item.thumbnail || item.url ? (<img src={item.thumbnail || item.url} alt={item.name} className="w-full h-full object-cover pointer-events-none" loading="lazy" referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.style.display = 'none'; e.currentTarget.parentElement?.classList.add('bg-slate-800'); }} />) : (<ImageIcon size={32} className="text-slate-600 pointer-events-none" />)} 
-    <div className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm p-1.5 truncate pointer-events-none"><span className="text-[10px] font-medium text-slate-200 block text-center truncate">{item.name}</span></div> 
-  </div> 
-);
-
-// --- FLOATING MENU (SAME) ---
 const SelectionFloatingMenu = ({ selectedIds, items, onClear, onAction, containerRef, isInRecycleBin, recycleBinId, isSystemFolder, systemFolderId }: { selectedIds: Set<string>, items: Item[], onClear: () => void, onAction: (a: string) => void, containerRef: React.RefObject<HTMLDivElement>, isInRecycleBin: boolean, recycleBinId: string, isSystemFolder: boolean, systemFolderId: string | null }) => {
     const [pos, setPos] = useState<{top?: number, left?: number, bottom?: number, x?:number}>({ bottom: 24, left: window.innerWidth / 2 }); const [styleType, setStyleType] = useState<'contextual' | 'dock'>('dock'); const menuRef = useRef<HTMLDivElement>(null); const isRecycleBinFolderSelected = !isInRecycleBin && Array.from(selectedIds).some(id => id === recycleBinId); const isSystemFolderSelected = !isInRecycleBin && Array.from(selectedIds).some(id => { const item = items.find(i => i.id === id); return item?.id === systemFolderId || item?.name === SYSTEM_FOLDER_NAME; });
     useLayoutEffect(() => {
