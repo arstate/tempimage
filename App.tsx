@@ -4,7 +4,7 @@ import {
   Folder, FileText, Image as ImageIcon, MoreVertical, 
   ArrowLeft, Plus, Trash2, Copy, Move, Edit, CheckSquare, 
   Loader2, Home, Upload, ChevronRight, X, AlertCircle, Download, CornerUpLeft,
-  CheckCircle, XCircle, Image, RotateCcw, Ban, GripVertical, Database, Lock, ShieldAlert, Cloud, CloudUpload
+  CheckCircle, XCircle, Image, RotateCcw, Ban, GripVertical, Database, Lock, ShieldAlert, Cloud, CloudUpload, FileJson
 } from 'lucide-react';
 import * as API from './services/api';
 import * as DB from './services/db';
@@ -35,6 +35,7 @@ interface Notification {
 const RECYCLE_BIN_NAME = "Recycle Bin";
 const SYSTEM_FOLDER_NAME = "System";
 const SYSTEM_PASSWORD = "1509";
+const DB_FILENAME_BASE = "system_zombio_db"; // Base name to check
 
 // --- HELPER: STRIP HTML ---
 const stripHtml = (html: string) => {
@@ -59,6 +60,7 @@ const App = () => {
   const [dbFileId, setDbFileId] = useState<string | null>(null);
   const [systemFolderId, setSystemFolderId] = useState<string | null>(null);
   const [isSystemInitialized, setIsSystemInitialized] = useState(false);
+  const [isNotFound, setIsNotFound] = useState(false); // New state for 404
   
   // --- SYNC STATUS STATE ---
   const [isSavingDB, setIsSavingDB] = useState(false);
@@ -104,6 +106,7 @@ const App = () => {
   // --- EDITOR & MODALS ---
   const [modal, setModal] = useState<ModalState | null>(null);
   const [editingNote, setEditingNote] = useState<StoredNote | null>(null);
+  const [viewingRawFile, setViewingRawFile] = useState<{title: string, content: string} | null>(null); // New Viewer State
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   
   const inputRef = useRef<HTMLInputElement>(null);
@@ -155,6 +158,7 @@ const App = () => {
            setGlobalLoadingMessage("Pengecekan Sistem Otomatis...");
            
            // 2. Locate DB File using logic (Root -> System Folder -> DB File)
+           // This logic specifically looks for the file name defined in API
            const location = await API.locateSystemDB();
            let sysFolderId = location.systemFolderId;
            currentFileId = location.fileId;
@@ -223,10 +227,10 @@ const App = () => {
                    setFolderHistory(traceHistory);
                    setCurrentFolderId(foundId);
                } else {
-                   // Invalid path, go home
-                   setCurrentFolderId("");
-                   setFolderHistory([]);
-                   window.history.replaceState(null, '', '/');
+                   // Invalid path -> NOT FOUND STATE
+                   setIsNotFound(true);
+                   setIsGlobalLoading(false);
+                   return;
                }
            } else {
                setCurrentFolderId("");
@@ -246,7 +250,7 @@ const App = () => {
 
   // Sync URL when Folder Changes
   useEffect(() => {
-    if (!isSystemInitialized) return;
+    if (!isSystemInitialized || isNotFound) return;
     
     // Construct Path string from history
     const pathSegments = folderHistory.map(f => encodeURIComponent(f.name));
@@ -255,7 +259,7 @@ const App = () => {
     if (window.location.pathname !== newPath) {
         window.history.pushState({ currentFolderId, folderHistory }, '', newPath || '/');
     }
-  }, [currentFolderId, folderHistory, isSystemInitialized]);
+  }, [currentFolderId, folderHistory, isSystemInitialized, isNotFound]);
 
 
   // Helper to Update Map locally and schedule Sync
@@ -392,8 +396,9 @@ const App = () => {
       setLoading(false);
       
       if (res.status === 'success') {
-        const freshItems: Item[] = (Array.isArray(res.data) ? res.data : [])
-            .filter((i: any) => i && i.id && i.name && i.name !== "system_zombio_db.json"); // Hide DB file from view
+        // PERUBAHAN: Jangan sembunyikan DB file jika kita berada di dalam System Folder
+        // Kita ingin user bisa melihatnya
+        const freshItems: Item[] = (Array.isArray(res.data) ? res.data : []);
 
         setParentFolderId(res.parentFolderId || ""); 
 
@@ -444,10 +449,10 @@ const App = () => {
 
   useEffect(() => {
     // Only load folder after system is init to prevent race condition on root
-    if (isSystemInitialized) {
+    if (isSystemInitialized && !isNotFound) {
         loadFolder(currentFolderId);
     }
-  }, [currentFolderId, loadFolder, isSystemInitialized]);
+  }, [currentFolderId, loadFolder, isSystemInitialized, isNotFound]);
 
   // --- RECYCLE BIN ---
   const getOrCreateRecycleBin = async (): Promise<string> => {
@@ -696,7 +701,7 @@ const App = () => {
     }
   };
 
-  const handleItemDoubleClick = (e: React.MouseEvent, item: Item) => {
+  const handleItemDoubleClick = async (e: React.MouseEvent, item: Item) => {
     e.stopPropagation();
     if (item.type === 'folder') {
         // SECURITY CHECK FOR SYSTEM FOLDER
@@ -723,7 +728,28 @@ const App = () => {
         setFolderHistory(prev => [...prev, { id: item.id, name: item.name }]);
         setCurrentFolderId(item.id);
     } else if (item.type === 'note') {
-        handleOpenNote(item);
+        // DETECT DATABASE FILE
+        if (item.name.startsWith(DB_FILENAME_BASE)) {
+            const notifId = addNotification('Membaca Database...', 'loading');
+            try {
+                let content = item.content;
+                if (!content) {
+                    content = await API.getFileContent(item.id);
+                }
+                // Try to format JSON if possible
+                try {
+                    const json = JSON.parse(content || "{}");
+                    content = JSON.stringify(json, null, 2);
+                } catch(e) {}
+
+                setViewingRawFile({ title: item.name, content: content || "" });
+                removeNotification(notifId);
+            } catch(e) {
+                updateNotification(notifId, 'Gagal membuka DB', 'error');
+            }
+        } else {
+            handleOpenNote(item);
+        }
     } else if (item.type === 'image') {
         setPreviewImage(item.url || null);
     }
@@ -1226,6 +1252,27 @@ const App = () => {
 
   const isSystemFolder = currentFolderId === systemFolderId;
 
+  // --- RENDER NOT FOUND ---
+  if (isNotFound) {
+      return (
+          <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-center p-6 space-y-6">
+              <div className="p-6 bg-slate-900 rounded-full shadow-2xl border border-slate-800">
+                  <AlertCircle size={64} className="text-slate-500" />
+              </div>
+              <div>
+                <h1 className="text-2xl font-bold text-white mb-2">Folder Tidak Ditemukan</h1>
+                <p className="text-slate-400 max-w-md">Link yang Anda tuju mungkin sudah dihapus, dipindahkan, atau tidak valid.</p>
+              </div>
+              <button 
+                onClick={() => { setIsNotFound(false); setCurrentFolderId(""); setFolderHistory([]); window.history.replaceState(null, '', '/'); }}
+                className="px-6 py-3 bg-blue-600 hover:bg-blue-500 text-white font-semibold rounded-lg shadow-lg transition-transform active:scale-95 flex items-center gap-2"
+              >
+                  <Home size={18} /> Kembali ke Home
+              </button>
+          </div>
+      );
+  }
+
   return (
     <div 
       className="min-h-screen bg-slate-950 text-slate-200 relative select-none"
@@ -1588,6 +1635,30 @@ const App = () => {
         </>
       )}
 
+      {/* RAW FILE VIEWER (READ ONLY) */}
+      {viewingRawFile && (
+          <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+              <div className="absolute inset-0 bg-black/80 backdrop-blur-sm animate-in fade-in" onClick={() => setViewingRawFile(null)} />
+              <div className="relative w-full max-w-4xl h-[80vh] bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95">
+                  <div className="bg-slate-950 px-4 py-3 border-b border-slate-800 flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                          <FileJson size={20} className="text-blue-400" />
+                          <h3 className="text-sm font-bold text-slate-200">{viewingRawFile.title}</h3>
+                          <span className="px-2 py-0.5 bg-slate-800 rounded text-[10px] text-slate-500 uppercase">Read Only</span>
+                      </div>
+                      <button onClick={() => setViewingRawFile(null)} className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors">
+                          <X size={20} />
+                      </button>
+                  </div>
+                  <div className="flex-1 overflow-auto p-4 bg-[#0d1117]">
+                      <pre className="text-xs md:text-sm font-mono text-slate-300 whitespace-pre-wrap break-all leading-relaxed">
+                          {viewingRawFile.content}
+                      </pre>
+                  </div>
+              </div>
+          </div>
+      )}
+
       {previewImage && (
         <div className="fixed inset-0 z-[150] bg-black/95 backdrop-blur flex items-center justify-center p-4 animate-in fade-in" onClick={() => setPreviewImage(null)}>
             <div className="absolute top-4 right-4 z-10 flex gap-2">
@@ -1806,6 +1877,8 @@ const FolderItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onT
 );
 
 const NoteItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }: any) => {
+    // Check if this is the database file
+    const isDBFile = item.name.startsWith(DB_FILENAME_BASE);
     const cleanText = stripHtml(item.content || item.snippet || "").slice(0, 150);
     
     return (
@@ -1820,7 +1893,9 @@ const NoteItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onTog
         className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col gap-2 item-clickable select-none aspect-square shadow-lg hover:shadow-xl hover:-translate-y-1 hover:rotate-1 duration-200 ${
             selected 
             ? 'bg-yellow-200 border-blue-500 ring-2 ring-blue-500 scale-[1.02] z-10' 
-            : 'bg-[#fff9c4] border-transparent hover:border-yellow-300'
+            : isDBFile 
+                ? 'bg-slate-800 border-slate-700 hover:border-blue-500/50' 
+                : 'bg-[#fff9c4] border-transparent hover:border-yellow-300'
         }`}
     >
         <ItemOverlay status={item.status} />
@@ -1830,19 +1905,30 @@ const NoteItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onTog
         
         <DragHandle item={item} />
 
-        <div className="flex-1 w-full overflow-hidden flex flex-col">
-            <h4 className="text-sm font-bold text-slate-900 mb-1.5 truncate border-b border-slate-800/10 pb-1">
-                {item.name.replace('.txt', '')}
-            </h4>
-            <p className="text-xs text-slate-800/90 leading-relaxed font-sans font-medium break-words whitespace-pre-wrap line-clamp-6">
-                {cleanText || <span className="italic text-slate-500">Kosong...</span>}
-            </p>
-        </div>
+        {isDBFile ? (
+            // DATABASE FILE LAYOUT
+            <div className="flex-1 w-full flex flex-col items-center justify-center text-slate-400">
+                 <Database size={32} className="mb-2 text-blue-500" />
+                 <span className="text-xs font-mono font-bold text-center break-all">{item.name}</span>
+            </div>
+        ) : (
+            // NORMAL NOTE LAYOUT
+            <>
+            <div className="flex-1 w-full overflow-hidden flex flex-col">
+                <h4 className="text-sm font-bold text-slate-900 mb-1.5 truncate border-b border-slate-800/10 pb-1">
+                    {item.name.replace('.txt', '')}
+                </h4>
+                <p className="text-xs text-slate-800/90 leading-relaxed font-sans font-medium break-words whitespace-pre-wrap line-clamp-6">
+                    {cleanText || <span className="italic text-slate-500">Kosong...</span>}
+                </p>
+            </div>
 
-        <div className="flex items-center justify-between w-full pt-2 mt-auto opacity-50">
-           <FileText size={10} className="text-slate-600" />
-           <span className="text-[9px] text-slate-600">{new Date(item.lastUpdated).toLocaleDateString()}</span>
-        </div>
+            <div className="flex items-center justify-between w-full pt-2 mt-auto opacity-50">
+            <FileText size={10} className="text-slate-600" />
+            <span className="text-[9px] text-slate-600">{new Date(item.lastUpdated).toLocaleDateString()}</span>
+            </div>
+            </>
+        )}
     </div>
     );
 };
