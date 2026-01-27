@@ -54,6 +54,9 @@ const App = () => {
   const [isGlobalLoading, setIsGlobalLoading] = useState(false);
   const [globalLoadingMessage, setGlobalLoadingMessage] = useState("");
 
+  // --- PROCESSING STATE (NON-BLOCKING ACTIONS) ---
+  const [isProcessingAction, setIsProcessingAction] = useState(false);
+
   // --- UI STATE ---
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [lastSelectedId, setLastSelectedId] = useState<string | null>(null); 
@@ -106,6 +109,28 @@ const App = () => {
     }
     window.history.pushState({}, '', url);
   }, [currentFolderId]);
+
+  // --- SAFETY: PREVENT ACCIDENTAL CLOSE ---
+  useEffect(() => {
+    const isUploading = uploadQueue.some(u => u.status === 'uploading');
+    const isBusy = isGlobalLoading || isProcessingAction || isUploading;
+
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (isBusy) {
+        e.preventDefault();
+        e.returnValue = ''; // Required for Chrome
+        return ''; // Legacy
+      }
+    };
+
+    if (isBusy) {
+      window.addEventListener('beforeunload', handleBeforeUnload);
+    }
+
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [isGlobalLoading, isProcessingAction, uploadQueue]);
 
 
   // --- NOTIFICATION HELPERS ---
@@ -531,6 +556,7 @@ const App = () => {
          isDanger: true,
          onConfirm: async () => {
             setModal(null);
+            setIsProcessingAction(true); // START PROTECTION
             
             // UI Feedback: Set status to 'deleting'
             setItems(prev => prev.map(i => ids.includes(i.id) ? { ...i, status: 'deleting' } : i));
@@ -567,6 +593,8 @@ const App = () => {
                 // Revert status on error
                 setItems(prev => prev.map(i => ids.includes(i.id) ? { ...i, status: undefined } : i));
                 addNotification('Gagal menghapus', 'error');
+            } finally {
+                setIsProcessingAction(false); // END PROTECTION
             }
          }
        });
@@ -580,6 +608,7 @@ const App = () => {
         setItems(prev => prev.map(i => ids.includes(i.id) ? { ...i, status: 'restoring' } : i));
         setSelectedIds(new Set());
 
+        setIsProcessingAction(true); // START PROTECTION
         const notifId = addNotification(`Mengembalikan ${ids.length} item...`, 'loading');
 
         try {
@@ -596,6 +625,8 @@ const App = () => {
         } catch(e) {
              setItems(prev => prev.map(i => ids.includes(i.id) ? { ...i, status: undefined } : i));
              updateNotification(notifId, 'Gagal restore', 'error');
+        } finally {
+            setIsProcessingAction(false); // END PROTECTION
         }
     }
 
@@ -620,13 +651,15 @@ const App = () => {
             isDanger: true,
             onConfirm: async () => {
                 setModal(null);
+                setIsProcessingAction(true); // START PROTECTION
                 const notifId = addNotification("Mengosongkan Recycle Bin...", 'loading');
                 try {
                     await API.deleteItems(binIds);
                     for(const id of binIds) await DB.removeDeletedMeta(id);
                     updateNotification(notifId, 'Recycle Bin dikosongkan', 'success');
                     if (currentFolderId === recycleBinId) loadFolder(recycleBinId);
-                } catch(e) { updateNotification(notifId, 'Gagal mengosongkan', 'error'); }
+                } catch(e) { updateNotification(notifId, 'Gagal mengosongkan', 'error'); } 
+                finally { setIsProcessingAction(false); } // END PROTECTION
             }
         });
     }
@@ -642,6 +675,7 @@ const App = () => {
              return;
          }
 
+         setIsProcessingAction(true); // START PROTECTION
          const notifId = addNotification("Mengembalikan semua item...", 'loading');
          try {
              // If we are currently IN the recycle bin, show loading UI on items
@@ -658,16 +692,19 @@ const App = () => {
              updateNotification(notifId, 'Semua item dikembalikan', 'success');
              if (currentFolderId === recycleBinId) loadFolder(recycleBinId);
          } catch(e) { updateNotification(notifId, 'Gagal restore all', 'error'); }
+         finally { setIsProcessingAction(false); } // END PROTECTION
     }
 
     else if (action === 'duplicate') {
         if (ids.length === 0) return;
+        setIsProcessingAction(true); // START PROTECTION
         const notifId = addNotification(`Menduplikasi ${ids.length} item...`, 'loading');
         try {
             await API.duplicateItems(ids);
             updateNotification(notifId, 'Berhasil diduplikasi', 'success');
             loadFolder(currentFolderId);
         } catch(e) { updateNotification(notifId, 'Gagal duplikasi', 'error'); }
+        finally { setIsProcessingAction(false); } // END PROTECTION
     }
     else if (action === 'move') {
         if (ids.length === 0) return;
@@ -690,12 +727,14 @@ const App = () => {
             onConfirm: async (targetId) => {
                  if (targetId === undefined) return;
                  setModal(null);
+                 setIsProcessingAction(true); // START PROTECTION
                  const notifId = addNotification('Memindahkan item...', 'loading');
                  try {
                      await API.moveItems(ids, targetId);
                      updateNotification(notifId, 'Berhasil dipindahkan', 'success');
                      loadFolder(currentFolderId);
                  } catch(e) { updateNotification(notifId, 'Gagal memindahkan', 'error'); }
+                 finally { setIsProcessingAction(false); } // END PROTECTION
             }
         });
     }
@@ -709,12 +748,14 @@ const App = () => {
             onConfirm: async (newName) => {
                 if(newName && newName !== targetItem.name) {
                     setModal(null);
+                    setIsProcessingAction(true); // START PROTECTION
                     const notifId = addNotification('Mengganti nama...', 'loading');
                     try {
                         await API.renameItem(targetItem.id, newName);
                         updateNotification(notifId, 'Nama berhasil diganti', 'success');
                         loadFolder(currentFolderId);
                     } catch(e) { updateNotification(notifId, 'Gagal ganti nama', 'error'); }
+                    finally { setIsProcessingAction(false); } // END PROTECTION
                 }
             }
         });
@@ -728,12 +769,14 @@ const App = () => {
             onConfirm: async (name) => {
                 if(name) {
                     setModal(null);
+                    setIsProcessingAction(true); // START PROTECTION
                     const notifId = addNotification('Membuat folder...', 'loading');
                     try {
                         await API.createFolder(currentFolderId, name);
                         updateNotification(notifId, 'Folder berhasil dibuat', 'success');
                         loadFolder(currentFolderId);
                     } catch(e) { updateNotification(notifId, 'Gagal buat folder', 'error'); }
+                    finally { setIsProcessingAction(false); } // END PROTECTION
                 }
             }
         });
@@ -792,11 +835,13 @@ const App = () => {
         const targetFolderId = targetElement?.getAttribute("data-folder-id");
         if (movedItemId && targetFolderId && movedItemId !== targetFolderId) {
             const notifId = addNotification('Memindahkan via drag...', 'loading');
+            setIsProcessingAction(true); // START PROTECTION
             try {
                 await API.moveItems([movedItemId], targetFolderId);
                 updateNotification(notifId, 'Berhasil dipindahkan', 'success');
                 await loadFolder(currentFolderId);
-            } catch(err) { updateNotification(notifId, 'Gagal pindah', 'error'); } 
+            } catch(err) { updateNotification(notifId, 'Gagal pindah', 'error'); }
+            finally { setIsProcessingAction(false); } // END PROTECTION
         }
         return;
     }
