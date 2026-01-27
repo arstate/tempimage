@@ -33,7 +33,6 @@ interface Notification {
 
 const RECYCLE_BIN_NAME = "Recycle Bin";
 
-// --- HELPER: STRIP HTML ---
 const stripHtml = (html: string) => {
   if (!html) return "";
   const tmp = document.createElement("DIV");
@@ -50,11 +49,8 @@ const App = () => {
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(false); 
   
-  // --- GLOBAL LOADING OVERLAY (BLOCKING) ---
   const [isGlobalLoading, setIsGlobalLoading] = useState(false);
   const [globalLoadingMessage, setGlobalLoadingMessage] = useState("");
-
-  // --- PROCESSING STATE (NON-BLOCKING ACTIONS) ---
   const [isProcessingAction, setIsProcessingAction] = useState(false);
 
   // --- UI STATE ---
@@ -64,17 +60,12 @@ const App = () => {
   const [isDraggingFile, setIsDraggingFile] = useState(false); 
   const [isNewDropdownOpen, setIsNewDropdownOpen] = useState(false);
   
-  // --- UPLOAD STATE ---
   const [uploadQueue, setUploadQueue] = useState<UploadItem[]>([]);
-
-  // --- NOTIFICATIONS STATE ---
   const [notifications, setNotifications] = useState<Notification[]>([]);
 
   // --- POINTER SELECTION & DRAG STATE ---
   const [isDragSelecting, setIsDragSelecting] = useState(false);
   const [selectionBox, setSelectionBox] = useState<{x:number, y:number, width:number, height:number} | null>(null);
-  
-  // Custom Drag State (Long Press)
   const [customDragItem, setCustomDragItem] = useState<Item | null>(null);
   const [customDragPos, setCustomDragPos] = useState<{x:number, y:number} | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
@@ -94,12 +85,36 @@ const App = () => {
   const selectRef = useRef<HTMLSelectElement>(null);
   const activeFolderIdRef = useRef<string>(currentFolderId);
 
-  // Update ref whenever state changes
   useEffect(() => {
     activeFolderIdRef.current = currentFolderId;
   }, [currentFolderId]);
 
-  // --- 0. INITIAL URL CHECK (Persistence) ---
+  // --- GLOBAL CLEANUP LISTENERS (IMPORTANT FOR STUCK PREVENTION) ---
+  useEffect(() => {
+    const handleGlobalCleanup = () => {
+      setIsDraggingFile(false);
+      setCustomDragItem(null);
+      setCustomDragPos(null);
+      setDropTargetId(null);
+      setIsDragSelecting(false);
+      setSelectionBox(null);
+      dragStartPos.current = null;
+      lastTouchedIdRef.current = null;
+      isPaintingRef.current = false;
+      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+    };
+
+    window.addEventListener('dragend', handleGlobalCleanup);
+    window.addEventListener('mouseup', handleGlobalCleanup);
+    window.addEventListener('blur', handleGlobalCleanup);
+
+    return () => {
+      window.removeEventListener('dragend', handleGlobalCleanup);
+      window.removeEventListener('mouseup', handleGlobalCleanup);
+      window.removeEventListener('blur', handleGlobalCleanup);
+    };
+  }, []);
+
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
     const folderIdParam = params.get('folder');
@@ -108,7 +123,6 @@ const App = () => {
     }
   }, []); 
 
-  // Update URL when folder changes
   useEffect(() => {
     const url = new URL(window.location.href);
     if (currentFolderId) {
@@ -119,7 +133,6 @@ const App = () => {
     window.history.pushState({}, '', url);
   }, [currentFolderId]);
 
-  // --- SAFETY: PREVENT ACCIDENTAL CLOSE ---
   useEffect(() => {
     const isUploading = uploadQueue.some(u => u.status === 'uploading');
     const isBusy = isGlobalLoading || isProcessingAction || isUploading;
@@ -132,31 +145,19 @@ const App = () => {
       }
     };
 
-    if (isBusy) {
-      window.addEventListener('beforeunload', handleBeforeUnload);
-    }
-
-    return () => {
-      window.removeEventListener('beforeunload', handleBeforeUnload);
-    };
+    if (isBusy) window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [isGlobalLoading, isProcessingAction, uploadQueue]);
 
-
-  // --- NOTIFICATION HELPERS ---
   const addNotification = (message: string, type: 'loading' | 'success' | 'error' = 'success', duration = 3000) => {
     const id = Date.now().toString() + Math.random();
     setNotifications(prev => [...prev, { id, message, type }]);
-    
     if (type !== 'loading') {
       setTimeout(() => {
         setNotifications(prev => prev.filter(n => n.id !== id));
       }, duration);
     }
     return id;
-  };
-
-  const removeNotification = (id: string) => {
-    setNotifications(prev => prev.filter(n => n.id !== id));
   };
 
   const updateNotification = (id: string, message: string, type: 'success' | 'error') => {
@@ -166,7 +167,6 @@ const App = () => {
     }, 3000);
   };
 
-  // --- LOAD DATA ---
   const prefetchNoteContents = async (folderId: string, notesToFetch: Item[]) => {
       if (notesToFetch.length === 0) return;
       for (const note of notesToFetch) {
@@ -214,16 +214,11 @@ const App = () => {
             .filter((i: any) => i && i.id && i.name);
 
         setParentFolderId(res.parentFolderId || ""); 
-
-        freshItems.sort((a, b) => {
-            return a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' });
-        });
+        freshItems.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
 
         if (folderId === "") {
             const bin = freshItems.find(i => i.name === RECYCLE_BIN_NAME && i.type === 'folder');
-            if (bin) {
-                setRecycleBinId(bin.id);
-            }
+            if (bin) setRecycleBinId(bin.id);
         }
 
         const mergedItems = freshItems.map(newItem => {
@@ -238,15 +233,9 @@ const App = () => {
         await DB.cacheFolderContents(folderId, mergedItems);
         const notesMissingContent = mergedItems.filter(i => i.type === 'note' && !i.content);
         prefetchNoteContents(folderId, notesMissingContent);
-
-      } else {
-        console.error(res.message);
       }
     } catch (e) {
-      if (folderId === activeFolderIdRef.current) {
-          console.error("Load Folder Error:", e);
-          setLoading(false);
-      }
+      if (folderId === activeFolderIdRef.current) setLoading(false);
     }
   }, []);
 
@@ -254,7 +243,6 @@ const App = () => {
     loadFolder(currentFolderId);
   }, [currentFolderId, loadFolder]);
 
-  // --- RECYCLE BIN ---
   const getOrCreateRecycleBin = async (): Promise<string> => {
       if (recycleBinId) return recycleBinId;
       const res = await API.getFolderContents("");
@@ -272,10 +260,8 @@ const App = () => {
       throw new Error("Could not create Recycle Bin");
   };
 
-  // --- POINTER LOGIC (Select vs Drag) ---
-  
   const handlePointerDown = (e: React.PointerEvent) => {
-     if ((e.target as HTMLElement).closest('button, .item-handle')) return;
+     if ((e.target as HTMLElement).closest('button, .item-handle, select, input')) return;
      if (!e.isPrimary) return;
 
      const target = e.target as HTMLElement;
@@ -283,11 +269,8 @@ const App = () => {
      const itemRow = target.closest('[data-item-id]');
      
      dragStartPos.current = { x: e.clientX, y: e.clientY };
-     
-     // Clear any existing timer
      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
 
-     // 1. Checkbox Click (Immediate Toggle)
      if (isCheckbox && itemRow) {
          const id = itemRow.getAttribute('data-item-id');
          if(id) {
@@ -298,31 +281,23 @@ const App = () => {
          containerRef.current?.setPointerCapture(e.pointerId);
          setIsDragSelecting(true);
      } 
-     // 2. Item Body Click (Prepare for either Select Swipe OR Long Press Drag)
      else if (itemRow) {
          const id = itemRow.getAttribute('data-item-id');
          if (id) {
              const clickedItem = items.find(i => i.id === id);
              if (clickedItem) {
-                 // Start LONG PRESS Timer
                  longPressTimerRef.current = setTimeout(() => {
-                     // Timer fired: User held still. Enable DRAG mode.
                      setCustomDragItem(clickedItem);
                      setCustomDragPos({ x: e.clientX, y: e.clientY });
-                     
-                     // Ensure the item dragged is selected
                      if (!selectedIds.has(clickedItem.id)) {
                          setSelectedIds(new Set([clickedItem.id]));
                      }
-
-                     // Haptic Feedback
                      if (navigator.vibrate) navigator.vibrate(50);
-                 }, 500); // 500ms for long press
+                 }, 500); 
              }
          }
          isPaintingRef.current = false; 
      }
-     // 3. Background Click
      else {
          isPaintingRef.current = false;
          setSelectionBox({ x: e.clientX, y: e.clientY, width: 0, height: 0 });
@@ -330,84 +305,56 @@ const App = () => {
          if (!e.ctrlKey && !e.shiftKey) setSelectedIds(new Set());
          containerRef.current?.setPointerCapture(e.pointerId);
      }
-
      setContextMenu(null);
      setIsNewDropdownOpen(false);
   };
 
   const handlePointerMove = (e: React.PointerEvent) => {
      if (!dragStartPos.current) return;
-
-     // IF CUSTOM DRAG MODE IS ACTIVE (Long Press was triggered)
      if (customDragItem) {
-         // Update visual position
          setCustomDragPos({ x: e.clientX, y: e.clientY });
-         
-         // Find drop target (Folder) under cursor
-         // We hide the ghost temporarily to see what's underneath, or use elementFromPoint carefully
          const elements = document.elementsFromPoint(e.clientX, e.clientY);
-         // Find nearest folder row that is NOT the dragged item
          const folderEl = elements.find(el => {
              const row = el.closest('[data-folder-id]');
              const id = row?.getAttribute('data-folder-id');
              return id && id !== customDragItem.id && !selectedIds.has(id);
          })?.closest('[data-folder-id]');
-
-         if (folderEl) {
-             setDropTargetId(folderEl.getAttribute('data-folder-id'));
-         } else {
-             setDropTargetId(null);
-         }
+         if (folderEl) setDropTargetId(folderEl.getAttribute('data-folder-id'));
+         else setDropTargetId(null);
          return;
      }
 
      const moveDist = Math.sqrt(Math.pow(e.clientX - dragStartPos.current.x, 2) + Math.pow(e.clientY - dragStartPos.current.y, 2));
-     
-     // Threshold exceeded: It's a movement!
      if (moveDist > 8) {
-         // CANCEL LONG PRESS TIMER if moving
          if (longPressTimerRef.current) {
              clearTimeout(longPressTimerRef.current);
              longPressTimerRef.current = null;
          }
-
          if (!isDragSelecting) {
              setIsDragSelecting(true);
              containerRef.current?.setPointerCapture(e.pointerId);
          }
-
          const target = document.elementFromPoint(e.clientX, e.clientY);
          const itemRow = target?.closest('[data-item-id]');
-         
-         // Paint Selection Mode
          if (selectionBox === null) {
              isPaintingRef.current = true;
-
              if (lastTouchedIdRef.current === null) {
                   const startTarget = document.elementFromPoint(dragStartPos.current.x, dragStartPos.current.y);
                   const startRow = startTarget?.closest('[data-item-id]');
                   const startId = startRow?.getAttribute('data-item-id');
                   if (startId) {
-                      if (!selectedIds.has(startId)) {
-                          setSelectedIds(prev => new Set(prev).add(startId));
-                      }
+                      if (!selectedIds.has(startId)) setSelectedIds(prev => new Set(prev).add(startId));
                       lastTouchedIdRef.current = startId;
                   }
              }
-
              if (itemRow) {
                  const id = itemRow.getAttribute('data-item-id');
                  if (id && id !== lastTouchedIdRef.current) {
                      lastTouchedIdRef.current = id;
-                     setSelectedIds(prev => {
-                         const next = new Set(prev);
-                         next.add(id);
-                         return next;
-                     });
+                     setSelectedIds(prev => new Set(prev).add(id));
                  }
              }
          }
-         // Box Selection Mode
          else {
              const currentX = e.clientX;
              const currentY = e.clientY;
@@ -416,7 +363,6 @@ const App = () => {
              const width = Math.abs(currentX - dragStartPos.current.x);
              const height = Math.abs(currentY - dragStartPos.current.y);
              setSelectionBox({ x, y, width, height });
-
              const newSelected = new Set(selectedIds);
              items.forEach(item => {
                 const el = document.getElementById(`item-${item.id}`);
@@ -433,48 +379,30 @@ const App = () => {
   };
 
   const handlePointerUp = async (e: React.PointerEvent) => {
-      // Clear Timer
       if (longPressTimerRef.current) {
           clearTimeout(longPressTimerRef.current);
           longPressTimerRef.current = null;
       }
-
-      // Handle Drop (If Custom Dragging)
       if (customDragItem && dropTargetId) {
           const idsToMove = selectedIds.size > 0 ? Array.from(selectedIds) : [customDragItem.id];
           const targetName = items.find(i => i.id === dropTargetId)?.name || "Folder";
-          
           const notifId = addNotification(`Memindahkan ${idsToMove.length} item ke ${targetName}...`, 'loading');
           setIsProcessingAction(true);
           try {
               await API.moveItems(idsToMove, dropTargetId);
               updateNotification(notifId, 'Berhasil dipindahkan', 'success');
               await loadFolder(currentFolderId);
-          } catch(err) {
-              updateNotification(notifId, 'Gagal pindah', 'error');
-          } finally {
-              setIsProcessingAction(false);
-          }
+          } catch(err) { updateNotification(notifId, 'Gagal pindah', 'error'); }
+          finally { setIsProcessingAction(false); }
       }
-
-      // Reset Drag State
-      setCustomDragItem(null);
-      setCustomDragPos(null);
-      setDropTargetId(null);
-
-      // Handle Cleanup
-      setIsDragSelecting(false);
-      setSelectionBox(null);
-      dragStartPos.current = null;
-      lastTouchedIdRef.current = null;
-      isPaintingRef.current = false;
-      
+      setCustomDragItem(null); setCustomDragPos(null); setDropTargetId(null);
+      setIsDragSelecting(false); setSelectionBox(null);
+      dragStartPos.current = null; lastTouchedIdRef.current = null; isPaintingRef.current = false;
       if (containerRef.current) {
         try { containerRef.current.releasePointerCapture(e.pointerId); } catch(err) {}
       }
   };
 
-  // --- SELECTION HELPERS ---
   const handleToggleSelect = (id: string) => {
       setSelectedIds(prev => {
           const next = new Set(prev);
@@ -486,9 +414,7 @@ const App = () => {
   };
 
   const handleItemClick = (e: React.MouseEvent, item: Item) => {
-    // If painting or dragging, ignore click
     if (isPaintingRef.current || customDragItem) return;
-    
     if (e.shiftKey && lastSelectedId) {
         const lastIndex = items.findIndex(i => i.id === lastSelectedId);
         const currentIndex = items.findIndex(i => i.id === item.id);
@@ -500,9 +426,8 @@ const App = () => {
             rangeIds.forEach(itemId => newSet.add(itemId));
             setSelectedIds(newSet);
         }
-    } else if (e.ctrlKey || e.metaKey) {
-        handleToggleSelect(item.id);
-    } else {
+    } else if (e.ctrlKey || e.metaKey) handleToggleSelect(item.id);
+    else {
         setSelectedIds(new Set([item.id]));
         setLastSelectedId(item.id);
     }
@@ -513,11 +438,8 @@ const App = () => {
     if (item.type === 'folder') {
         setFolderHistory(prev => [...prev, { id: item.id, name: item.name }]);
         setCurrentFolderId(item.id);
-    } else if (item.type === 'note') {
-        handleOpenNote(item);
-    } else if (item.type === 'image') {
-        setPreviewImage(item.url || null);
-    }
+    } else if (item.type === 'note') handleOpenNote(item);
+    else if (item.type === 'image') setPreviewImage(item.url || null);
   };
 
   const handleContextMenu = (e: React.MouseEvent, item?: Item) => {
@@ -528,29 +450,25 @@ const App = () => {
         setLastSelectedId(item.id);
       }
       setContextMenu({ x: e.pageX, y: e.pageY, targetItem: item });
-    } else {
-      setContextMenu({ x: e.pageX, y: e.pageY, targetItem: undefined });
-    }
+    } else setContextMenu({ x: e.pageX, y: e.pageY, targetItem: undefined });
   };
 
-  // --- ACTIONS ---
   const getBlobFromUrl = async (url: string): Promise<Blob> => {
       try {
           const response = await fetch(url, { mode: 'cors', credentials: 'omit', referrerPolicy: 'no-referrer' });
           if (response.ok) return await response.blob();
-      } catch (e) { /* ignore */ }
+      } catch (e) { }
       try {
           const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
           const response = await fetch(proxyUrl);
-          if (!response.ok) throw new Error(`AllOrigins status: ${response.status}`);
-          return await response.blob();
-      } catch (err1) { console.warn("Proxy 1 failed"); }
+          if (response.ok) return await response.blob();
+      } catch (err1) { }
       try {
           const proxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(url)}&output=png`;
           const response = await fetch(proxyUrl);
-          if (!response.ok) throw new Error(`WSRV status: ${response.status}`);
-          return await response.blob();
-      } catch (err2) { throw new Error("Gagal mengunduh: Semua jalur proxy sibuk atau diblokir."); }
+          if (response.ok) return await response.blob();
+      } catch (err2) { throw new Error("Gagal mengunduh."); }
+      throw new Error("Gagal mengunduh.");
   };
 
   const handleDownloadSingle = async (item: Item) => {
@@ -559,12 +477,9 @@ const App = () => {
       const blob = await getBlobFromUrl(url);
       const blobUrl = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = blobUrl;
-      a.download = item.name;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(blobUrl);
-      document.body.removeChild(a);
+      a.href = blobUrl; a.download = item.name;
+      document.body.appendChild(a); a.click();
+      window.URL.revokeObjectURL(blobUrl); document.body.removeChild(a);
   };
 
   const handleBulkDownload = async (ids: string[]) => {
@@ -579,10 +494,10 @@ const App = () => {
                 await handleDownloadSingle(item);
                 successCount++;
                 await new Promise(r => setTimeout(r, 800)); 
-             } catch (e) { console.error("Failed to download item", item.name); }
+             } catch (e) { }
         }
         updateNotification(notifId, `${successCount}/${itemsToDownload.length} file terdownload`, 'success');
-    } catch (e) { updateNotification(notifId, 'Gagal melakukan download massal', 'error'); } 
+    } catch (e) { updateNotification(notifId, 'Gagal', 'error'); } 
     finally { setIsProcessingAction(false); }
   };
 
@@ -596,12 +511,9 @@ const App = () => {
             const blob = await getBlobFromUrl(url);
             const blobUrl = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
-            a.href = blobUrl;
-            a.download = `image-${Date.now()}.png`;
-            document.body.appendChild(a);
-            a.click();
-            window.URL.revokeObjectURL(blobUrl);
-            document.body.removeChild(a);
+            a.href = blobUrl; a.download = `image-${Date.now()}.png`;
+            document.body.appendChild(a); a.click();
+            window.URL.revokeObjectURL(blobUrl); document.body.removeChild(a);
             updateNotification(notifId, 'Berhasil didownload', 'success');
         } catch(e) { updateNotification(notifId, 'Gagal download', 'error'); }
     }
@@ -611,61 +523,41 @@ const App = () => {
     const notifId = addNotification('Menyalin gambar...', 'loading');
     try {
       let blob: Blob | null = null;
-
-      // 1. Try to grab directly from DOM (Canvas/Cache)
       let imgElement: HTMLImageElement | null = null;
-
       if (typeof itemOrUrl === 'string') {
-        // From Preview Modal
         const previewContainer = document.querySelector('.fixed.z-\\[150\\]');
         imgElement = previewContainer?.querySelector('img') as HTMLImageElement;
       } else {
-        // From Grid Item
         const elementId = `item-${itemOrUrl.id}`;
         const container = document.getElementById(elementId);
         imgElement = container?.querySelector('img') as HTMLImageElement;
       }
-
       if (imgElement && imgElement.complete && imgElement.naturalWidth > 0) {
          try {
            const canvas = document.createElement('canvas');
-           canvas.width = imgElement.naturalWidth;
-           canvas.height = imgElement.naturalHeight;
+           canvas.width = imgElement.naturalWidth; canvas.height = imgElement.naturalHeight;
            const ctx = canvas.getContext('2d');
            if (ctx) {
              ctx.drawImage(imgElement, 0, 0);
              blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'));
            }
-         } catch (err) {
-           console.warn("Canvas copy failed (tainted?), falling back to fetch.");
-         }
+         } catch (err) { }
       }
-
-      // 2. Fallback: Fetch URL if DOM failed
       if (!blob) {
          const url = typeof itemOrUrl === 'string' ? itemOrUrl : (itemOrUrl.thumbnail || itemOrUrl.url);
          if (!url) throw new Error("URL tidak ditemukan");
          blob = await getBlobFromUrl(url);
       }
-
       if (!blob) throw new Error("Gagal membuat blob");
-
-      // 3. Write to Clipboard
       await navigator.clipboard.write([new ClipboardItem({[blob.type]: blob})]);
       updateNotification(notifId, 'Gambar disalin!', 'success');
-
-    } catch (err) {
-      console.error(err);
-      updateNotification(notifId, 'Gagal menyalin: ' + (err instanceof Error ? err.message : 'Unknown error'), 'error');
-    }
+    } catch (err) { updateNotification(notifId, 'Gagal menyalin', 'error'); }
   };
 
   const executeAction = async (action: string) => {
     const ids = Array.from(selectedIds) as string[];
     const targetItem = contextMenu?.targetItem || (ids.length === 1 ? items.find(i => i.id === ids[0]) : null);
-    
-    setContextMenu(null);
-    setIsNewDropdownOpen(false);
+    setContextMenu(null); setIsNewDropdownOpen(false);
 
     if (action === 'download') {
         if (ids.length >= 1) handleBulkDownload(ids);
@@ -676,14 +568,11 @@ const App = () => {
        if (ids.length === 0) return;
        const isPermanent = action === 'delete_permanent' || currentFolderId === recycleBinId;
        setModal({
-         type: 'confirm',
-         title: isPermanent ? 'Hapus Permanen?' : 'Pindah ke Sampah?',
+         type: 'confirm', title: isPermanent ? 'Hapus Permanen?' : 'Pindah ke Sampah?',
          message: isPermanent ? `Hapus ${ids.length} item?` : `Pindahkan ${ids.length} item ke Recycle Bin?`,
-         confirmText: 'Hapus',
-         isDanger: true,
+         confirmText: 'Hapus', isDanger: true,
          onConfirm: async () => {
-            setModal(null);
-            setIsProcessingAction(true);
+            setModal(null); setIsProcessingAction(true);
             setItems(prev => prev.map(i => ids.includes(i.id) ? { ...i, status: 'deleting' } : i));
             setSelectedIds(new Set());
             try {
@@ -707,12 +596,10 @@ const App = () => {
          }
        });
     }
-    // ... rest of actions (same as before)
     else if (action === 'restore') {
          if (ids.length === 0) return;
          setItems(prev => prev.map(i => ids.includes(i.id) ? { ...i, status: 'restoring' } : i));
-         setSelectedIds(new Set());
-         setIsProcessingAction(true);
+         setSelectedIds(new Set()); setIsProcessingAction(true);
          const notifId = addNotification(`Mengembalikan ${ids.length} item...`, 'loading');
          try {
              for (const id of ids) {
@@ -745,11 +632,7 @@ const App = () => {
          availableFolders.forEach(f => options.push({ label: `📁 ${f.name}`, value: f.id }));
          if (options.length === 0) { setModal({ type: 'alert', title: 'Info', message: 'Tidak ada tujuan.' }); return; }
          setModal({
-             type: 'select',
-             title: `Pindahkan ${ids.length} Item`,
-             message: 'Pilih folder tujuan:',
-             options: options,
-             confirmText: 'Pindahkan',
+             type: 'select', title: `Pindahkan ${ids.length} Item`, message: 'Pilih folder tujuan:', options: options, confirmText: 'Pindahkan',
              onConfirm: async (targetId) => {
                   if (targetId === undefined) return;
                   setModal(null); setIsProcessingAction(true);
@@ -766,10 +649,7 @@ const App = () => {
      else if (action === 'rename') {
          if (!targetItem) return;
          setModal({
-             type: 'input',
-             title: 'Ganti Nama',
-             inputValue: targetItem.name,
-             confirmText: 'Simpan',
+             type: 'input', title: 'Ganti Nama', inputValue: targetItem.name, confirmText: 'Simpan',
              onConfirm: async (newName) => {
                  if(newName && newName !== targetItem.name) {
                      setModal(null); setIsProcessingAction(true);
@@ -786,10 +666,7 @@ const App = () => {
      }
      else if (action === 'new_folder') {
          setModal({
-             type: 'input',
-             title: 'Folder Baru',
-             inputValue: 'Folder Baru',
-             confirmText: 'Buat',
+             type: 'input', title: 'Folder Baru', inputValue: 'Folder Baru', confirmText: 'Buat',
              onConfirm: async (name) => {
                  if(name) {
                      setModal(null); setIsProcessingAction(true);
@@ -805,18 +682,14 @@ const App = () => {
          });
      }
      else if (action === 'empty_bin') {
-         // ... existing logic
-          if (!recycleBinId) return;
+        if (!recycleBinId) return;
         const res = await API.getFolderContents(recycleBinId);
         const binItems: Item[] = Array.isArray(res.data) ? res.data : [];
         const binIds = binItems.map(i => i.id);
         if (binIds.length === 0) { addNotification("Recycle Bin sudah kosong", 'success'); return; }
         setModal({
-            type: 'confirm',
-            title: 'Kosongkan Recycle Bin?',
-            message: `Hapus semua ${binIds.length} item?`,
-            confirmText: 'Kosongkan',
-            isDanger: true,
+            type: 'confirm', title: 'Kosongkan Recycle Bin?', message: `Hapus semua ${binIds.length} item?`,
+            confirmText: 'Kosongkan', isDanger: true,
             onConfirm: async () => {
                 setModal(null); setIsProcessingAction(true);
                 const notifId = addNotification("Mengosongkan Recycle Bin...", 'loading');
@@ -831,7 +704,7 @@ const App = () => {
         });
      }
      else if (action === 'restore_all') {
-          if (!recycleBinId) return;
+         if (!recycleBinId) return;
          const res = await API.getFolderContents(recycleBinId);
          const binItems: Item[] = Array.isArray(res.data) ? res.data : [];
          const binIds = binItems.map(i => i.id);
@@ -853,13 +726,10 @@ const App = () => {
      }
   };
 
-  // --- UPLOAD LOGIC ---
   const handleUploadFiles = async (files: File[]) => {
       const newUploads: UploadItem[] = files.map(f => ({
           id: Math.random().toString(36).substr(2, 9),
-          file: f,
-          status: 'uploading',
-          progress: 5 
+          file: f, status: 'uploading', progress: 5 
       }));
       setUploadQueue(prev => [...prev, ...newUploads]);
       for (const item of newUploads) {
@@ -883,8 +753,6 @@ const App = () => {
   const handleDrop = async (e: React.DragEvent) => {
     e.preventDefault();
     setIsDraggingFile(false);
-    
-    // Legacy Desktop Drag
     if (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes("text/item-id")) {
         const movedItemId = e.dataTransfer.getData("text/item-id");
         let targetElement = e.target as HTMLElement;
@@ -905,7 +773,6 @@ const App = () => {
         }
         return;
     }
-
     if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       handleUploadFiles(Array.from(e.dataTransfer.files));
     }
@@ -915,6 +782,7 @@ const App = () => {
       setEditingNote({ id: 'temp-' + Date.now(), galleryId: currentFolderId, title: 'Catatan Baru', content: '', timestamp: Date.now() });
       setIsNewDropdownOpen(false); setContextMenu(null);
   };
+
   const handleSaveNote = async (id: string, title: string, content: string) => {
       setIsGlobalLoading(true); setGlobalLoadingMessage("Menyimpan catatan...");
       try {
@@ -925,12 +793,14 @@ const App = () => {
               const updatedItem: Item = { ...items.find(i => i.id === fileId)!, name: title + '.txt', content: content, lastUpdated: Date.now(), snippet: stripHtml(content).substring(0, 150) };
               await DB.updateItemInCache(currentFolderId, updatedItem);
               if (currentFolderId === activeFolderIdRef.current) setItems(prev => prev.map(i => i.id === fileId ? updatedItem : i));
-          } else {
-              if (currentFolderId === activeFolderIdRef.current) await loadFolder(currentFolderId); 
-          }
+          } else if (currentFolderId === activeFolderIdRef.current) await loadFolder(currentFolderId); 
           setEditingNote(null); addNotification('Catatan tersimpan', 'success');
-      } catch(e) { addNotification('Gagal simpan', 'error'); } finally { setIsGlobalLoading(false); }
+      } catch(e) { 
+        // FIX: Replaced non-existent notifId with addNotification for error reporting
+        addNotification('Gagal simpan', 'error'); 
+      } finally { setIsGlobalLoading(false); }
   };
+
   const handleOpenNote = async (item: Item) => {
       setIsGlobalLoading(true); setGlobalLoadingMessage("Membuka catatan...");
       try {
@@ -943,8 +813,12 @@ const App = () => {
               if (currentFolderId === activeFolderIdRef.current) setItems(prev => prev.map(i => i.id === item.id ? updatedItem : i));
               setEditingNote({ id: item.id, galleryId: currentFolderId, title: item.name.replace('.txt', ''), content: content, timestamp: item.lastUpdated });
           }
-      } catch(e) { addNotification('Gagal buka catatan', 'error'); } finally { setIsGlobalLoading(false); }
+      } catch(e) { 
+        // FIX: Replaced non-existent notifId with addNotification for error reporting
+        addNotification('Gagal buka catatan', 'error'); 
+      } finally { setIsGlobalLoading(false); }
   };
+
   const handleBreadcrumbClick = (index: number) => {
      if (index === -1) { setFolderHistory([]); setCurrentFolderId(""); } 
      else { const target = folderHistory[index]; setFolderHistory(prev => prev.slice(0, index + 1)); setCurrentFolderId(target.id); }
@@ -958,39 +832,35 @@ const App = () => {
 
   return (
     <div 
-      className="min-h-screen bg-slate-950 text-slate-200 relative select-none"
+      className="min-h-screen bg-slate-950 text-slate-200 relative select-none touch-none"
       ref={containerRef}
       onContextMenu={(e) => handleContextMenu(e)} 
       onDragOver={(e) => { 
-          e.preventDefault(); 
-          e.stopPropagation(); 
-          // FIX: STRICTER CHECK to prevent scroll triggering upload overlay
+          e.preventDefault(); e.stopPropagation(); 
           if (e.dataTransfer && e.dataTransfer.types.includes("Files") && !e.dataTransfer.types.includes("text/item-id")) {
             setIsDraggingFile(true); 
           }
       }}
-      onDragLeave={() => setIsDraggingFile(false)}
+      onDragLeave={(e) => {
+          if (!e.relatedTarget || !containerRef.current?.contains(e.relatedTarget as Node)) {
+            setIsDraggingFile(false);
+          }
+      }}
       onDrop={handleDrop}
-      // Replaced Mouse/Touch with Pointer Events for Universal Swipe & Long Press
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerUp}
     >
       
-      {/* CUSTOM DRAG LAYER (GHOST) */}
       {customDragItem && customDragPos && (
           <div 
               className="fixed z-[999] pointer-events-none p-4 rounded-xl border border-blue-500 bg-slate-800/90 shadow-2xl flex flex-col items-center gap-2 w-32 backdrop-blur-sm"
-              style={{ 
-                  left: customDragPos.x, 
-                  top: customDragPos.y,
-                  transform: 'translate(-50%, -50%) rotate(5deg)'
-              }}
+              style={{ left: customDragPos.x, top: customDragPos.y, transform: 'translate(-50%, -50%) rotate(5deg)' }}
           >
               {customDragItem.type === 'folder' ? <Folder size={32} className="text-blue-500"/> : 
                customDragItem.type === 'note' ? <FileText size={32} className="text-yellow-500"/> :
-               (customDragItem.thumbnail ? <img src={customDragItem.thumbnail} className="w-16 h-16 object-cover rounded"/> : <ImageIcon size={32} className="text-purple-500"/>)}
+               (customDragItem.thumbnail ? <img src={customDragItem.thumbnail} className="w-16 h-16 object-cover rounded" referrerPolicy="no-referrer" /> : <ImageIcon size={32} className="text-purple-500"/>)}
               <span className="text-[10px] font-bold text-slate-200 truncate w-full text-center">
                   {selectedIds.size > 1 ? `${selectedIds.size} Items` : customDragItem.name}
               </span>
@@ -1010,22 +880,14 @@ const App = () => {
       )}
       
       <SelectionFloatingMenu 
-         selectedIds={selectedIds} 
-         items={items}
-         onClear={() => setSelectedIds(new Set())}
-         onAction={executeAction}
-         containerRef={containerRef}
-         isInRecycleBin={currentFolderId === recycleBinId}
+         selectedIds={selectedIds} items={items}
+         onClear={() => setSelectedIds(new Set())} onAction={executeAction}
+         containerRef={containerRef} isInRecycleBin={currentFolderId === recycleBinId}
          recycleBinId={recycleBinId}
       />
 
-      <UploadProgress 
-        uploads={uploadQueue} 
-        onClose={() => setUploadQueue([])} 
-        onRemove={(id) => setUploadQueue(prev => prev.filter(u => u.id !== id))} 
-      />
+      <UploadProgress uploads={uploadQueue} onClose={() => setUploadQueue([])} onRemove={(id) => setUploadQueue(prev => prev.filter(u => u.id !== id))} />
 
-      {/* NOTIFICATIONS */}
       <div className="fixed bottom-6 right-6 z-[300] flex flex-col gap-2 pointer-events-none">
           {notifications.map(n => (
               <div key={n.id} className="bg-slate-800/90 backdrop-blur-md border border-slate-700 text-white px-4 py-3 rounded-xl shadow-2xl flex items-center gap-3 animate-in slide-in-from-bottom-5 fade-in duration-300">
@@ -1037,7 +899,6 @@ const App = () => {
           ))}
       </div>
 
-      {/* HEADER */}
       <header className="sticky top-0 z-40 bg-slate-900/90 backdrop-blur border-b border-slate-800 h-16 flex items-center px-4 justify-between shadow-sm">
         <div className="flex items-center gap-1 overflow-x-auto no-scrollbar mask-gradient-right">
            <button onClick={() => handleBreadcrumbClick(-1)} className={`p-2 rounded-lg flex items-center gap-2 text-sm font-medium transition-colors ${currentFolderId === "" ? 'text-blue-400 bg-blue-500/10' : 'text-slate-400 hover:bg-slate-800'}`}>
@@ -1072,9 +933,7 @@ const App = () => {
                             <Upload size={18} className="text-green-400"/> Upload File
                             <input type="file" multiple className="hidden" onChange={(e) => {
                                 setIsNewDropdownOpen(false);
-                                if(e.target.files) {
-                                    handleUploadFiles(Array.from(e.target.files));
-                                }
+                                if(e.target.files) handleUploadFiles(Array.from(e.target.files));
                             }} />
                         </label>
                     </div>
@@ -1084,7 +943,6 @@ const App = () => {
         )}
       </header>
 
-      {/* MAIN CONTENT */}
       <main className="p-4 md:p-6 pb-20 space-y-8">
         {loading ? (
             <div className="flex flex-col items-center justify-center py-20 gap-4 opacity-50">
@@ -1108,15 +966,10 @@ const App = () => {
                         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
                             {groupedItems.folders.map(item => (
                                 <FolderItem 
-                                    key={item.id} 
-                                    item={item} 
-                                    isRecycleBin={item.id === recycleBinId} 
-                                    selected={selectedIds.has(item.id)} 
-                                    isDropTarget={dropTargetId === item.id}
-                                    onClick={handleItemClick} 
-                                    onDoubleClick={handleItemDoubleClick} 
-                                    onContextMenu={handleContextMenu} 
-                                    onToggleSelect={() => handleToggleSelect(item.id)} 
+                                    key={item.id} item={item} isRecycleBin={item.id === recycleBinId} 
+                                    selected={selectedIds.has(item.id)} isDropTarget={dropTargetId === item.id}
+                                    onClick={handleItemClick} onDoubleClick={handleItemDoubleClick} 
+                                    onContextMenu={handleContextMenu} onToggleSelect={() => handleToggleSelect(item.id)} 
                                 />
                             ))}
                         </div>
@@ -1128,7 +981,6 @@ const App = () => {
                             <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2"><FileText size={14}/> Notes</h2>
                             <div className="h-px bg-slate-800 flex-1"></div>
                         </div>
-                        {/* UPDATE: Increased grid columns to match images/folders, making items smaller */}
                         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
                             {groupedItems.notes.map(item => (
                                 <NoteItem key={item.id} item={item} selected={selectedIds.has(item.id)} onClick={handleItemClick} onDoubleClick={handleItemDoubleClick} onContextMenu={handleContextMenu} onToggleSelect={() => handleToggleSelect(item.id)} />
@@ -1246,9 +1098,7 @@ const App = () => {
                         <Upload size={16} className="text-green-400"/> Upload File
                         <input type="file" multiple className="hidden" onChange={(e) => {
                             setContextMenu(null);
-                            if(e.target.files) {
-                                handleUploadFiles(Array.from(e.target.files));
-                            }
+                            if(e.target.files) handleUploadFiles(Array.from(e.target.files));
                         }} />
                     </label>
                     <div className="h-px bg-slate-700 my-1"/>
@@ -1261,7 +1111,11 @@ const App = () => {
       )}
 
       {previewImage && (
-        <div className="fixed inset-0 z-[150] bg-black/95 backdrop-blur flex items-center justify-center p-4 animate-in fade-in" onClick={() => setPreviewImage(null)}>
+        <div 
+            className="fixed inset-0 z-[150] bg-black/95 backdrop-blur flex items-center justify-center p-4 animate-in fade-in" 
+            onClick={() => setPreviewImage(null)}
+            onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); }}
+        >
             <div className="absolute top-4 right-4 z-10 flex gap-2">
                  <button onClick={(e) => { e.stopPropagation(); handleCopyImage(previewImage); }} className="p-2 bg-white/10 rounded-full hover:bg-white/20 text-white" title="Copy Image">
                     <Image size={24}/>
@@ -1275,9 +1129,16 @@ const App = () => {
             </div>
             <img 
                 src={previewImage} 
-                className="max-w-full max-h-full object-contain rounded-lg shadow-2xl" 
+                className="max-w-full max-h-full object-contain rounded-lg shadow-2xl cursor-grab active:cursor-grabbing" 
                 onClick={(e) => e.stopPropagation()} 
                 referrerPolicy="no-referrer"
+                draggable={true}
+                onDragStart={(e) => {
+                    const url = previewImage;
+                    e.dataTransfer.setData("text/uri-list", url);
+                    e.dataTransfer.setData("text/plain", url);
+                    e.dataTransfer.setData("DownloadURL", `image/png:preview-${Date.now()}.png:${url}`);
+                }}
             />
         </div>
       )}
@@ -1295,7 +1156,7 @@ const App = () => {
                  </h3>
                  {modal.message && <p className="text-sm text-slate-400 mb-4">{modal.message}</p>}
                  {modal.type === 'input' && (
-                     <input ref={inputRef} type="text" defaultValue={modal.inputValue} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500" onKeyDown={(e) => { if(e.key === 'Enter') modal.onConfirm?.(e.currentTarget.value); }} onChange={(e) => { if (modal) modal.inputValue = e.target.value; }} />
+                     <input ref={inputRef} type="text" defaultValue={modal.inputValue} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500" onKeyDown={(e) => { if(e.key === 'Enter') { modal.onConfirm?.(e.currentTarget.value); setModal(null); } }} onChange={(e) => { if (modal) modal.inputValue = e.target.value; }} />
                  )}
                  {modal.type === 'select' && modal.options && (
                      <select ref={selectRef} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500" onChange={(e) => { if (modal) modal.inputValue = e.target.value; }} defaultValue={modal.options[0]?.value}>
@@ -1305,7 +1166,7 @@ const App = () => {
              </div>
              <div className="bg-slate-800/50 p-4 flex gap-3 border-t border-slate-800">
                  <button onClick={() => setModal(null)} className="flex-1 py-2 rounded-lg text-sm font-medium hover:bg-slate-700 transition-colors text-slate-300">Batal</button>
-                 <button onClick={() => { let val = modal.inputValue; if (modal.type === 'select' && !val && modal.options && modal.options.length > 0) val = modal.options[0].value; modal.onConfirm?.(val); }} className={`flex-1 py-2 rounded-lg text-sm font-medium text-white shadow-lg transition-transform active:scale-95 ${modal.isDanger ? 'bg-red-600 hover:bg-red-500' : 'bg-blue-600 hover:bg-blue-500'}`}>
+                 <button onClick={() => { let val = modal.inputValue; if (modal.type === 'select' && !val && modal.options && modal.options.length > 0) val = modal.options[0].value; modal.onConfirm?.(val); setModal(null); }} className={`flex-1 py-2 rounded-lg text-sm font-medium text-white shadow-lg transition-transform active:scale-95 ${modal.isDanger ? 'bg-red-600 hover:bg-red-500' : 'bg-blue-600 hover:bg-blue-500'}`}>
                      {modal.confirmText || 'OK'}
                  </button>
              </div>
@@ -1330,55 +1191,37 @@ const ItemOverlay = ({ status }: { status?: string }) => {
     );
 };
 
-// UPDATED Common Draggable Handle (To enable drag only on intent)
 const DragHandle = ({ item }: { item: Item }) => {
-    // Store both file object (for desktop drop) and base64 string (for legacy drop)
     const [dragData, setDragData] = useState<{ file: File, base64: string } | null>(null);
     const [isLoading, setIsLoading] = useState(false);
 
-    // Triggered on hover
     const prepareDragData = async () => {
-        if (dragData || isLoading) return;
-        if (item.type === 'folder') return;
-        
+        if (dragData || isLoading || item.type === 'folder') return;
         setIsLoading(true);
         const url = item.url || item.thumbnail;
         if (!url) { setIsLoading(false); return; }
-
         try {
              let blob: Blob;
              try {
                  const res = await fetch(url, { cache: 'force-cache', referrerPolicy: 'no-referrer' });
-                 if (!res.ok) throw new Error("Direct fetch failed");
+                 if (!res.ok) throw new Error();
                  blob = await res.blob();
              } catch (e) {
                  const proxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(url)}&output=png`;
                  const res = await fetch(proxyUrl);
-                 if (!res.ok) throw new Error("Proxy failed");
                  blob = await res.blob();
              }
-
-             // FIX: Ensure correct extension
              const mime = blob.type;
              let ext = mime.split('/')[1] || 'bin';
              if(ext === 'jpeg') ext = 'jpg';
              if(ext === 'plain') ext = 'txt';
-             
              let fileName = item.name;
-             // Add extension if missing
-             if (!fileName.toLowerCase().includes('.')) {
-                 fileName = `${fileName}.${ext}`;
-             }
-
+             if (!fileName.toLowerCase().includes('.')) fileName = `${fileName}.${ext}`;
              const file = new File([blob], fileName, { type: mime });
              const base64 = await API.fileToBase64(blob);
-             
              setDragData({ file, base64 });
-        } catch (err) {
-             console.warn("Failed to prepare drag data", err);
-        } finally {
-            setIsLoading(false);
-        }
+        } catch (err) { } 
+        finally { setIsLoading(false); }
     };
 
     return (
@@ -1387,35 +1230,26 @@ const DragHandle = ({ item }: { item: Item }) => {
         draggable={true}
         onMouseEnter={prepareDragData}
         onDragStart={(e) => {
-            // 1. Internal ID
+            const url = item.url || item.thumbnail || "";
             e.dataTransfer.setData("text/item-id", item.id);
-            
             if (item.type === 'image') {
-                const url = item.url || item.thumbnail || "";
-                
-                // Ghost image
+                // PRIORITIZE GOOGLE DIRECT LINK FOR DESKTOP DRAG
+                e.dataTransfer.setData("text/uri-list", url);
+                e.dataTransfer.setData("text/plain", url);
                 const imgEl = document.getElementById(`item-${item.id}`)?.querySelector('img') as HTMLImageElement;
                 if (imgEl) e.dataTransfer.setDragImage(imgEl, imgEl.width / 2, imgEl.height / 2);
-
                 if (dragData) {
                      e.dataTransfer.effectAllowed = "copy";
-                     // KEY: Add File object
                      e.dataTransfer.items.add(dragData.file);
-                     
-                     // Legacy
-                     e.dataTransfer.setData("DownloadURL", `${dragData.file.type}:${dragData.file.name}:${dragData.base64}`); // Use base64 or blob? Base64 is safer across origins if small enough.
+                     e.dataTransfer.setData("DownloadURL", `${dragData.file.type}:${dragData.file.name}:${url}`); 
                 } else {
-                     // If data isn't ready, try to pass URL
-                     e.dataTransfer.setData("text/uri-list", url);
-                     e.dataTransfer.setData("text/plain", url);
+                     e.dataTransfer.setData("DownloadURL", `image/png:${item.name}:${url}`);
                 }
             } else if (item.type === 'note' && item.content) {
                  e.dataTransfer.setData("text/plain", stripHtml(item.content));
             }
-
             e.stopPropagation();
         }}
-        // Trigger prefetch on pointer down too (for touch/quick clicks)
         onPointerDown={(e) => { prepareDragData(); e.stopPropagation(); }}
     >
         <GripVertical size={18} />
@@ -1424,81 +1258,43 @@ const DragHandle = ({ item }: { item: Item }) => {
 };
 
 const FolderItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect, isRecycleBin, isDropTarget }: any) => (
-    <div 
-        id={`item-${item.id}`} 
-        data-folder-id={item.id} 
-        data-item-id={item.id} 
-        // Draggable false on root to allow swipe selection
-        draggable={false}
-        onClick={(e) => onClick(e, item)} 
-        onDoubleClick={(e) => onDoubleClick(e, item)} 
-        onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} 
-        // Add pan-y touch-action to allow vertical scrolling but let JS capture horizontal swipes
-        style={{ touchAction: 'pan-y' }}
+    <div id={`item-${item.id}`} data-folder-id={item.id} data-item-id={item.id} draggable={false}
+        onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} 
+        onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} style={{ touchAction: 'pan-y' }}
         className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col items-center gap-2 item-clickable select-none ${
             isDropTarget ? 'bg-blue-500/40 border-blue-400 scale-105 shadow-xl ring-2 ring-blue-400 z-30' :
             selected ? 'bg-blue-500/20 border-blue-500 shadow-md ring-1 ring-blue-500' : 'bg-slate-900 border-slate-800 hover:bg-slate-800 hover:border-slate-600'
         }`}
     >
         <ItemOverlay status={item.status} />
-        
-        {/* Selection Checkbox */}
         <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
             <CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/>
         </div>
-
-        {/* Drag Handle */}
         {!isRecycleBin && <DragHandle item={item} />}
-
-        {isRecycleBin ? (
-             <Trash2 size={48} className="text-red-500 fill-red-500/10 drop-shadow-md pointer-events-none" />
-        ) : (
-             <Folder size={48} className="text-blue-500 fill-blue-500/10 drop-shadow-md pointer-events-none" />
-        )}
+        {isRecycleBin ? <Trash2 size={48} className="text-red-500 fill-red-500/10 drop-shadow-md pointer-events-none" /> : <Folder size={48} className="text-blue-500 fill-blue-500/10 drop-shadow-md pointer-events-none" />}
         <span className={`text-xs font-medium text-center truncate w-full px-1 ${isRecycleBin ? 'text-red-400' : 'text-slate-200'}`}>{item.name}</span>
     </div>
 );
 
 const NoteItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }: any) => {
     const cleanText = stripHtml(item.content || item.snippet || "").slice(0, 150);
-    
     return (
-    <div 
-        id={`item-${item.id}`} 
-        data-item-id={item.id} 
-        draggable={false}
-        onClick={(e) => onClick(e, item)} 
-        onDoubleClick={(e) => onDoubleClick(e, item)} 
-        onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} 
-        style={{ touchAction: 'pan-y' }}
+    <div id={`item-${item.id}`} data-item-id={item.id} draggable={false}
+        onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} 
+        onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} style={{ touchAction: 'pan-y' }}
         className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col gap-2 item-clickable select-none aspect-square shadow-lg hover:shadow-xl hover:-translate-y-1 hover:rotate-1 duration-200 ${
-            selected 
-            ? 'bg-yellow-200 border-blue-500 ring-2 ring-blue-500 scale-[1.02] z-10' 
-            : 'bg-[#fff9c4] border-transparent hover:border-yellow-300'
+            selected ? 'bg-yellow-200 border-blue-500 ring-2 ring-blue-500 scale-[1.02] z-10' : 'bg-[#fff9c4] border-transparent hover:border-yellow-300'
         }`}
     >
         <ItemOverlay status={item.status} />
-        
-        {/* Selection Checkbox */}
         <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
             <CheckSquare size={18} className={selected ? "text-blue-600 bg-white rounded shadow-sm" : "text-slate-600/50 hover:text-slate-900"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/>
         </div>
-        
         <DragHandle item={item} />
-
-        {/* Content Area */}
         <div className="flex-1 w-full overflow-hidden flex flex-col">
-            {/* UPDATE: Increased title text size (text-sm) */}
-            <h4 className="text-sm font-bold text-slate-900 mb-1.5 truncate border-b border-slate-800/10 pb-1">
-                {item.name.replace('.txt', '')}
-            </h4>
-            {/* UPDATE: Increased content text size (text-xs) */}
-            <p className="text-xs text-slate-800/90 leading-relaxed font-sans font-medium break-words whitespace-pre-wrap line-clamp-6">
-                {cleanText || <span className="italic text-slate-500">Kosong...</span>}
-            </p>
+            <h4 className="text-sm font-bold text-slate-900 mb-1.5 truncate border-b border-slate-800/10 pb-1">{item.name.replace('.txt', '')}</h4>
+            <p className="text-xs text-slate-800/90 leading-relaxed font-sans font-medium break-words whitespace-pre-wrap line-clamp-6">{cleanText || <span className="italic text-slate-500">Kosong...</span>}</p>
         </div>
-
-        {/* Bottom Decoration */}
         <div className="flex items-center justify-between w-full pt-2 mt-auto opacity-50">
            <FileText size={10} className="text-slate-600" />
            <span className="text-[9px] text-slate-600">{new Date(item.lastUpdated).toLocaleDateString()}</span>
@@ -1508,47 +1304,28 @@ const NoteItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onTog
 };
 
 const ImageItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }: any) => (
-    <div 
-        id={`item-${item.id}`} 
-        data-item-id={item.id} 
-        draggable={false}
-        onClick={(e) => onClick(e, item)} 
-        onDoubleClick={(e) => onDoubleClick(e, item)} 
-        onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} 
-        style={{ touchAction: 'pan-y' }}
+    <div id={`item-${item.id}`} data-item-id={item.id} draggable={false}
+        onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} 
+        onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} style={{ touchAction: 'pan-y' }}
         className={`group relative rounded-xl border transition-all cursor-pointer overflow-hidden aspect-square flex flex-col items-center justify-center bg-slate-950 item-clickable select-none ${selected ? 'border-blue-500 shadow-md ring-1 ring-blue-500' : 'border-slate-800 hover:border-slate-600'}`}
     >
         <ItemOverlay status={item.status} />
         <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
             <CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300 shadow-sm"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/>
         </div>
-        
         <DragHandle item={item} />
-
         {item.thumbnail || item.url ? (
-             <img 
-                src={item.thumbnail || item.url} 
-                alt={item.name} 
-                className="w-full h-full object-cover pointer-events-none" 
-                loading="lazy" 
-                referrerPolicy="no-referrer"
-                onError={(e) => {
-                    e.currentTarget.style.display = 'none';
-                    e.currentTarget.parentElement?.classList.add('bg-slate-800');
-                }}
-             />
-        ) : (
-             <ImageIcon size={32} className="text-slate-600 pointer-events-none" />
-        )}
+             <img src={item.thumbnail || item.url} alt={item.name} className="w-full h-full object-cover pointer-events-none" loading="lazy" referrerPolicy="no-referrer"
+                onError={(e) => { e.currentTarget.style.display = 'none'; e.currentTarget.parentElement?.classList.add('bg-slate-800'); }} />
+        ) : <ImageIcon size={32} className="text-slate-600 pointer-events-none" />}
         <div className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm p-1.5 truncate pointer-events-none">
              <span className="text-[10px] font-medium text-slate-200 block text-center truncate">{item.name}</span>
         </div>
     </div>
 );
 
-// --- FLOATING MENU ---
-const SelectionFloatingMenu = ({ selectedIds, items, onClear, onAction, containerRef, isInRecycleBin, recycleBinId }: { selectedIds: Set<string>, items: Item[], onClear: () => void, onAction: (a: string) => void, containerRef: React.RefObject<HTMLDivElement>, isInRecycleBin: boolean, recycleBinId: string }) => {
-    const [pos, setPos] = useState<{top?: number, left?: number, bottom?: number, x?:number}>({ bottom: 24, left: window.innerWidth / 2 }); 
+const SelectionFloatingMenu = ({ selectedIds, items, onClear, onAction, containerRef, isInRecycleBin, recycleBinId }: any) => {
+    const [pos, setPos] = useState<{top?: number, left?: number, bottom?: number}>({ bottom: 24, left: window.innerWidth / 2 }); 
     const [styleType, setStyleType] = useState<'contextual' | 'dock'>('dock');
     const menuRef = useRef<HTMLDivElement>(null);
     const isRecycleBinFolderSelected = !isInRecycleBin && Array.from(selectedIds).some(id => id === recycleBinId);
@@ -1568,13 +1345,11 @@ const SelectionFloatingMenu = ({ selectedIds, items, onClear, onAction, containe
             const viewportHeight = window.innerHeight;
             if (selectedIds.size > 8 || (viewMaxY - viewMinY) > (viewportHeight * 0.4)) { setStyleType('dock'); setPos({ bottom: 32, left: window.innerWidth / 2 }); return; }
             const menuHeight = menuRef.current ? menuRef.current.offsetHeight : 60;
-            const gap = 12;
-            let targetTop = (viewMinY > (80 + menuHeight + gap)) ? window.scrollY + viewMinY - menuHeight - gap : window.scrollY + viewMaxY + gap;
+            const targetTop = (viewMinY > (80 + menuHeight + 12)) ? window.scrollY + viewMinY - menuHeight - 12 : window.scrollY + viewMaxY + 12;
             let finalLeft = centerX;
             if (menuRef.current) {
-                const menuWidth = menuRef.current.offsetWidth;
-                const minSafe = (menuWidth / 2) + 16;
-                const maxSafe = window.innerWidth - (menuWidth / 2) - 16;
+                const minSafe = (menuRef.current.offsetWidth / 2) + 16;
+                const maxSafe = window.innerWidth - (menuRef.current.offsetWidth / 2) - 16;
                 finalLeft = Math.max(minSafe, Math.min(maxSafe, centerX));
             }
             setStyleType('contextual'); setPos({ top: targetTop, left: finalLeft });
@@ -1584,30 +1359,25 @@ const SelectionFloatingMenu = ({ selectedIds, items, onClear, onAction, containe
     }, [selectedIds, items]);
 
     if (selectedIds.size === 0) return null;
-    const dockStyle = "fixed z-50 transform -translate-x-1/2 flex items-center gap-1 bg-slate-900/90 backdrop-blur-md border border-blue-500/50 p-2 rounded-2xl shadow-2xl shadow-blue-500/10 animate-in zoom-in-95 slide-in-from-bottom-5 duration-200 transition-all max-w-[95vw] overflow-x-auto";
-    const contextStyle = "absolute z-50 transform -translate-x-1/2 flex items-center gap-1 bg-slate-900/90 backdrop-blur-md border border-blue-500/50 p-1.5 rounded-full shadow-2xl shadow-blue-500/20 animate-in fade-in zoom-in-95 duration-150 transition-all duration-300 ease-out max-w-[95vw] overflow-x-auto";
-    const isContext = styleType === 'contextual';
-
     return (
-        <div ref={menuRef} className={isContext ? contextStyle : dockStyle} style={{ top: isContext ? pos.top : undefined, left: isContext ? pos.left : '50%', bottom: isContext ? undefined : pos.bottom }}>
-            <div className={`flex items-center gap-2 ${isContext ? 'px-2' : 'px-3 border-r border-white/10 mr-1'}`}>
+        <div ref={menuRef} className={`${styleType === 'contextual' ? 'absolute z-50 transform -translate-x-1/2 flex items-center gap-1 bg-slate-900/90 backdrop-blur-md border border-blue-500/50 p-1.5 rounded-full shadow-2xl' : 'fixed z-50 transform -translate-x-1/2 flex items-center gap-1 bg-slate-900/90 backdrop-blur-md border border-blue-500/50 p-2 rounded-2xl shadow-2xl shadow-blue-500/10'} animate-in zoom-in-95 duration-200 transition-all max-w-[95vw] overflow-x-auto`} 
+            style={{ top: styleType === 'contextual' ? pos.top : undefined, left: styleType === 'contextual' ? pos.left : '50%', bottom: styleType === 'contextual' ? undefined : pos.bottom }}>
+            <div className={`flex items-center gap-2 ${styleType === 'contextual' ? 'px-2' : 'px-3 border-r border-white/10 mr-1'}`}>
                 <span className="font-bold text-sm text-blue-100">{selectedIds.size}</span>
                 <button onClick={(e) => { e.stopPropagation(); onClear(); }} className="p-1 hover:bg-white/10 rounded-full transition-colors"><X size={14} /></button>
             </div>
             {isRecycleBinFolderSelected ? <span className="px-2 text-xs text-slate-400 font-medium">System Folder</span> : isInRecycleBin ? (
                 <>
-                <button onClick={(e) => { e.stopPropagation(); onAction('restore'); }} className="p-2 hover:bg-green-500/20 hover:text-green-400 rounded-lg transition-colors tooltip" title="Restore"><RotateCcw size={18}/></button>
-                <div className="w-px h-6 bg-white/10 mx-1"></div>
-                <button onClick={(e) => { e.stopPropagation(); onAction('delete_permanent'); }} className="p-2 hover:bg-red-500/20 text-red-400 hover:text-red-300 rounded-lg transition-colors tooltip" title="Delete Permanently"><Ban size={18}/></button>
+                <button onClick={(e) => { e.stopPropagation(); onAction('restore'); }} className="p-2 hover:bg-green-500/20 hover:text-green-400 rounded-lg transition-colors"><RotateCcw size={18}/></button>
+                <button onClick={(e) => { e.stopPropagation(); onAction('delete_permanent'); }} className="p-2 hover:bg-red-500/20 text-red-400 hover:text-red-300 rounded-lg transition-colors"><Ban size={18}/></button>
                 </>
             ) : (
                 <>
-                <button onClick={(e) => { e.stopPropagation(); onAction('duplicate'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Duplicate"><Copy size={18}/></button>
-                <button onClick={(e) => { e.stopPropagation(); onAction('move'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Move"><Move size={18}/></button>
-                {selectedIds.size === 1 && <button onClick={(e) => { e.stopPropagation(); onAction('rename'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Rename"><Edit size={18}/></button>}
-                <button onClick={(e) => { e.stopPropagation(); onAction('download'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Download"><Download size={18}/></button>
-                <div className="w-px h-6 bg-white/10 mx-1"></div>
-                <button onClick={(e) => { e.stopPropagation(); onAction('delete'); }} className="p-2 hover:bg-red-500/20 text-red-400 hover:text-red-300 rounded-lg transition-colors tooltip" title="Delete"><Trash2 size={18}/></button>
+                <button onClick={(e) => { e.stopPropagation(); onAction('duplicate'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors"><Copy size={18}/></button>
+                <button onClick={(e) => { e.stopPropagation(); onAction('move'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors"><Move size={18}/></button>
+                {selectedIds.size === 1 && <button onClick={(e) => { e.stopPropagation(); onAction('rename'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors"><Edit size={18}/></button>}
+                <button onClick={(e) => { e.stopPropagation(); onAction('download'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors"><Download size={18}/></button>
+                <button onClick={(e) => { e.stopPropagation(); onAction('delete'); }} className="p-2 hover:bg-red-500/20 text-red-400 hover:text-red-300 rounded-lg transition-colors"><Trash2 size={18}/></button>
                 </>
             )}
         </div>
