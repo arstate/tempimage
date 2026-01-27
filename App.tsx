@@ -148,7 +148,7 @@ const App = () => {
         setParentFolderId(res.parentFolderId || ""); 
 
         const mergedItems = freshItems.map(newItem => {
-            const cachedItem = cachedItems?.find(c => r.id === newItem.id);
+            const cachedItem = cachedItems?.find(c => c.id === newItem.id);
             if (cachedItem && cachedItem.content && newItem.type === 'note') {
                 return { ...newItem, content: cachedItem.content };
             }

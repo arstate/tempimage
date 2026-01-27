@@ -64,6 +64,7 @@ export const TextEditor: React.FC<TextEditorProps> = ({ note, onSave, onClose })
       setSelectionPos({ x: 0, y: 0, isFixed: true });
     } else {
       // Floating position (Above selection)
+      // Check if there is space above, else show below or fixed bottom
       setSelectionPos({
         x: rect.left + rect.width / 2,
         y: rect.top - 55, // Distance above the text
