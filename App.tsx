@@ -128,26 +128,44 @@ const App = () => {
            const cachedDB = await DB.getSystemMap();
            let currentMap: FolderMap = cachedDB ? cachedDB.map : {};
            let currentFileId = cachedDB ? cachedDB.fileId : null;
+           let forceRefresh = false;
 
-           // 2. If no cache, or to ensure freshness, check Drive Root for DB File
-           if (!cachedDB) {
-               setGlobalLoadingMessage("Mencari Database di Drive...");
-               const dbFile = await API.findSystemDBFile();
+           // Check if we need to force check drive (e.g. if fileId is missing or map is empty)
+           if (!currentFileId || Object.keys(currentMap).length <= 1) {
+              forceRefresh = true;
+           }
+
+           if (forceRefresh) {
+               setGlobalLoadingMessage("Sinkronisasi Sistem...");
                
-               if (dbFile) {
-                   setGlobalLoadingMessage("Mengunduh Database...");
-                   currentFileId = dbFile.id;
-                   const content = await API.getFileContent(dbFile.id);
+               // 2. Locate DB File using new logic (Root -> System Folder -> DB File)
+               const location = await API.locateSystemDB();
+               let systemFolderId = location.systemFolderId;
+               currentFileId = location.fileId;
+
+               if (currentFileId) {
+                   setGlobalLoadingMessage("Memuat Database...");
+                   const content = await API.getFileContent(currentFileId);
                    try {
                        currentMap = JSON.parse(content);
-                   } catch(e) { console.warn("Corrupt DB, resetting map"); currentMap = {}; }
+                   } catch(e) { 
+                       console.warn("Corrupt DB, resetting map"); 
+                       currentMap = { "root": { id: "root", name: "Home", parentId: "" } }; 
+                   }
                } else {
-                   setGlobalLoadingMessage("Membuat Database Baru...");
-                   // Create new DB file
+                   setGlobalLoadingMessage("Inisialisasi Sistem...");
+                   // 3. Create Structure if missing
+                   if (!systemFolderId) {
+                       setGlobalLoadingMessage("Membuat Folder System...");
+                       systemFolderId = await API.createSystemFolder();
+                   }
+                   
+                   setGlobalLoadingMessage("Membuat File Database...");
                    currentMap = { "root": { id: "root", name: "Home", parentId: "" } };
-                   const newId = await API.createSystemDBFile(currentMap);
+                   const newId = await API.createSystemDBFile(currentMap, systemFolderId);
                    currentFileId = newId;
                }
+
                // Save to Cache
                await DB.saveSystemMap({ fileId: currentFileId, map: currentMap, lastSync: Date.now() });
            }
@@ -156,25 +174,19 @@ const App = () => {
            setDbFileId(currentFileId);
            setIsSystemInitialized(true);
 
-           // 3. Resolve URL to Folder ID
+           // 4. Resolve URL to Folder ID
            const path = window.location.pathname.split('/').filter(p => p);
            if (path.length > 0) {
                let foundId = "";
-               let parentSearchId = "root"; // Start search from root (assuming map has root links or implicit)
-               
-               // Logic to trace path: /FolderA/FolderB
-               // Note: Map is by ID. We need to find ID by Name + ParentID.
-               // This is O(N*M) where N is depth and M is folders. Efficient enough for thousands.
+               let parentSearchId = "root"; 
                
                let validPath = true;
                const traceHistory: {id:string, name:string}[] = [];
 
                for (const segment of path) {
                    const decodedName = decodeURIComponent(segment);
-                   // Find folder in map that matches name and parent
                    const entryId = Object.keys(currentMap).find(key => {
                        const node = currentMap[key];
-                       // Treat "" as root parent in map if strictly defined, or implied
                        const nodeParent = node.parentId || "root";
                        const searchParent = parentSearchId || "root";
                        return node.name === decodedName && (nodeParent === searchParent || (searchParent === "root" && !node.parentId));
@@ -194,7 +206,7 @@ const App = () => {
                    setFolderHistory(traceHistory);
                    setCurrentFolderId(foundId);
                } else {
-                   // Path invalid, go home
+                   // Invalid path, reset
                    setCurrentFolderId("");
                    setFolderHistory([]);
                    window.history.replaceState(null, '', '/');
@@ -240,9 +252,6 @@ const App = () => {
                   }
               } else if (action === 'remove') {
                   delete next[item.id];
-                  // Also remove children? Technically yes, but standard Drive behavior might vary.
-                  // For simplicity, we assume deleteItems handles backend recursive delete.
-                  // We should cleanup orphan keys in map if we want to be strict.
               } else if (action === 'move') {
                    if (next[item.id] && item.parentId) {
                        next[item.id] = { ...next[item.id], parentId: item.parentId };
@@ -250,10 +259,7 @@ const App = () => {
               }
           });
           
-          // Debounced Sync
           if (dbFileId) {
-            // We use a timeout outside React lifecycle or just fire and forget for now
-            // For robustness, ideally use a queue. Here we just call the sync function.
             syncMapToDrive(next, dbFileId);
           }
           

@@ -5,6 +5,7 @@ import { Item, FolderMap } from '../types';
 const API_URL = "https://script.google.com/macros/s/AKfycbw-khPTpmPiuUhTzo-vqtkHZTqJ3MLqZtP-btpHLbnBVyJ13Z6k5glBBpMWomP8p6BIog/exec";
 
 const DB_FILENAME = "system_zombio_db.json";
+const SYSTEM_FOLDER_NAME = "System";
 
 interface ApiResponse {
   status: 'success' | 'error';
@@ -150,21 +151,45 @@ export const saveNoteToDrive = async (title: string, content: string, folderId: 
 
 // --- SYSTEM DATABASE (JSON ON DRIVE) ---
 
-export const findSystemDBFile = async (): Promise<{ id: string } | null> => {
-  // Search in root
-  const res = await getFolderContents("");
-  if (res.status === 'success' && Array.isArray(res.data)) {
-    const dbFile = res.data.find((i: any) => i.name === DB_FILENAME && i.type === 'note'); // Note/Text file
-    if (dbFile) return { id: dbFile.id };
+// Returns: { fileId: string | null, systemFolderId: string | null }
+export const locateSystemDB = async (): Promise<{ fileId: string | null, systemFolderId: string | null }> => {
+  try {
+    // 1. Check Root for "System" folder
+    const rootRes = await getFolderContents("");
+    if (rootRes.status !== 'success' || !Array.isArray(rootRes.data)) return { fileId: null, systemFolderId: null };
+    
+    const systemFolder = rootRes.data.find((i: any) => i.name === SYSTEM_FOLDER_NAME && i.type === 'folder');
+    
+    if (!systemFolder) return { fileId: null, systemFolderId: null };
+
+    // 2. Check inside "System" folder for DB file
+    const sysRes = await getFolderContents(systemFolder.id);
+    if (sysRes.status !== 'success' || !Array.isArray(sysRes.data)) return { fileId: null, systemFolderId: systemFolder.id };
+
+    const dbFile = sysRes.data.find((i: any) => 
+      (i.name === DB_FILENAME || i.name === DB_FILENAME.replace('.json', '')) && i.type === 'note'
+    );
+
+    return { 
+      fileId: dbFile ? dbFile.id : null, 
+      systemFolderId: systemFolder.id 
+    };
+
+  } catch (e) {
+    console.error("Error locating system DB:", e);
+    return { fileId: null, systemFolderId: null };
   }
-  return null;
 };
 
-export const createSystemDBFile = async (initialMap: FolderMap): Promise<string> => {
+export const createSystemFolder = async (): Promise<string> => {
+    const res = await createFolder("", SYSTEM_FOLDER_NAME);
+    if (res.status === 'success' && res.data) return res.data.id;
+    throw new Error("Gagal membuat folder System");
+};
+
+export const createSystemDBFile = async (initialMap: FolderMap, folderId: string): Promise<string> => {
   const content = JSON.stringify(initialMap);
-  const res = await saveNoteToDrive(DB_FILENAME.replace('.json',''), content, ""); // Save to root
-  // Note: saveNote appends .txt usually, but we treat it as our JSON store. 
-  // Ideally backend should allow generic text file, but saveNote works for string content.
+  const res = await saveNoteToDrive(DB_FILENAME.replace('.json',''), content, folderId); 
   if (res && res.id) return res.id;
   throw new Error("Failed to create system DB file");
 };
