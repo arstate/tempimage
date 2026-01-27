@@ -1398,7 +1398,10 @@ const FolderItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onT
     </div>
 );
 
-const NoteItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }: any) => (
+const NoteItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }: any) => {
+    const cleanText = stripHtml(item.content || item.snippet || "").slice(0, 100);
+    
+    return (
     <div 
         id={`item-${item.id}`} 
         data-item-id={item.id} 
@@ -1407,7 +1410,7 @@ const NoteItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onTog
         onDoubleClick={(e) => onDoubleClick(e, item)} 
         onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} 
         style={{ touchAction: 'pan-y' }}
-        className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col items-center gap-2 item-clickable select-none ${selected ? 'bg-blue-500/20 border-blue-500 shadow-md ring-1 ring-blue-500' : 'bg-slate-900 border-slate-800 hover:bg-slate-800 hover:border-slate-600'}`}
+        className={`group relative p-3 rounded-xl border transition-all cursor-pointer flex flex-col gap-2 item-clickable select-none aspect-square ${selected ? 'bg-blue-500/20 border-blue-500 shadow-md ring-1 ring-blue-500' : 'bg-slate-900 border-slate-800 hover:bg-slate-800 hover:border-slate-600'}`}
     >
         <ItemOverlay status={item.status} />
         <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
@@ -1416,10 +1419,19 @@ const NoteItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onTog
         
         <DragHandle item={item} />
 
-        <FileText size={48} className="text-yellow-500 fill-yellow-500/10 drop-shadow-md pointer-events-none" />
-        <span className="text-xs font-medium text-slate-200 text-center truncate w-full px-1" title={item.name}>{item.name.replace('.txt', '')}</span>
+        <div className="flex-1 w-full overflow-hidden">
+            <p className="text-[10px] text-slate-400 font-mono leading-relaxed break-words whitespace-pre-wrap opacity-70">
+                {cleanText || "No content..."}
+            </p>
+        </div>
+
+        <div className="flex items-center gap-2 w-full pt-2 border-t border-slate-800/50 mt-auto">
+            <FileText size={14} className="text-yellow-500 flex-shrink-0" />
+            <span className="text-xs font-medium text-slate-200 truncate" title={item.name}>{item.name.replace('.txt', '')}</span>
+        </div>
     </div>
-);
+    );
+};
 
 const ImageItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }: any) => (
     <div 
@@ -1446,7 +1458,6 @@ const ImageItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onTo
                 className="w-full h-full object-cover pointer-events-none" 
                 loading="lazy" 
                 referrerPolicy="no-referrer"
-                crossOrigin="anonymous" 
              />
         ) : (
              <ImageIcon size={32} className="text-slate-600 pointer-events-none" />
