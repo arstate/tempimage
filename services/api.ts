@@ -4,7 +4,7 @@ import { Item, FolderMap } from '../types';
 // URL Final Baru (File Manager Backend)
 const API_URL = "https://script.google.com/macros/s/AKfycbw-khPTpmPiuUhTzo-vqtkHZTqJ3MLqZtP-btpHLbnBVyJ13Z6k5glBBpMWomP8p6BIog/exec";
 
-const DB_FILENAME = "system_zombio_db.json";
+const DB_FILENAME_KEYWORD = "system_zombio_db"; // Keyword to search
 const SYSTEM_FOLDER_NAME = "System";
 
 interface ApiResponse {
@@ -166,8 +166,10 @@ export const locateSystemDB = async (): Promise<{ fileId: string | null, systemF
     const sysRes = await getFolderContents(systemFolder.id);
     if (sysRes.status !== 'success' || !Array.isArray(sysRes.data)) return { fileId: null, systemFolderId: systemFolder.id };
 
+    // ROBUST SEARCH: Find any file that contains the DB keyword
+    // This handles cases where Drive adds .txt, .json, or duplicates like "Copy of..."
     const dbFile = sysRes.data.find((i: any) => 
-      (i.name === DB_FILENAME || i.name === DB_FILENAME.replace('.json', '')) && i.type === 'note'
+      i.name.includes(DB_FILENAME_KEYWORD) && i.type === 'note'
     );
 
     return { 
@@ -189,13 +191,15 @@ export const createSystemFolder = async (): Promise<string> => {
 
 export const createSystemDBFile = async (initialMap: FolderMap, folderId: string): Promise<string> => {
   const content = JSON.stringify(initialMap);
-  const res = await saveNoteToDrive(DB_FILENAME.replace('.json',''), content, folderId); 
+  // We use the base keyword. The backend script will likely append .txt
+  const res = await saveNoteToDrive(DB_FILENAME_KEYWORD, content, folderId); 
   if (res && res.id) return res.id;
   throw new Error("Failed to create system DB file");
 };
 
 export const updateSystemDBFile = async (fileId: string, map: FolderMap): Promise<void> => {
   const content = JSON.stringify(map);
-  // Re-save using the same fileId to overwrite
-  await saveNoteToDrive(DB_FILENAME.replace('.json',''), content, "", fileId); 
+  // Re-save using the same fileId to overwrite. Title is ignored if fileId is present usually, 
+  // but we keep consistency.
+  await saveNoteToDrive(DB_FILENAME_KEYWORD, content, "", fileId); 
 };
