@@ -1110,9 +1110,6 @@ const App = () => {
         )}
       </main>
 
-      {/* ... Rest of JSX ... */}
-      {/* Keeping existing JSX for Context Menu, Modals etc same as before */}
-      
       {currentFolderId !== recycleBinId && (
           <div 
              className="fixed bottom-6 left-6 z-[250] group"
@@ -1288,37 +1285,60 @@ const ItemOverlay = ({ status }: { status?: string }) => {
 // UPDATED Common Draggable Handle (To enable drag only on intent)
 const DragHandle = ({ item }: { item: Item }) => (
     <div 
-        className="absolute top-2 right-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity p-1.5 bg-slate-800/80 rounded hover:bg-slate-700 cursor-grab active:cursor-grabbing text-slate-400 item-handle"
+        className="absolute top-2 right-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity p-2 bg-slate-800/80 rounded-lg hover:bg-slate-700 cursor-grab active:cursor-grabbing text-slate-400 item-handle backdrop-blur-sm border border-slate-600/30 shadow-lg"
         draggable={true}
         onDragStart={(e) => {
-            // Internal Logic (for Drop inside app)
+            // 1. Internal ID for moving folders
             e.dataTransfer.setData("text/item-id", item.id);
-            
-            // EXTERNAL LOGIC (For dropping to Desktop)
+            e.dataTransfer.effectAllowed = "all";
+
+            // 2. External Drag Logic
             if (item.type === 'image' && (item.url || item.thumbnail)) {
                 const url = item.url || item.thumbnail;
+                
+                // Set Ghost Image
+                const imgEl = document.querySelector(`#item-${item.id} img`) as HTMLImageElement;
+                if (imgEl) {
+                    // Center the drag image
+                    e.dataTransfer.setDragImage(imgEl, imgEl.width / 2, imgEl.height / 2);
+                }
+
                 if (url) {
-                    // Try to guess mime type from name or default to png
-                    let mime = 'image/png';
-                    if (item.name.toLowerCase().endsWith('.jpg') || item.name.toLowerCase().endsWith('.jpeg')) mime = 'image/jpeg';
-                    if (item.name.toLowerCase().endsWith('.gif')) mime = 'image/gif';
-                    if (item.name.toLowerCase().endsWith('.webp')) mime = 'image/webp';
+                    // Detect MIME
+                    let mime = 'image/jpeg';
+                    const lowerName = item.name.toLowerCase();
+                    if (lowerName.endsWith('.png')) mime = 'image/png';
+                    else if (lowerName.endsWith('.gif')) mime = 'image/gif';
+                    else if (lowerName.endsWith('.webp')) mime = 'image/webp';
+                    else if (lowerName.endsWith('.svg')) mime = 'image/svg+xml';
                     
-                    // Chrome specific: "mime:filename:url"
-                    e.dataTransfer.setData("DownloadURL", `${mime}:${item.name}:${url}`);
-                    // Standard URI List
+                    // Normalize Filename
+                    let filename = item.name;
+                    if (!filename.includes('.')) {
+                        filename += '.' + mime.split('/')[1];
+                    }
+
+                    // A. DownloadURL (File Drop to Desktop)
+                    e.dataTransfer.setData("DownloadURL", `${mime}:${filename}:${url}`);
+                    
+                    // B. HTML Image (WhatsApp/Canva/Word)
+                    e.dataTransfer.setData("text/html", `<img src="${url}" alt="${filename}" />`);
+                    
+                    // C. Standard URI (For Address Bar / Text editors)
                     e.dataTransfer.setData("text/uri-list", url);
-                    // Plain text fallback
                     e.dataTransfer.setData("text/plain", url);
                 }
             } else if (item.type === 'note' && item.content) {
                  e.dataTransfer.setData("text/plain", stripHtml(item.content));
+                 e.dataTransfer.setData("text/html", item.content);
             }
 
-            e.stopPropagation(); // Stop pointer events from seeing this as a selection drag
+            e.stopPropagation();
         }}
+        // Prevent interfering with parent pointer events (selection)
+        onPointerDown={(e) => e.stopPropagation()}
     >
-        <GripVertical size={14} />
+        <GripVertical size={18} />
     </div>
 );
 
