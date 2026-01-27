@@ -8,9 +8,10 @@ import {
 } from 'lucide-react';
 import * as API from './services/api';
 import * as DB from './services/db';
-import { Item, StoredNote } from './types';
+import { Item, StoredNote, DownloadItem } from './types';
 import { TextEditor } from './components/TextEditor';
 import { UploadProgress, UploadItem } from './components/UploadProgress';
+import { DownloadProgress } from './components/DownloadProgress';
 
 // --- TYPES ---
 type ModalType = 'input' | 'confirm' | 'alert' | 'select' | null;
@@ -64,8 +65,9 @@ const App = () => {
   const [isDraggingFile, setIsDraggingFile] = useState(false); 
   const [isNewDropdownOpen, setIsNewDropdownOpen] = useState(false);
   
-  // --- UPLOAD STATE ---
+  // --- UPLOAD & DOWNLOAD STATE ---
   const [uploadQueue, setUploadQueue] = useState<UploadItem[]>([]);
+  const [downloadQueue, setDownloadQueue] = useState<DownloadItem[]>([]);
 
   // --- NOTIFICATIONS STATE ---
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -99,30 +101,55 @@ const App = () => {
     activeFolderIdRef.current = currentFolderId;
   }, [currentFolderId]);
 
-  // --- 0. INITIAL URL CHECK (Persistence) ---
+  // --- ROUTING & PERSISTENCE ---
+  
+  // 1. Load State from LocalStorage on Mount (Restore Session)
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const folderIdParam = params.get('folder');
-    if (folderIdParam && folderIdParam !== currentFolderId) {
-        setCurrentFolderId(folderIdParam);
-    }
-  }, []); 
+      const savedState = localStorage.getItem('zombio_nav_state');
+      if (savedState) {
+          try {
+              const parsed = JSON.parse(savedState);
+              if (parsed.currentFolderId !== undefined && parsed.folderHistory) {
+                  setCurrentFolderId(parsed.currentFolderId);
+                  setFolderHistory(parsed.folderHistory);
+                  return; // Skip URL params check if state restored
+              }
+          } catch(e) { console.error("Failed to restore state", e); }
+      }
+      
+      // Fallback: Check URL Params (Legacy)
+      const params = new URLSearchParams(window.location.search);
+      const folderIdParam = params.get('folder');
+      if (folderIdParam && folderIdParam !== currentFolderId) {
+          setCurrentFolderId(folderIdParam);
+      }
+  }, []);
 
-  // Update URL when folder changes
+  // 2. Sync URL & LocalStorage when Navigation Changes
   useEffect(() => {
-    const url = new URL(window.location.href);
-    if (currentFolderId) {
-        url.searchParams.set('folder', currentFolderId);
-    } else {
-        url.searchParams.delete('folder');
-    }
-    window.history.pushState({}, '', url);
-  }, [currentFolderId]);
+    // Save to LocalStorage
+    localStorage.setItem('zombio_nav_state', JSON.stringify({
+        currentFolderId,
+        folderHistory
+    }));
+
+    // Construct URL Path: domain.com/PROPERTY/ALANA
+    // We ignore the actual domain, just manipulating path
+    const pathSegments = folderHistory.map(f => encodeURIComponent(f.name));
+    const newPath = '/' + pathSegments.join('/');
+    
+    // Update Browser URL without reloading
+    // Note: We don't put ID in URL to keep it clean as requested. 
+    // We rely on localStorage to restore the ID on refresh.
+    window.history.pushState({ currentFolderId, folderHistory }, '', newPath || '/');
+    
+  }, [currentFolderId, folderHistory]);
 
   // --- SAFETY: PREVENT ACCIDENTAL CLOSE ---
   useEffect(() => {
     const isUploading = uploadQueue.some(u => u.status === 'uploading');
-    const isBusy = isGlobalLoading || isProcessingAction || isUploading;
+    const isDownloading = downloadQueue.some(d => d.status === 'downloading');
+    const isBusy = isGlobalLoading || isProcessingAction || isUploading || isDownloading;
 
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       if (isBusy) {
@@ -139,7 +166,7 @@ const App = () => {
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
-  }, [isGlobalLoading, isProcessingAction, uploadQueue]);
+  }, [isGlobalLoading, isProcessingAction, uploadQueue, downloadQueue]);
 
 
   // --- NOTIFICATION HELPERS ---
@@ -273,7 +300,6 @@ const App = () => {
   };
 
   // --- POINTER LOGIC (Select vs Drag) ---
-  
   const handlePointerDown = (e: React.PointerEvent) => {
      if ((e.target as HTMLElement).closest('button, .item-handle')) return;
      if (!e.isPrimary) return;
@@ -284,7 +310,6 @@ const App = () => {
      
      dragStartPos.current = { x: e.clientX, y: e.clientY };
      
-     // Clear any existing timer
      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
 
      // 1. Checkbox Click (Immediate Toggle)
@@ -304,20 +329,14 @@ const App = () => {
          if (id) {
              const clickedItem = items.find(i => i.id === id);
              if (clickedItem) {
-                 // Start LONG PRESS Timer
                  longPressTimerRef.current = setTimeout(() => {
-                     // Timer fired: User held still. Enable DRAG mode.
                      setCustomDragItem(clickedItem);
                      setCustomDragPos({ x: e.clientX, y: e.clientY });
-                     
-                     // Ensure the item dragged is selected
                      if (!selectedIds.has(clickedItem.id)) {
                          setSelectedIds(new Set([clickedItem.id]));
                      }
-
-                     // Haptic Feedback
                      if (navigator.vibrate) navigator.vibrate(50);
-                 }, 500); // 500ms for long press
+                 }, 500); 
              }
          }
          isPaintingRef.current = false; 
@@ -338,15 +357,9 @@ const App = () => {
   const handlePointerMove = (e: React.PointerEvent) => {
      if (!dragStartPos.current) return;
 
-     // IF CUSTOM DRAG MODE IS ACTIVE (Long Press was triggered)
      if (customDragItem) {
-         // Update visual position
          setCustomDragPos({ x: e.clientX, y: e.clientY });
-         
-         // Find drop target (Folder) under cursor
-         // We hide the ghost temporarily to see what's underneath, or use elementFromPoint carefully
          const elements = document.elementsFromPoint(e.clientX, e.clientY);
-         // Find nearest folder row that is NOT the dragged item
          const folderEl = elements.find(el => {
              const row = el.closest('[data-folder-id]');
              const id = row?.getAttribute('data-folder-id');
@@ -363,9 +376,7 @@ const App = () => {
 
      const moveDist = Math.sqrt(Math.pow(e.clientX - dragStartPos.current.x, 2) + Math.pow(e.clientY - dragStartPos.current.y, 2));
      
-     // Threshold exceeded: It's a movement!
      if (moveDist > 8) {
-         // CANCEL LONG PRESS TIMER if moving
          if (longPressTimerRef.current) {
              clearTimeout(longPressTimerRef.current);
              longPressTimerRef.current = null;
@@ -379,10 +390,8 @@ const App = () => {
          const target = document.elementFromPoint(e.clientX, e.clientY);
          const itemRow = target?.closest('[data-item-id]');
          
-         // Paint Selection Mode
          if (selectionBox === null) {
              isPaintingRef.current = true;
-
              if (lastTouchedIdRef.current === null) {
                   const startTarget = document.elementFromPoint(dragStartPos.current.x, dragStartPos.current.y);
                   const startRow = startTarget?.closest('[data-item-id]');
@@ -407,7 +416,6 @@ const App = () => {
                  }
              }
          }
-         // Box Selection Mode
          else {
              const currentX = e.clientX;
              const currentY = e.clientY;
@@ -433,13 +441,11 @@ const App = () => {
   };
 
   const handlePointerUp = async (e: React.PointerEvent) => {
-      // Clear Timer
       if (longPressTimerRef.current) {
           clearTimeout(longPressTimerRef.current);
           longPressTimerRef.current = null;
       }
 
-      // Handle Drop (If Custom Dragging)
       if (customDragItem && dropTargetId) {
           const idsToMove = selectedIds.size > 0 ? Array.from(selectedIds) : [customDragItem.id];
           const targetName = items.find(i => i.id === dropTargetId)?.name || "Folder";
@@ -457,12 +463,10 @@ const App = () => {
           }
       }
 
-      // Reset Drag State
       setCustomDragItem(null);
       setCustomDragPos(null);
       setDropTargetId(null);
 
-      // Handle Cleanup
       setIsDragSelecting(false);
       setSelectionBox(null);
       dragStartPos.current = null;
@@ -486,7 +490,6 @@ const App = () => {
   };
 
   const handleItemClick = (e: React.MouseEvent, item: Item) => {
-    // If painting or dragging, ignore click
     if (isPaintingRef.current || customDragItem) return;
     
     if (e.shiftKey && lastSelectedId) {
@@ -553,74 +556,96 @@ const App = () => {
       } catch (err2) { throw new Error("Gagal mengunduh: Semua jalur proxy sibuk atau diblokir."); }
   };
 
-  const handleDownloadSingle = async (item: Item) => {
-      const url = item.url || item.thumbnail;
-      if(!url) return;
-      const blob = await getBlobFromUrl(url);
-      const blobUrl = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = blobUrl;
-      a.download = item.name;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(blobUrl);
-      document.body.removeChild(a);
+  // --- DOWNLOAD MANAGER LOGIC ---
+
+  // Trigger download for a single item (Internal Logic)
+  const processDownloadItem = async (downloadItem: DownloadItem, itemData: Item) => {
+    try {
+        setDownloadQueue(prev => prev.map(d => d.id === downloadItem.id ? { ...d, status: 'downloading', progress: 10 } : d));
+        
+        // Simulate initial progress
+        const interval = setInterval(() => {
+            setDownloadQueue(prev => prev.map(d => 
+                d.id === downloadItem.id && d.progress < 80 
+                ? { ...d, progress: d.progress + 15 } : d
+            ));
+        }, 200);
+
+        const url = itemData.url || itemData.thumbnail;
+        if (!url && itemData.type === 'image') throw new Error("URL missing");
+
+        let blob: Blob;
+        if (itemData.type === 'note') {
+            const content = itemData.content || (await API.getFileContent(itemData.id));
+            blob = new Blob([stripHtml(content)], { type: 'text/plain' });
+        } else {
+            blob = await getBlobFromUrl(url!);
+        }
+
+        clearInterval(interval);
+        setDownloadQueue(prev => prev.map(d => d.id === downloadItem.id ? { ...d, progress: 100 } : d));
+
+        // Create download link
+        const blobUrl = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = blobUrl;
+        a.download = itemData.name;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(blobUrl);
+        document.body.removeChild(a);
+
+        setTimeout(() => {
+            setDownloadQueue(prev => prev.map(d => d.id === downloadItem.id ? { ...d, status: 'completed' } : d));
+        }, 500);
+
+    } catch (e) {
+        console.error("Download failed", e);
+        setDownloadQueue(prev => prev.map(d => d.id === downloadItem.id ? { ...d, status: 'error', progress: 0 } : d));
+    }
   };
 
+  // Add items to download queue
   const handleBulkDownload = async (ids: string[]) => {
     const itemsToDownload = items.filter(i => ids.includes(i.id) && (i.type === 'image' || i.type === 'note'));
     if (itemsToDownload.length === 0) return;
-    setIsProcessingAction(true);
-    const notifId = addNotification(`Mengunduh ${itemsToDownload.length} file...`, 'loading');
-    let successCount = 0;
-    try {
-        for (const item of itemsToDownload) {
-             try {
-                await handleDownloadSingle(item);
-                successCount++;
-                await new Promise(r => setTimeout(r, 800)); 
-             } catch (e) { console.error("Failed to download item", item.name); }
-        }
-        updateNotification(notifId, `${successCount}/${itemsToDownload.length} file terdownload`, 'success');
-    } catch (e) { updateNotification(notifId, 'Gagal melakukan download massal', 'error'); } 
-    finally { setIsProcessingAction(false); }
+
+    // Create queue items
+    const newDownloads: DownloadItem[] = itemsToDownload.map(i => ({
+        id: i.id + '-' + Date.now(), // Unique ID for queue
+        name: i.name,
+        status: 'pending',
+        progress: 0
+    }));
+
+    setDownloadQueue(prev => [...prev, ...newDownloads]);
+    addNotification('Download dimulai...', 'success');
+
+    // Process queue sequentially to not choke network
+    for (let i = 0; i < newDownloads.length; i++) {
+        const queueItem = newDownloads[i];
+        const dataItem = itemsToDownload[i];
+        await processDownloadItem(queueItem, dataItem);
+    }
   };
 
-  const handleDownload = async (url: string | null) => {
-    if (!url) return;
-    const item = items.find(i => i.url === url || i.thumbnail === url);
-    if (item) await handleDownloadSingle(item);
-    else {
-        const notifId = addNotification('Mengunduh...', 'loading');
-        try {
-            const blob = await getBlobFromUrl(url);
-            const blobUrl = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = blobUrl;
-            a.download = `image-${Date.now()}.png`;
-            document.body.appendChild(a);
-            a.click();
-            window.URL.revokeObjectURL(blobUrl);
-            document.body.removeChild(a);
-            updateNotification(notifId, 'Berhasil didownload', 'success');
-        } catch(e) { updateNotification(notifId, 'Gagal download', 'error'); }
-    }
+  const handleDownload = (url: string | null) => {
+      // Legacy single download from preview
+      if (!url) return;
+      const item = items.find(i => i.url === url || i.thumbnail === url);
+      if (item) handleBulkDownload([item.id]);
   };
 
   const handleCopyImage = async (itemOrUrl: Item | string) => {
     const notifId = addNotification('Menyalin gambar...', 'loading');
     try {
       let blob: Blob | null = null;
-
-      // 1. Try to grab directly from DOM (Canvas/Cache)
       let imgElement: HTMLImageElement | null = null;
 
       if (typeof itemOrUrl === 'string') {
-        // From Preview Modal
         const previewContainer = document.querySelector('.fixed.z-\\[150\\]');
         imgElement = previewContainer?.querySelector('img') as HTMLImageElement;
       } else {
-        // From Grid Item
         const elementId = `item-${itemOrUrl.id}`;
         const container = document.getElementById(elementId);
         imgElement = container?.querySelector('img') as HTMLImageElement;
@@ -637,11 +662,10 @@ const App = () => {
              blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/png'));
            }
          } catch (err) {
-           console.warn("Canvas copy failed (tainted?), falling back to fetch.");
+           console.warn("Canvas copy failed, falling back to fetch.");
          }
       }
 
-      // 2. Fallback: Fetch URL if DOM failed
       if (!blob) {
          const url = typeof itemOrUrl === 'string' ? itemOrUrl : (itemOrUrl.thumbnail || itemOrUrl.url);
          if (!url) throw new Error("URL tidak ditemukan");
@@ -649,14 +673,11 @@ const App = () => {
       }
 
       if (!blob) throw new Error("Gagal membuat blob");
-
-      // 3. Write to Clipboard
       await navigator.clipboard.write([new ClipboardItem({[blob.type]: blob})]);
       updateNotification(notifId, 'Gambar disalin!', 'success');
 
     } catch (err) {
-      console.error(err);
-      updateNotification(notifId, 'Gagal menyalin: ' + (err instanceof Error ? err.message : 'Unknown error'), 'error');
+      updateNotification(notifId, 'Gagal menyalin image', 'error');
     }
   };
 
@@ -805,7 +826,6 @@ const App = () => {
          });
      }
      else if (action === 'empty_bin') {
-         // ... existing logic
           if (!recycleBinId) return;
         const res = await API.getFolderContents(recycleBinId);
         const binItems: Item[] = Array.isArray(res.data) ? res.data : [];
@@ -964,14 +984,12 @@ const App = () => {
       onDragOver={(e) => { 
           e.preventDefault(); 
           e.stopPropagation(); 
-          // FIX: STRICTER CHECK to prevent scroll triggering upload overlay
           if (e.dataTransfer && e.dataTransfer.types.includes("Files") && !e.dataTransfer.types.includes("text/item-id")) {
             setIsDraggingFile(true); 
           }
       }}
       onDragLeave={() => setIsDraggingFile(false)}
       onDrop={handleDrop}
-      // Replaced Mouse/Touch with Pointer Events for Universal Swipe & Long Press
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
@@ -1025,6 +1043,12 @@ const App = () => {
         onRemove={(id) => setUploadQueue(prev => prev.filter(u => u.id !== id))} 
       />
 
+      <DownloadProgress 
+        downloads={downloadQueue} 
+        onClose={() => setDownloadQueue([])} 
+        onClearCompleted={() => setDownloadQueue(prev => prev.filter(d => d.status !== 'completed'))}
+      />
+
       {/* NOTIFICATIONS */}
       <div className="fixed bottom-6 right-6 z-[300] flex flex-col gap-2 pointer-events-none">
           {notifications.map(n => (
@@ -1041,7 +1065,7 @@ const App = () => {
       <header className="sticky top-0 z-40 bg-slate-900/90 backdrop-blur border-b border-slate-800 h-16 flex items-center px-4 justify-between shadow-sm">
         <div className="flex items-center gap-1 overflow-x-auto no-scrollbar mask-gradient-right">
            <button onClick={() => handleBreadcrumbClick(-1)} className={`p-2 rounded-lg flex items-center gap-2 text-sm font-medium transition-colors ${currentFolderId === "" ? 'text-blue-400 bg-blue-500/10' : 'text-slate-400 hover:bg-slate-800'}`}>
-             <Home size={18} /> <span className="hidden sm:inline">Drive</span>
+             <Home size={18} /> <span className="hidden sm:inline">Home</span>
            </button>
            {folderHistory.map((h, idx) => (
              <React.Fragment key={h.id}>
@@ -1128,7 +1152,6 @@ const App = () => {
                             <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2"><FileText size={14}/> Notes</h2>
                             <div className="h-px bg-slate-800 flex-1"></div>
                         </div>
-                        {/* UPDATE: Increased grid columns to match images/folders, making items smaller */}
                         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
                             {groupedItems.notes.map(item => (
                                 <NoteItem key={item.id} item={item} selected={selectedIds.has(item.id)} onClick={handleItemClick} onDoubleClick={handleItemDoubleClick} onContextMenu={handleContextMenu} onToggleSelect={() => handleToggleSelect(item.id)} />
@@ -1330,13 +1353,10 @@ const ItemOverlay = ({ status }: { status?: string }) => {
     );
 };
 
-// UPDATED Common Draggable Handle (To enable drag only on intent)
 const DragHandle = ({ item }: { item: Item }) => {
-    // Store both file object (for desktop drop) and base64 string (for legacy drop)
     const [dragData, setDragData] = useState<{ file: File, base64: string } | null>(null);
     const [isLoading, setIsLoading] = useState(false);
 
-    // Triggered on hover
     const prepareDragData = async () => {
         if (dragData || isLoading) return;
         if (item.type === 'folder') return;
@@ -1348,7 +1368,6 @@ const DragHandle = ({ item }: { item: Item }) => {
         try {
              let blob: Blob;
 
-             // Optimization: Handle Data URI locally (cache from DB)
              if (url.startsWith('data:')) {
                  const arr = url.split(',');
                  const mime = arr[0].match(/:(.*?);/)?.[1] || 'application/octet-stream';
@@ -1358,7 +1377,6 @@ const DragHandle = ({ item }: { item: Item }) => {
                  while(n--){ u8arr[n] = bstr.charCodeAt(n); }
                  blob = new Blob([u8arr], {type: mime});
              } else {
-                 // Fetch from cache or network
                  try {
                      const res = await fetch(url, { cache: 'force-cache', referrerPolicy: 'no-referrer' });
                      if (!res.ok) throw new Error("Direct fetch failed");
@@ -1371,20 +1389,17 @@ const DragHandle = ({ item }: { item: Item }) => {
                  }
              }
 
-             // FIX: Ensure correct extension
              const mime = blob.type;
              let ext = mime.split('/')[1] || 'bin';
              if(ext === 'jpeg') ext = 'jpg';
              if(ext === 'plain') ext = 'txt';
              
              let fileName = item.name;
-             // Add extension if missing
              if (!fileName.toLowerCase().includes('.')) {
                  fileName = `${fileName}.${ext}`;
              }
 
              const file = new File([blob], fileName, { type: mime });
-             // Only create base64 if needed for legacy string (expensive for large files)
              const base64 = url.startsWith('data:') ? url : await API.fileToBase64(blob);
              
              setDragData({ file, base64 });
@@ -1401,29 +1416,20 @@ const DragHandle = ({ item }: { item: Item }) => {
         draggable={true}
         onMouseEnter={prepareDragData}
         onDragStart={(e) => {
-            // 1. Internal ID
             e.dataTransfer.setData("text/item-id", item.id);
             
             if (item.type === 'image') {
                 const url = item.url || item.thumbnail || "";
-                
-                // --- ADD BOTH FILE AND LINK ---
-                // 1. Link to high-res thumbnail (for dropping into browser/notes)
                 const driveThumbnailLink = `https://drive.google.com/thumbnail?id=${item.id}&sz=s16383`;
                 e.dataTransfer.setData("text/uri-list", driveThumbnailLink);
                 e.dataTransfer.setData("text/plain", driveThumbnailLink);
 
-                // Ghost image
                 const imgEl = document.getElementById(`item-${item.id}`)?.querySelector('img') as HTMLImageElement;
                 if (imgEl) e.dataTransfer.setDragImage(imgEl, imgEl.width / 2, imgEl.height / 2);
 
                 if (dragData) {
                      e.dataTransfer.effectAllowed = "copy";
-                     
-                     // 2. KEY: Add File object (The cached file Blob) for Desktop Drop
                      e.dataTransfer.items.add(dragData.file);
-                     
-                     // Legacy fallback
                      e.dataTransfer.setData("DownloadURL", `${dragData.file.type}:${dragData.file.name}:${dragData.base64}`);
                 } 
             } else if (item.type === 'note' && item.content) {
@@ -1432,7 +1438,6 @@ const DragHandle = ({ item }: { item: Item }) => {
 
             e.stopPropagation();
         }}
-        // Trigger prefetch on pointer down too (for touch/quick clicks)
         onPointerDown={(e) => { prepareDragData(); e.stopPropagation(); }}
     >
         <GripVertical size={18} />
@@ -1445,12 +1450,10 @@ const FolderItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onT
         id={`item-${item.id}`} 
         data-folder-id={item.id} 
         data-item-id={item.id} 
-        // Draggable false on root to allow swipe selection
         draggable={false}
         onClick={(e) => onClick(e, item)} 
         onDoubleClick={(e) => onDoubleClick(e, item)} 
         onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} 
-        // Add pan-y touch-action to allow vertical scrolling but let JS capture horizontal swipes
         style={{ touchAction: 'pan-y' }}
         className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col items-center gap-2 item-clickable select-none ${
             isDropTarget ? 'bg-blue-500/40 border-blue-400 scale-105 shadow-xl ring-2 ring-blue-400 z-30' :
@@ -1458,13 +1461,10 @@ const FolderItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onT
         }`}
     >
         <ItemOverlay status={item.status} />
-        
-        {/* Selection Checkbox */}
         <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
             <CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/>
         </div>
 
-        {/* Drag Handle */}
         {!isRecycleBin && <DragHandle item={item} />}
 
         {isRecycleBin ? (
@@ -1495,27 +1495,21 @@ const NoteItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onTog
         }`}
     >
         <ItemOverlay status={item.status} />
-        
-        {/* Selection Checkbox */}
         <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}>
             <CheckSquare size={18} className={selected ? "text-blue-600 bg-white rounded shadow-sm" : "text-slate-600/50 hover:text-slate-900"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/>
         </div>
         
         <DragHandle item={item} />
 
-        {/* Content Area */}
         <div className="flex-1 w-full overflow-hidden flex flex-col">
-            {/* UPDATE: Increased title text size (text-sm) */}
             <h4 className="text-sm font-bold text-slate-900 mb-1.5 truncate border-b border-slate-800/10 pb-1">
                 {item.name.replace('.txt', '')}
             </h4>
-            {/* UPDATE: Increased content text size (text-xs) */}
             <p className="text-xs text-slate-800/90 leading-relaxed font-sans font-medium break-words whitespace-pre-wrap line-clamp-6">
                 {cleanText || <span className="italic text-slate-500">Kosong...</span>}
             </p>
         </div>
 
-        {/* Bottom Decoration */}
         <div className="flex items-center justify-between w-full pt-2 mt-auto opacity-50">
            <FileText size={10} className="text-slate-600" />
            <span className="text-[9px] text-slate-600">{new Date(item.lastUpdated).toLocaleDateString()}</span>

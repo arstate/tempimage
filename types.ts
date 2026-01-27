@@ -36,3 +36,11 @@ export interface Item {
   content?: string; // Cache content for notes locally
   status?: 'idle' | 'deleting' | 'restoring' | 'uploading'; // UI State
 }
+
+export interface DownloadItem {
+  id: string; // Item ID
+  name: string;
+  status: 'pending' | 'downloading' | 'completed' | 'error';
+  progress: number; // 0 - 100
+  error?: string;
+}
