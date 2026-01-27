@@ -1,9 +1,11 @@
+
 import React, { useState, useEffect, useCallback, useRef, useLayoutEffect } from 'react';
 import { 
   Folder, FileText, Image as ImageIcon, MoreVertical, 
   ArrowLeft, Plus, Trash2, Copy, Move, Edit, CheckSquare, 
   Loader2, Home, Upload, ChevronRight, X, AlertCircle, Download, CornerUpLeft,
-  CheckCircle, XCircle, Image, RotateCcw, Ban, GripVertical, Database, Lock, ShieldAlert, Cloud, CloudUpload, FileJson, RefreshCw
+  CheckCircle, XCircle, Image, RotateCcw, Ban, GripVertical, Database, Lock, ShieldAlert, Cloud, CloudUpload, FileJson, RefreshCw,
+  CheckCheck
 } from 'lucide-react';
 import * as API from './services/api';
 import * as DB from './services/db';
@@ -224,8 +226,8 @@ const App = () => {
       items.forEach(item => {
           if (action === 'add' || action === 'update') {
               if (item.name) {
-                  const existing = nextMap[item.id] || {};
-                  nextMap[item.id] = { id: item.id, name: item.name, parentId: item.parentId !== undefined ? item.parentId : (existing.parentId || "root") };
+                  const existing = nextMap[item.id];
+                  nextMap[item.id] = { id: item.id, name: item.name, parentId: item.parentId !== undefined ? item.parentId : (existing?.parentId || "root") };
               }
           } else if (action === 'remove') delete nextMap[item.id];
           else if (action === 'move') { if (nextMap[item.id] && item.parentId !== undefined) nextMap[item.id] = { ...nextMap[item.id], parentId: item.parentId }; }
@@ -414,6 +416,15 @@ const App = () => {
   const handleToggleSelect = (id: string) => {
       setSelectedIds(prev => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
       setLastSelectedId(id);
+  };
+
+  const handleSelectAllByCategory = () => {
+    if (selectedIds.size === 0) return;
+    const selectedItems = items.filter(i => selectedIds.has(i.id));
+    const types = new Set(selectedItems.map(i => i.type));
+    const matches = items.filter(i => types.has(i.type));
+    const newSet = new Set(matches.map(i => i.id));
+    setSelectedIds(newSet);
   };
 
   const handleItemClick = (e: React.MouseEvent, item: Item) => {
@@ -700,11 +711,11 @@ const App = () => {
               break;
 
           case 'restore':
+              // This is individual restore from within bin
               const notifRestore = addNotification(`Mengembalikan ${ids.length} item...`, 'loading');
               try {
-                  // Restore Logic: Find original parent from DB
-                  const restoreMap: Record<string, string[]> = {}; // targetFolderId -> itemIds[]
-                  const defaultTarget = "root"; // Fallback
+                  const restoreMap: Record<string, string[]> = {}; 
+                  const defaultTarget = "root";
 
                   for (const id of ids) {
                       const originalParent = await DB.getDeletedMeta(id);
@@ -713,12 +724,10 @@ const App = () => {
                       restoreMap[target].push(id);
                   }
 
-                  // Execute moves per target folder
                   for (const [targetFolder, itemIds] of Object.entries(restoreMap)) {
                       await API.moveItems(itemIds, targetFolder);
                       const foldersRestored = items.filter(i => itemIds.includes(i.id) && i.type === 'folder');
                       if (foldersRestored.length > 0) updateMap('move', foldersRestored.map(f => ({ id: f.id, parentId: targetFolder })));
-                      // Cleanup meta
                       for(const id of itemIds) await DB.removeDeletedMeta(id);
                   }
                   
@@ -727,27 +736,95 @@ const App = () => {
               } catch (e) { updateNotification(notifRestore, 'Gagal restore', 'error'); }
               break;
 
+          case 'restore_all':
+              // Restore All - Works from outside bin (via btn) or inside
+              const notifRestoreAll = addNotification('Mengembalikan semua item...', 'loading');
+              try {
+                  let idsToRestore: string[] = [];
+                  let itemsToRestore: Item[] = [];
+
+                  if (currentFolderId === recycleBinId) {
+                       idsToRestore = items.map(i => i.id);
+                       itemsToRestore = [...items];
+                  } else {
+                       const binId = await getOrCreateRecycleBin();
+                       const res = await API.getFolderContents(binId);
+                       if (res.status === 'success' && Array.isArray(res.data)) {
+                           idsToRestore = res.data.map((i: any) => i.id);
+                           itemsToRestore = res.data;
+                       }
+                  }
+
+                  if (idsToRestore.length === 0) {
+                      updateNotification(notifRestoreAll, 'Recycle Bin sudah kosong', 'success');
+                      return;
+                  }
+
+                  const restoreMap: Record<string, string[]> = {}; 
+                  const defaultTarget = "root";
+                  for (const id of idsToRestore) {
+                      const originalParent = await DB.getDeletedMeta(id);
+                      const target = originalParent || defaultTarget;
+                      if (!restoreMap[target]) restoreMap[target] = [];
+                      restoreMap[target].push(id);
+                  }
+
+                  for (const [targetFolder, itemIds] of Object.entries(restoreMap)) {
+                      await API.moveItems(itemIds, targetFolder);
+                      // Update Map if we know the items (we do from fetch or state)
+                      const foldersRestored = itemsToRestore.filter(i => itemIds.includes(i.id) && i.type === 'folder');
+                      if (foldersRestored.length > 0) updateMap('move', foldersRestored.map(f => ({ id: f.id, parentId: targetFolder })));
+                      for(const id of itemIds) await DB.removeDeletedMeta(id);
+                  }
+
+                  updateNotification(notifRestoreAll, 'Semua item dikembalikan', 'success');
+                  // Only reload if we were inside the bin
+                  if (currentFolderId === recycleBinId) loadFolder(currentFolderId);
+              } catch(e) { updateNotification(notifRestoreAll, 'Gagal restore all', 'error'); }
+              break;
+
           case 'empty_bin':
-              // Select all items in recycle bin first
-              const allBinIds = items.map(i => i.id);
-              if (allBinIds.length === 0) return;
-              
               setModal({
                   type: 'confirm', title: 'Kosongkan Recycle Bin?', message: 'Semua file di sini akan hilang selamanya.', confirmText: 'Kosongkan', isDanger: true,
                   onConfirm: async () => {
                       setModal(null);
                       const notifId = addNotification('Mengosongkan Recycle Bin...', 'loading');
                       try {
-                          await API.deleteItems(allBinIds);
-                           // Remove from map
-                          const folders = items.filter(i => i.type === 'folder');
-                          if(folders.length > 0) updateMap('remove', folders.map(f => ({ id: f.id })));
+                          let idsToDelete: string[] = [];
+                          
+                          // Logic: Are we inside the bin or outside?
+                          if (currentFolderId === recycleBinId) {
+                               idsToDelete = items.map(i => i.id);
+                          } else {
+                               const binId = await getOrCreateRecycleBin();
+                               const res = await API.getFolderContents(binId);
+                               if (res.status === 'success' && Array.isArray(res.data)) {
+                                   idsToDelete = res.data.map((i: any) => i.id);
+                               }
+                          }
+
+                          if (idsToDelete.length === 0) {
+                               updateNotification(notifId, 'Recycle Bin sudah kosong', 'success');
+                               return;
+                          }
+
+                          await API.deleteItems(idsToDelete);
+                          
+                          // Handle map updates for folders being deleted permanently
+                          const folders = items.filter(i => i.type === 'folder' && idsToDelete.includes(i.id)); 
+                          // NOTE: If we are outside bin, `items` doesn't contain the bin items, so we might miss map updates for deleted folders
+                          // Ideally we should sync map fully or fetch types, but for now this clears them from DB at least.
+                          // Simple fix: Remove ALL deleted IDs from map if they exist
+                          if (idsToDelete.length > 0) {
+                              const mapUpdates = idsToDelete.map(id => ({ id }));
+                              updateMap('remove', mapUpdates);
+                          }
                           
                           // Clear meta
-                          for(const id of allBinIds) await DB.removeDeletedMeta(id);
+                          for(const id of idsToDelete) await DB.removeDeletedMeta(id);
 
                           updateNotification(notifId, 'Recycle Bin bersih', 'success');
-                          loadFolder(currentFolderId);
+                          if (currentFolderId === recycleBinId) loadFolder(currentFolderId);
                       } catch(e) { updateNotification(notifId, 'Gagal', 'error'); }
                   }
               });
@@ -836,7 +913,7 @@ const App = () => {
       {selectionBox && (<div className="fixed z-50 bg-blue-500/20 border border-blue-400 pointer-events-none" style={{ left: selectionBox.x, top: selectionBox.y, width: selectionBox.width, height: selectionBox.height }} />)}
       {isGlobalLoading && (<div className="fixed inset-0 z-[999] bg-black/70 backdrop-blur-sm flex flex-col items-center justify-center cursor-wait animate-in fade-in"><div className="relative"><Loader2 size={48} className="animate-spin text-blue-500 mb-4"/><div className="absolute inset-0 flex items-center justify-center"><Database size={20} className="text-blue-300 opacity-80" /></div></div><p className="text-white font-semibold text-lg animate-pulse">{globalLoadingMessage}</p></div>)}
       
-      <SelectionFloatingMenu selectedIds={selectedIds} items={items} onClear={() => setSelectedIds(new Set())} onAction={executeAction} containerRef={containerRef} isInRecycleBin={currentFolderId === recycleBinId} recycleBinId={recycleBinId} isSystemFolder={currentFolderId === systemFolderId} systemFolderId={systemFolderId}/>
+      <SelectionFloatingMenu selectedIds={selectedIds} items={items} onClear={() => setSelectedIds(new Set())} onSelectAll={handleSelectAllByCategory} onAction={executeAction} containerRef={containerRef} isInRecycleBin={currentFolderId === recycleBinId} recycleBinId={recycleBinId} isSystemFolder={currentFolderId === systemFolderId} systemFolderId={systemFolderId}/>
       <UploadProgress uploads={uploadQueue} onClose={() => setUploadQueue([])} onRemove={(id) => setUploadQueue(prev => prev.filter(u => u.id !== id))} />
       <DownloadProgress downloads={downloadQueue} onClose={() => setDownloadQueue([])} onClearCompleted={() => setDownloadQueue(prev => prev.filter(d => d.status !== 'completed'))} />
       
@@ -938,14 +1015,28 @@ const NoteItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onTog
 
 const ImageItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }: ItemComponentProps) => ( <div id={`item-${item.id}`} data-item-id={item.id} draggable={false} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} style={{ touchAction: 'pan-y' }} className={`group relative rounded-xl border transition-all cursor-pointer overflow-hidden aspect-square flex flex-col items-center justify-center bg-slate-950 item-clickable select-none ${selected ? 'border-blue-500 shadow-md ring-1 ring-blue-500' : 'border-slate-800 hover:border-slate-600'}`}> <ItemOverlay status={item.status} /> <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300 shadow-sm"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/></div> {item.thumbnail || item.url ? (<img src={item.thumbnail || item.url} alt={item.name} className="w-full h-full object-cover pointer-events-none" loading="lazy" referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.style.display = 'none'; e.currentTarget.parentElement?.classList.add('bg-slate-800'); }} />) : (<ImageIcon size={32} className="text-slate-600 pointer-events-none" />)} <div className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm p-1.5 truncate pointer-events-none"><span className="text-[10px] font-medium text-slate-200 block text-center truncate">{item.name}</span></div> </div> );
 
-const SelectionFloatingMenu = ({ selectedIds, items, onClear, onAction, containerRef, isInRecycleBin, recycleBinId, isSystemFolder, systemFolderId }: { selectedIds: Set<string>, items: Item[], onClear: () => void, onAction: (a: string) => void, containerRef: React.RefObject<HTMLDivElement>, isInRecycleBin: boolean, recycleBinId: string, isSystemFolder: boolean, systemFolderId: string | null }) => {
+const SelectionFloatingMenu = ({ selectedIds, items, onClear, onSelectAll, onAction, containerRef, isInRecycleBin, recycleBinId, isSystemFolder, systemFolderId }: { selectedIds: Set<string>, items: Item[], onClear: () => void, onSelectAll: () => void, onAction: (a: string) => void, containerRef: React.RefObject<HTMLDivElement>, isInRecycleBin: boolean, recycleBinId: string, isSystemFolder: boolean, systemFolderId: string | null }) => {
     const [pos, setPos] = useState<{top?: number, left?: number, bottom?: number, x?:number}>({ bottom: 24, left: window.innerWidth / 2 }); const [styleType, setStyleType] = useState<'contextual' | 'dock'>('dock'); const menuRef = useRef<HTMLDivElement>(null); const isRecycleBinFolderSelected = !isInRecycleBin && Array.from(selectedIds).some(id => id === recycleBinId); const isSystemFolderSelected = !isInRecycleBin && Array.from(selectedIds).some(id => { const item = items.find(i => i.id === id); return item?.id === systemFolderId || item?.name === SYSTEM_FOLDER_NAME; });
     useLayoutEffect(() => {
         if (selectedIds.size === 0) return;
-        const updatePosition = () => { const rects: DOMRect[] = []; selectedIds.forEach(id => { const el = document.getElementById(`item-${id}`); if (el) rects.push(el.getBoundingClientRect()); }); if (rects.length === 0) { setStyleType('dock'); setPos({ bottom: 32, left: window.innerWidth / 2 }); return; } const viewMinY = Math.min(...rects.map(r => r.top)); const viewMaxY = Math.max(...rects.map(r => r.bottom)); const centerX = Math.min(...rects.map(r => r.left)) + (Math.max(...rects.map(r => r.right)) - Math.min(...rects.map(r => r.left))) / 2; const viewportHeight = window.innerHeight; if (selectedIds.size > 8 || (viewMaxY - viewMinY) > (viewportHeight * 0.4)) { setStyleType('dock'); setPos({ bottom: 32, left: window.innerWidth / 2 }); return; } const menuHeight = menuRef.current ? menuRef.current.offsetHeight : 60; const gap = 12; let targetTop = (viewMinY > (80 + menuHeight + gap)) ? window.scrollY + viewMinY - menuHeight - gap : window.scrollY + viewMaxY + gap; let finalLeft = centerX; if (menuRef.current) { const menuWidth = menuRef.current.offsetWidth; const minSafe = (menuWidth / 2) + 16; const maxSafe = window.innerWidth - (menuWidth / 2) - 16; finalLeft = Math.max(minSafe, Math.min(maxSafe, centerX)); } setStyleType('contextual'); setPos({ top: targetTop, left: finalLeft }); }; updatePosition(); window.addEventListener('resize', updatePosition); return () => window.removeEventListener('resize', updatePosition);
+        const updatePosition = () => { 
+            const rects: DOMRect[] = []; 
+            selectedIds.forEach(id => { const el = document.getElementById(`item-${id}`); if (el) rects.push(el.getBoundingClientRect()); }); 
+            if (rects.length === 0) { setStyleType('dock'); setPos({ bottom: 32, left: window.innerWidth / 2 }); return; } 
+            const viewMinY = Math.min(...rects.map(r => r.top)); const viewMaxY = Math.max(...rects.map(r => r.bottom)); const centerX = Math.min(...rects.map(r => r.left)) + (Math.max(...rects.map(r => r.right)) - Math.min(...rects.map(r => r.left))) / 2; const viewportHeight = window.innerHeight; 
+            if (selectedIds.size > 8 || (viewMaxY - viewMinY) > (viewportHeight * 0.4)) { setStyleType('dock'); setPos({ bottom: 32, left: window.innerWidth / 2 }); return; } 
+            const menuHeight = menuRef.current ? menuRef.current.offsetHeight : 60; const gap = 12; let targetTop = (viewMinY > (80 + menuHeight + gap)) ? window.scrollY + viewMinY - menuHeight - gap : window.scrollY + viewMaxY + gap; let finalLeft = centerX; 
+            if (menuRef.current) { const menuWidth = menuRef.current.offsetWidth; const minSafe = (menuWidth / 2) + 16; const maxSafe = window.innerWidth - (menuWidth / 2) - 16; finalLeft = Math.max(minSafe, Math.min(maxSafe, centerX)); } 
+            setStyleType('contextual'); setPos({ top: targetTop, left: finalLeft }); 
+        }; 
+        updatePosition(); 
+        window.addEventListener('resize', updatePosition); return () => window.removeEventListener('resize', updatePosition);
     }, [selectedIds, items]);
-    if (selectedIds.size === 0) return null; const dockStyle = "fixed z-50 transform -translate-x-1/2 flex items-center gap-1 bg-slate-900/90 backdrop-blur-md border border-blue-500/50 p-2 rounded-2xl shadow-2xl shadow-blue-500/10 animate-in zoom-in-95 slide-in-from-bottom-5 duration-200 transition-all max-w-[95vw] overflow-x-auto"; const contextStyle = "absolute z-50 transform -translate-x-1/2 flex items-center gap-1 bg-slate-900/90 backdrop-blur-md border border-blue-500/50 p-1.5 rounded-full shadow-2xl shadow-blue-500/20 animate-in fade-in zoom-in-95 duration-150 transition-all duration-300 ease-out max-w-[95vw] overflow-x-auto"; const isContext = styleType === 'contextual';
-    return ( <div ref={menuRef} className={isContext ? contextStyle : dockStyle} style={{ top: isContext ? pos.top : undefined, left: isContext ? pos.left : '50%', bottom: isContext ? undefined : pos.bottom }}> <div className={`flex items-center gap-2 ${isContext ? 'px-2' : 'px-3 border-r border-white/10 mr-1'}`}><span className="font-bold text-sm text-blue-100">{selectedIds.size}</span><button onClick={(e) => { e.stopPropagation(); onClear(); }} className="p-1 hover:bg-white/10 rounded-full transition-colors"><X size={14} /></button></div> {isRecycleBinFolderSelected ? (<span className="px-2 text-xs text-slate-400 font-medium">System Folder</span>) : isSystemFolderSelected ? (<span className="px-2 text-xs text-amber-500 font-medium flex items-center gap-1"><Lock size={12}/> Protected</span>) : isInRecycleBin ? (<> <button onClick={(e) => { e.stopPropagation(); onAction('restore'); }} className="p-2 hover:bg-green-500/20 hover:text-green-400 rounded-lg transition-colors tooltip" title="Restore"><RotateCcw size={18}/></button><div className="w-px h-6 bg-white/10 mx-1"></div><button onClick={(e) => { e.stopPropagation(); onAction('delete_permanent'); }} className="p-2 hover:bg-red-500/20 text-red-400 hover:text-red-300 rounded-lg transition-colors tooltip" title="Delete Permanently"><Ban size={18}/></button> </>) : isSystemFolder ? (<> <button onClick={(e) => { e.stopPropagation(); onAction('download'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Download"><Download size={18}/></button>{selectedIds.size === 1 && items.find(i => i.id === Array.from(selectedIds)[0])?.type === 'image' && (<button onClick={(e) => { e.stopPropagation(); onAction('copy_image'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Copy Image"><Image size={18}/></button>)} </>) : (<> <button onClick={(e) => { e.stopPropagation(); onAction('duplicate'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Duplicate"><Copy size={18}/></button><button onClick={(e) => { e.stopPropagation(); onAction('move'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Move"><Move size={18}/></button>{selectedIds.size === 1 && <button onClick={(e) => { e.stopPropagation(); onAction('rename'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Rename"><Edit size={18}/></button>}<button onClick={(e) => { e.stopPropagation(); onAction('download'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Download"><Download size={18}/></button><div className="w-px h-6 bg-white/10 mx-1"></div><button onClick={(e) => { e.stopPropagation(); onAction('delete'); }} className="p-2 hover:bg-red-500/20 text-red-400 hover:text-red-300 rounded-lg transition-colors tooltip" title="Delete"><Trash2 size={18}/></button> </>) } </div> );
+    if (selectedIds.size === 0) return null; 
+    const dockStyle = "fixed z-[999] transform -translate-x-1/2 flex items-center gap-1 bg-slate-900/90 backdrop-blur-md border border-blue-500/50 p-2 rounded-2xl shadow-2xl shadow-blue-500/10 animate-in zoom-in-95 slide-in-from-bottom-5 duration-200 transition-all max-w-[95vw] overflow-x-auto pointer-events-auto"; 
+    const contextStyle = "absolute z-[999] transform -translate-x-1/2 flex items-center gap-1 bg-slate-900/90 backdrop-blur-md border border-blue-500/50 p-1.5 rounded-full shadow-2xl shadow-blue-500/20 animate-in fade-in zoom-in-95 duration-150 transition-all duration-300 ease-out max-w-[95vw] overflow-x-auto pointer-events-auto"; 
+    const isContext = styleType === 'contextual';
+    return ( <div ref={menuRef} className={isContext ? contextStyle : dockStyle} style={{ top: isContext ? pos.top : undefined, left: isContext ? pos.left : '50%', bottom: isContext ? undefined : pos.bottom }}> <div className={`flex items-center gap-2 ${isContext ? 'px-2' : 'px-3 border-r border-white/10 mr-1'}`}><span className="font-bold text-sm text-blue-100">{selectedIds.size}</span><button onClick={(e) => { e.stopPropagation(); onClear(); }} className="p-1 hover:bg-white/10 rounded-full transition-colors"><X size={14} /></button><button onClick={(e) => { e.stopPropagation(); onSelectAll(); }} className="p-1 hover:bg-white/10 hover:text-blue-400 rounded-full transition-colors" title="Select All in Category"><CheckCheck size={14} /></button></div> {isRecycleBinFolderSelected ? (<span className="px-2 text-xs text-slate-400 font-medium">System Folder</span>) : isSystemFolderSelected ? (<span className="px-2 text-xs text-amber-500 font-medium flex items-center gap-1"><Lock size={12}/> Protected</span>) : isInRecycleBin ? (<> <button onClick={(e) => { e.stopPropagation(); onAction('restore'); }} className="p-2 hover:bg-green-500/20 hover:text-green-400 rounded-lg transition-colors tooltip" title="Restore"><RotateCcw size={18}/></button><div className="w-px h-6 bg-white/10 mx-1"></div><button onClick={(e) => { e.stopPropagation(); onAction('delete_permanent'); }} className="p-2 hover:bg-red-500/20 text-red-400 hover:text-red-300 rounded-lg transition-colors tooltip" title="Delete Permanently"><Ban size={18}/></button> </>) : isSystemFolder ? (<> <button onClick={(e) => { e.stopPropagation(); onAction('download'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Download"><Download size={18}/></button> {contextMenu.targetItem.type === 'image' && (<button onClick={() => executeAction('copy_image')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Image size={16} className="text-slate-400"/> Copy Image</button>)} <div className="px-3 py-2 text-xs text-amber-500/70 italic flex items-center gap-1"><Lock size={12}/> Read-Only</div> </>) : (<> <button onClick={() => executeAction('duplicate'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Duplicate"><Copy size={18}/></button><button onClick={(e) => { e.stopPropagation(); onAction('move'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Move"><Move size={18}/></button>{selectedIds.size === 1 && <button onClick={(e) => { e.stopPropagation(); onAction('rename'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Rename"><Edit size={18}/></button>}<button onClick={(e) => { e.stopPropagation(); onAction('download'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Download"><Download size={18}/></button><div className="w-px h-6 bg-white/10 mx-1"></div><button onClick={(e) => { e.stopPropagation(); onAction('delete'); }} className="p-2 hover:bg-red-500/20 text-red-400 hover:text-red-300 rounded-lg transition-colors tooltip" title="Delete"><Trash2 size={18}/></button> </>) } </div> );
 };
 
 export default App;
