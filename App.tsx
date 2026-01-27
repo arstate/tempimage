@@ -77,7 +77,7 @@ const App = () => {
   const containerRef = useRef<HTMLDivElement>(null);
   const dragStartPos = useRef<{x:number, y:number} | null>(null);
   const lastTouchedIdRef = useRef<string | null>(null); // For Swipe Selection (Paint)
-  const isSelectionModeRef = useRef<boolean>(false); // Track if we are in "add to selection" mode
+  const isPaintingRef = useRef<boolean>(false); // Track if we are actively painting selection
 
   // --- EDITOR & MODALS ---
   const [modal, setModal] = useState<ModalState | null>(null);
@@ -271,59 +271,40 @@ const App = () => {
   const handlePointerDown = (e: React.PointerEvent) => {
      // Ignore clicks on buttons/interactive elements within items
      if ((e.target as HTMLElement).closest('button, .item-handle')) return;
-     
-     // Only primary pointer
      if (!e.isPrimary) return;
 
      const target = e.target as HTMLElement;
      const isCheckbox = target.closest('.selection-checkbox');
      const itemRow = target.closest('[data-item-id]');
      
-     // 1. If we clicked a checkbox OR if we already have items selected (Selection Mode)
-     // We prepare for "Paint Selection"
-     const isMultiSelectMode = selectedIds.size > 0;
-
-     if (isCheckbox || isMultiSelectMode) {
-         isSelectionModeRef.current = true;
-         // If it was the checkbox specifically, toggle it immediately
-         if (isCheckbox && itemRow) {
-             const id = itemRow.getAttribute('data-item-id');
-             if(id) {
-                 // Initial toggle handled by click, but we track for drag
-                 lastTouchedIdRef.current = id;
-                 handleToggleSelect(id); 
-             }
-         } else if (isMultiSelectMode && itemRow) {
-             // If clicking item body in select mode, toggle it and prepare drag
-             const id = itemRow.getAttribute('data-item-id');
-             if (id) {
-                 lastTouchedIdRef.current = id;
-                 // If not dragging yet, this is just a toggle
-                 handleToggleSelect(id);
-             }
-         }
-     } else {
-         // Normal box selection start (if clicking background)
-         if (!itemRow) {
-             isSelectionModeRef.current = false;
-             // Clear selection if clicking background without keys
-             if (!e.ctrlKey && !e.shiftKey) setSelectedIds(new Set());
-         } else {
-             // Clicking item body when nothing selected -> Normal Click/Drag
-             // handled by onClick, or HTML5 drag if enabled
-             return;
-         }
-     }
-
-     containerRef.current?.setPointerCapture(e.pointerId);
-     setIsDragSelecting(true);
+     // Start Tracking
      dragStartPos.current = { x: e.clientX, y: e.clientY };
      
-     // Box selection visual init
-     if (!isSelectionModeRef.current) {
-        setSelectionBox({ x: e.clientX, y: e.clientY, width: 0, height: 0 });
+     // 1. If clicking on an Item (potential click or swipe-start)
+     if (itemRow) {
+         // Don't modify selection immediately on down (wait for click or drag)
+         // Unless it's the checkbox
+         if (isCheckbox) {
+             const id = itemRow.getAttribute('data-item-id');
+             if(id) {
+                 handleToggleSelect(id); 
+                 lastTouchedIdRef.current = id; // Prepare for drag from checkbox
+                 isPaintingRef.current = true; // Immediate paint mode
+             }
+         }
+         containerRef.current?.setPointerCapture(e.pointerId);
+         setIsDragSelecting(true);
+     } 
+     // 2. If clicking on Background (Box Selection)
+     else {
+         isPaintingRef.current = false;
+         setSelectionBox({ x: e.clientX, y: e.clientY, width: 0, height: 0 });
+         setIsDragSelecting(true);
+         // Clear selection if clicking background without keys
+         if (!e.ctrlKey && !e.shiftKey) setSelectedIds(new Set());
+         containerRef.current?.setPointerCapture(e.pointerId);
      }
-     
+
      setContextMenu(null);
      setIsNewDropdownOpen(false);
   };
@@ -331,21 +312,35 @@ const App = () => {
   const handlePointerMove = (e: React.PointerEvent) => {
      if (!isDragSelecting || !dragStartPos.current) return;
 
-     // Calculate distance to determine if it's a drag
      const moveDist = Math.sqrt(Math.pow(e.clientX - dragStartPos.current.x, 2) + Math.pow(e.clientY - dragStartPos.current.y, 2));
      
-     // Threshold to start actual selection logic
-     if (moveDist > 5) {
+     // Threshold to consider it a drag/swipe
+     if (moveDist > 8) {
+         const target = document.elementFromPoint(e.clientX, e.clientY);
+         const itemRow = target?.closest('[data-item-id]');
          
-         // MODE 1: PAINT SELECTION (Swipe over items)
-         if (isSelectionModeRef.current) {
-             // Hit test to find item under finger/cursor
-             const target = document.elementFromPoint(e.clientX, e.clientY);
-             const itemRow = target?.closest('[data-item-id]');
-             
+         // MODE 1: Item-based Swipe (Paint Selection)
+         // If we started on an item OR we are already painting
+         if (selectionBox === null) {
+             isPaintingRef.current = true; // Confirm paint mode
+
+             // If we just started dragging, ensure the starting item is selected
+             if (lastTouchedIdRef.current === null) {
+                  // Find origin item
+                  const startTarget = document.elementFromPoint(dragStartPos.current.x, dragStartPos.current.y);
+                  const startRow = startTarget?.closest('[data-item-id]');
+                  const startId = startRow?.getAttribute('data-item-id');
+                  if (startId) {
+                      // If starting a drag, we assume selection intent
+                      if (!selectedIds.has(startId)) {
+                          setSelectedIds(prev => new Set(prev).add(startId));
+                      }
+                      lastTouchedIdRef.current = startId;
+                  }
+             }
+
              if (itemRow) {
                  const id = itemRow.getAttribute('data-item-id');
-                 // If we moved to a NEW item
                  if (id && id !== lastTouchedIdRef.current) {
                      lastTouchedIdRef.current = id;
                      // Add to selection
@@ -356,8 +351,8 @@ const App = () => {
                      });
                  }
              }
-         } 
-         // MODE 2: BOX SELECTION (Dragging on background)
+         }
+         // MODE 2: Background Box Selection
          else {
              const currentX = e.clientX;
              const currentY = e.clientY;
@@ -368,7 +363,6 @@ const App = () => {
              const height = Math.abs(currentY - dragStartPos.current.y);
              setSelectionBox({ x, y, width, height });
 
-             // Calculate intersection
              const newSelected = new Set(selectedIds);
              items.forEach(item => {
                 const el = document.getElementById(`item-${item.id}`);
@@ -385,11 +379,25 @@ const App = () => {
   };
 
   const handlePointerUp = (e: React.PointerEvent) => {
+      // If we were NOT painting/dragging significantly -> It's a Click
+      if (isDragSelecting && !isPaintingRef.current && selectionBox === null) {
+          const target = e.target as HTMLElement;
+          const itemRow = target.closest('[data-item-id]');
+          const isCheckbox = target.closest('.selection-checkbox');
+
+          if (itemRow && !isCheckbox) { // Checkbox handled in PointerDown
+              const id = itemRow.getAttribute('data-item-id');
+              if (id) {
+                 handleItemClickLogic(e, id);
+              }
+          }
+      }
+
       setIsDragSelecting(false);
       setSelectionBox(null);
       dragStartPos.current = null;
       lastTouchedIdRef.current = null;
-      isSelectionModeRef.current = false;
+      isPaintingRef.current = false;
       containerRef.current?.releasePointerCapture(e.pointerId);
   };
 
@@ -404,32 +412,32 @@ const App = () => {
       setLastSelectedId(id);
   };
 
-  const handleItemClick = (e: React.MouseEvent, item: Item) => {
-    // If we were painting/selecting, don't trigger click
-    if (Math.abs(e.movementX) > 2 || Math.abs(e.movementY) > 2) return;
-
+  const handleItemClickLogic = (e: React.PointerEvent | React.MouseEvent, id: string) => {
     if (e.shiftKey && lastSelectedId) {
         const lastIndex = items.findIndex(i => i.id === lastSelectedId);
-        const currentIndex = items.findIndex(i => i.id === item.id);
+        const currentIndex = items.findIndex(i => i.id === id);
         if (lastIndex !== -1 && currentIndex !== -1) {
             const start = Math.min(lastIndex, currentIndex);
             const end = Math.max(lastIndex, currentIndex);
             const rangeIds = items.slice(start, end + 1).map(i => i.id);
             const newSet = new Set(selectedIds);
-            rangeIds.forEach(id => newSet.add(id));
+            rangeIds.forEach(itemId => newSet.add(itemId));
             setSelectedIds(newSet);
         }
-    } else if (e.ctrlKey || e.metaKey || selectedIds.size > 0) {
-        // If ctrl is pressed OR we already have selection, toggle
-        handleToggleSelect(item.id);
+    } else if (e.ctrlKey || e.metaKey) {
+        handleToggleSelect(id);
     } else {
-        // Normal click: select only this one
-        // Check if we didn't just toggle it via pointerDown
-        if (!selectedIds.has(item.id) || selectedIds.size > 1) {
-             setSelectedIds(new Set([item.id]));
-             setLastSelectedId(item.id);
-        }
+        // SINGLE CLICK: Select only this one, deselect others
+        setSelectedIds(new Set([id]));
+        setLastSelectedId(id);
     }
+  };
+
+  // Used for onClick prop on items (as fallback or double click handling)
+  const handleItemClick = (e: React.MouseEvent, item: Item) => {
+      // Logic moved to PointerUp to separate drag from click cleanly
+      // We only use this to stop propagation if needed
+      e.stopPropagation();
   };
 
   const handleItemDoubleClick = (e: React.MouseEvent, item: Item) => {
@@ -607,7 +615,6 @@ const App = () => {
         } catch(e) { updateNotification(notifId, 'Gagal restore', 'error'); } 
         finally { setIsProcessingAction(false); }
     }
-    // ... other actions same as before
     else if (action === 'empty_bin') {
         if (!recycleBinId) return;
         const res = await API.getFolderContents(recycleBinId);
@@ -856,7 +863,6 @@ const App = () => {
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerUp}
-      style={{ touchAction: isDragSelecting ? 'none' : 'auto' }} // Prevent scroll ONLY when selecting
     >
       
       {selectionBox && (
@@ -1201,6 +1207,8 @@ const FolderItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onT
         onClick={(e) => onClick(e, item)} 
         onDoubleClick={(e) => onDoubleClick(e, item)} 
         onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} 
+        // Add pan-y touch-action to allow vertical scrolling but let JS capture horizontal swipes
+        style={{ touchAction: 'pan-y' }}
         className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col items-center gap-2 item-clickable select-none ${selected ? 'bg-blue-500/20 border-blue-500 shadow-md ring-1 ring-blue-500' : 'bg-slate-900 border-slate-800 hover:bg-slate-800 hover:border-slate-600'}`}
     >
         <ItemOverlay status={item.status} />
@@ -1230,6 +1238,7 @@ const NoteItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onTog
         onClick={(e) => onClick(e, item)} 
         onDoubleClick={(e) => onDoubleClick(e, item)} 
         onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} 
+        style={{ touchAction: 'pan-y' }}
         className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col items-center gap-2 item-clickable select-none ${selected ? 'bg-blue-500/20 border-blue-500 shadow-md ring-1 ring-blue-500' : 'bg-slate-900 border-slate-800 hover:bg-slate-800 hover:border-slate-600'}`}
     >
         <ItemOverlay status={item.status} />
@@ -1252,6 +1261,7 @@ const ImageItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onTo
         onClick={(e) => onClick(e, item)} 
         onDoubleClick={(e) => onDoubleClick(e, item)} 
         onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} 
+        style={{ touchAction: 'pan-y' }}
         className={`group relative rounded-xl border transition-all cursor-pointer overflow-hidden aspect-square flex flex-col items-center justify-center bg-slate-950 item-clickable select-none ${selected ? 'border-blue-500 shadow-md ring-1 ring-blue-500' : 'border-slate-800 hover:border-slate-600'}`}
     >
         <ItemOverlay status={item.status} />
