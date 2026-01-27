@@ -431,10 +431,9 @@ const App = () => {
 
   // --- ROBUST FILE ACTIONS (COPY & DOWNLOAD) ---
   
-  // Updated Helper: Uses CANVAS CAPTURE for Google Drive images
-  // This avoids CORS Proxy blocks by "stealing" the pixels from the browser renderer
+  // Updated Helper: Uses STABLE PUBLIC PROXIES (AllOrigins & WSRV)
   const getBlobFromUrl = async (url: string): Promise<Blob> => {
-      // 1. Attempt Direct Fetch (Fastest if CORS allows)
+      // 1. Attempt Direct Fetch (Just in case CORS is open)
       try {
           const response = await fetch(url, {
               mode: 'cors',
@@ -442,38 +441,30 @@ const App = () => {
               referrerPolicy: 'no-referrer'
           });
           if (response.ok) return await response.blob();
-      } catch (e) {
-          // Fallback to Canvas method
+      } catch (e) { /* ignore */ }
+
+      // 2. Primary Proxy: AllOrigins (Raw Mode)
+      // This is generally very reliable for fetching raw files.
+      try {
+          const proxyUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`;
+          const response = await fetch(proxyUrl);
+          if (!response.ok) throw new Error(`AllOrigins status: ${response.status}`);
+          return await response.blob();
+      } catch (err1) {
+          console.warn("Proxy 1 (AllOrigins) failed, trying backup...", err1);
       }
 
-      // 2. CANVAS FALLBACK (The "Silver Bullet" for Google Drive)
-      // Since Google images often allow "displaying" (via <img>) but block "downloading" (via fetch),
-      // we load it into an Image object and draw it to a canvas.
-      return new Promise((resolve, reject) => {
-          const img = new window.Image();
-          img.crossOrigin = "Anonymous"; // Required to prevent "tainted canvas"
-          img.src = url;
-          img.referrerPolicy = "no-referrer";
-          
-          img.onload = () => {
-              const canvas = document.createElement('canvas');
-              canvas.width = img.naturalWidth;
-              canvas.height = img.naturalHeight;
-              const ctx = canvas.getContext('2d');
-              if (!ctx) { reject(new Error("Canvas context failed")); return; }
-              try {
-                  ctx.drawImage(img, 0, 0);
-                  canvas.toBlob((blob) => {
-                      if (blob) resolve(blob);
-                      else reject(new Error("Canvas blob conversion failed"));
-                  }, 'image/png'); // Default to PNG for transparency support
-              } catch (err) {
-                  // This happens if the server strictly blocks cross-origin use even for display
-                  reject(new Error("Gambar terkunci (Tainted Canvas). Tidak bisa didownload langsung."));
-              }
-          };
-          img.onerror = () => reject(new Error("Gagal memuat gambar ke memori."));
-      });
+      // 3. Backup Proxy: WSRV (Image Proxy)
+      // WSRV is specialized for images and very good at bypassing Google's restrictions.
+      // We explicitly ask for output=png to ensure we get a valid image blob back.
+      try {
+          const proxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(url)}&output=png`;
+          const response = await fetch(proxyUrl);
+          if (!response.ok) throw new Error(`WSRV status: ${response.status}`);
+          return await response.blob();
+      } catch (err2) {
+          throw new Error("Gagal mengunduh: Semua jalur proxy sibuk atau diblokir.");
+      }
   };
 
   const handleDownload = async (item: Item | string) => {
@@ -506,9 +497,6 @@ const App = () => {
         // Show specific error notification for the user
         const msg = e instanceof Error ? e.message : "Network Error";
         updateNotification(notifId, `Gagal: ${msg}`, 'error');
-        
-        // Final fallback: open in new tab if really desperate (optional, but user asked to avoid it)
-        // setTimeout(() => window.open(url, '_blank'), 1500); 
     } finally {
         setIsProcessingAction(false);
     }
@@ -530,7 +518,7 @@ const App = () => {
           updateNotification(notifId, 'Gambar disalin ke clipboard!', 'success');
       } catch (err) {
           console.error("Clipboard Error:", err);
-          updateNotification(notifId, 'Gagal menyalin: Izin browser ditolak', 'error');
+          updateNotification(notifId, 'Gagal menyalin: Proxy/Izin Error', 'error');
       }
   };
 
