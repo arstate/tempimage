@@ -1110,6 +1110,9 @@ const App = () => {
         )}
       </main>
 
+      {/* ... Rest of JSX ... */}
+      {/* Keeping existing JSX for Context Menu, Modals etc same as before */}
+      
       {currentFolderId !== recycleBinId && (
           <div 
              className="fixed bottom-6 left-6 z-[250] group"
@@ -1151,7 +1154,6 @@ const App = () => {
         <>
             <div className="fixed inset-0 z-[99]" onClick={() => setContextMenu(null)} onContextMenu={(e) => { e.preventDefault(); setContextMenu(null); }}></div>
             <div className="fixed z-[100] bg-slate-800 border border-slate-700 rounded-lg shadow-2xl py-1.5 min-w-[200px] animate-in fade-in zoom-in-95 duration-100 overflow-hidden" style={{ top: Math.min(contextMenu.y, window.innerHeight - 300), left: Math.min(contextMenu.x, window.innerWidth - 220) }}>
-            
             {contextMenu.isRecycleBinBtn ? (
                 <>
                 <div className="px-3 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-700/50 mb-1">Recycle Bin Options</div>
@@ -1283,13 +1285,36 @@ const ItemOverlay = ({ status }: { status?: string }) => {
     );
 };
 
-// Common Draggable Handle (To enable drag only on intent)
-const DragHandle = ({ itemId }: { itemId: string }) => (
+// UPDATED Common Draggable Handle (To enable drag only on intent)
+const DragHandle = ({ item }: { item: Item }) => (
     <div 
         className="absolute top-2 right-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity p-1.5 bg-slate-800/80 rounded hover:bg-slate-700 cursor-grab active:cursor-grabbing text-slate-400 item-handle"
         draggable={true}
         onDragStart={(e) => {
-            e.dataTransfer.setData("text/item-id", itemId);
+            // Internal Logic (for Drop inside app)
+            e.dataTransfer.setData("text/item-id", item.id);
+            
+            // EXTERNAL LOGIC (For dropping to Desktop)
+            if (item.type === 'image' && (item.url || item.thumbnail)) {
+                const url = item.url || item.thumbnail;
+                if (url) {
+                    // Try to guess mime type from name or default to png
+                    let mime = 'image/png';
+                    if (item.name.toLowerCase().endsWith('.jpg') || item.name.toLowerCase().endsWith('.jpeg')) mime = 'image/jpeg';
+                    if (item.name.toLowerCase().endsWith('.gif')) mime = 'image/gif';
+                    if (item.name.toLowerCase().endsWith('.webp')) mime = 'image/webp';
+                    
+                    // Chrome specific: "mime:filename:url"
+                    e.dataTransfer.setData("DownloadURL", `${mime}:${item.name}:${url}`);
+                    // Standard URI List
+                    e.dataTransfer.setData("text/uri-list", url);
+                    // Plain text fallback
+                    e.dataTransfer.setData("text/plain", url);
+                }
+            } else if (item.type === 'note' && item.content) {
+                 e.dataTransfer.setData("text/plain", stripHtml(item.content));
+            }
+
             e.stopPropagation(); // Stop pointer events from seeing this as a selection drag
         }}
     >
@@ -1322,7 +1347,7 @@ const FolderItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onT
         </div>
 
         {/* Drag Handle */}
-        {!isRecycleBin && <DragHandle itemId={item.id} />}
+        {!isRecycleBin && <DragHandle item={item} />}
 
         {isRecycleBin ? (
              <Trash2 size={48} className="text-red-500 fill-red-500/10 drop-shadow-md pointer-events-none" />
@@ -1349,7 +1374,7 @@ const NoteItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onTog
             <CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/>
         </div>
         
-        <DragHandle itemId={item.id} />
+        <DragHandle item={item} />
 
         <FileText size={48} className="text-yellow-500 fill-yellow-500/10 drop-shadow-md pointer-events-none" />
         <span className="text-xs font-medium text-slate-200 text-center truncate w-full px-1" title={item.name}>{item.name.replace('.txt', '')}</span>
@@ -1372,7 +1397,7 @@ const ImageItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onTo
             <CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300 shadow-sm"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/>
         </div>
         
-        <DragHandle itemId={item.id} />
+        <DragHandle item={item} />
 
         {item.thumbnail || item.url ? (
              <img src={item.thumbnail || item.url} alt={item.name} className="w-full h-full object-cover pointer-events-none" loading="lazy" referrerPolicy="no-referrer" />
