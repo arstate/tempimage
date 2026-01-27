@@ -1334,19 +1334,21 @@ const ItemOverlay = ({ status }: { status?: string }) => {
 const DragHandle = ({ item }: { item: Item }) => {
     // Store both file object (for desktop drop) and base64 string (for legacy drop)
     const [dragData, setDragData] = useState<{ file: File, base64: string } | null>(null);
+    const [isLoading, setIsLoading] = useState(false);
 
-    // Pre-fetch blob on hover/active to ensure file drag works (without crossOrigin issues)
+    // Triggered on hover
     const prepareDragData = async () => {
-        if (dragData) return;
+        if (dragData || isLoading) return;
+        if (item.type === 'folder') return;
+        
+        setIsLoading(true);
         const url = item.url || item.thumbnail;
-        if (!url) return;
+        if (!url) { setIsLoading(false); return; }
 
         try {
-             // Try direct fetch (hits browser cache if available)
-             // Use fallback proxy if CORS fails
              let blob: Blob;
              try {
-                 const res = await fetch(url, { cache: 'force-cache' });
+                 const res = await fetch(url, { cache: 'force-cache', referrerPolicy: 'no-referrer' });
                  if (!res.ok) throw new Error("Direct fetch failed");
                  blob = await res.blob();
              } catch (e) {
@@ -1356,12 +1358,26 @@ const DragHandle = ({ item }: { item: Item }) => {
                  blob = await res.blob();
              }
 
-             const file = new File([blob], item.name, { type: blob.type });
+             // FIX: Ensure correct extension
+             const mime = blob.type;
+             let ext = mime.split('/')[1] || 'bin';
+             if(ext === 'jpeg') ext = 'jpg';
+             if(ext === 'plain') ext = 'txt';
+             
+             let fileName = item.name;
+             // Add extension if missing
+             if (!fileName.toLowerCase().includes('.')) {
+                 fileName = `${fileName}.${ext}`;
+             }
+
+             const file = new File([blob], fileName, { type: mime });
              const base64 = await API.fileToBase64(blob);
              
              setDragData({ file, base64 });
         } catch (err) {
              console.warn("Failed to prepare drag data", err);
+        } finally {
+            setIsLoading(false);
         }
     };
 
@@ -1371,39 +1387,35 @@ const DragHandle = ({ item }: { item: Item }) => {
         draggable={true}
         onMouseEnter={prepareDragData}
         onDragStart={(e) => {
-            // 1. Internal ID for moving folders
+            // 1. Internal ID
             e.dataTransfer.setData("text/item-id", item.id);
             
-            // 2. External Drag Logic
             if (item.type === 'image') {
                 const url = item.url || item.thumbnail || "";
                 
-                // Find visible image for ghost
+                // Ghost image
                 const imgEl = document.getElementById(`item-${item.id}`)?.querySelector('img') as HTMLImageElement;
                 if (imgEl) e.dataTransfer.setDragImage(imgEl, imgEl.width / 2, imgEl.height / 2);
 
                 if (dragData) {
                      e.dataTransfer.effectAllowed = "copy";
-                     // KEY FIX: Add actual File object to items. This enables Drag-to-Desktop.
+                     // KEY: Add File object
                      e.dataTransfer.items.add(dragData.file);
                      
-                     // Legacy/Fallback support
-                     e.dataTransfer.setData("DownloadURL", `${dragData.file.type}:${item.name}:${dragData.base64}`);
-                     e.dataTransfer.setData("text/html", `<img src="${dragData.base64}" alt="${item.name}" />`);
-                     e.dataTransfer.setData("text/uri-list", dragData.base64);
+                     // Legacy
+                     e.dataTransfer.setData("DownloadURL", `${dragData.file.type}:${dragData.file.name}:${dragData.base64}`); // Use base64 or blob? Base64 is safer across origins if small enough.
                 } else {
-                     // Fallback if data isn't ready yet (should rarely happen due to hover prefetch)
+                     // If data isn't ready, try to pass URL
                      e.dataTransfer.setData("text/uri-list", url);
                      e.dataTransfer.setData("text/plain", url);
                 }
             } else if (item.type === 'note' && item.content) {
                  e.dataTransfer.setData("text/plain", stripHtml(item.content));
-                 e.dataTransfer.setData("text/html", item.content);
             }
 
             e.stopPropagation();
         }}
-        // Prevent interfering with parent pointer events (selection)
+        // Trigger prefetch on pointer down too (for touch/quick clicks)
         onPointerDown={(e) => { prepareDragData(); e.stopPropagation(); }}
     >
         <GripVertical size={18} />
