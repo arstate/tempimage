@@ -125,92 +125,167 @@ const App = () => {
     return () => { document.body.style.overflow = ''; };
   }, [previewImage]);
 
-  // --- INITIALIZATION & ROUTING (Simplified for XML, assume core init logic is same as provided file) ---
+  // --- SYNC & INITIALIZATION LOGIC ---
+  
+  // 1. Trigger Cloud Sync (Push Local to Cloud)
   const triggerCloudSync = useCallback(() => {
       if (!dbFileId) return;
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
       setIsSavingDB(true);
+      
+      // Debounce saving
       saveTimeoutRef.current = setTimeout(async () => {
           try {
               await API.updateSystemDBFile(dbFileId, systemMapRef.current);
               setIsSavingDB(false);
               await DB.saveSystemMap({ fileId: dbFileId, map: systemMapRef.current, lastSync: Date.now() });
           } catch (e) { setIsSavingDB(false); }
-      }, 1500); 
+      }, 2000); 
   }, [dbFileId]);
 
+  // 2. Routing Handler
+  const handleRouting = useCallback((map: FolderMap) => {
+      const hash = window.location.hash.replace(/^#/, ''); 
+      const path = hash.split('/').filter(p => p);
+      
+      if (path.length > 0) {
+           let parentSearchId = "root"; 
+           let foundId = "";
+           const traceHistory: {id:string, name:string}[] = [];
+           
+           for (const segment of path) {
+               const decodedName = decodeURIComponent(segment);
+               const entryId = Object.keys(map).find(key => {
+                   const node = map[key];
+                   return node.name === decodedName && (node.parentId || "root") === parentSearchId;
+               });
+               if (entryId) { 
+                   parentSearchId = entryId; 
+                   traceHistory.push({ id: entryId, name: decodedName }); 
+                   foundId = entryId; 
+               } 
+           }
+           if (foundId) { 
+               setFolderHistory(traceHistory); 
+               setCurrentFolderId(foundId); 
+           } else { 
+               setIsNotFound(true); 
+           }
+       } else { 
+           setCurrentFolderId(""); 
+       }
+  }, []);
+
+  // 3. Polling / Background Sync Loop
   useEffect(() => {
     if (!isSystemInitialized || !dbFileId || isSavingDB) return;
+    
+    // Poll every 10 seconds for "Realtime" feel
     const interval = setInterval(async () => {
         try {
             if (!isSavingDB) {
                 const content = await API.getFileContent(dbFileId);
                 const remoteMap = JSON.parse(content);
+                
+                // Compare maps
                 if (JSON.stringify(remoteMap) !== JSON.stringify(systemMapRef.current)) {
+                    console.log("Remote changes detected, syncing...");
                     systemMapRef.current = remoteMap;
                     setSystemMap(remoteMap);
                     await DB.saveSystemMap({ fileId: dbFileId, map: remoteMap, lastSync: Date.now() });
-                    if (currentFolderId) loadFolder(currentFolderId);
+                    
+                    // If current folder was affected (e.g. deleted or moved), refresh routing
+                    if (currentFolderId && !remoteMap[currentFolderId] && currentFolderId !== 'root') {
+                        // Current folder might have been deleted remotely
+                         loadFolder(currentFolderId); // Let loadFolder handle empty/missing
+                    }
                 }
             }
-        } catch (e) {}
-    }, 60000); 
+        } catch (e) {
+            // Silent error on polling
+        }
+    }, 10000); 
+    
     return () => clearInterval(interval);
   }, [isSystemInitialized, dbFileId, isSavingDB, currentFolderId]);
 
+  // 4. Initial System Load
   useEffect(() => {
     const initSystem = async () => {
+       let localMap: FolderMap = {};
+       
+       // A. CACHE FIRST STRATEGY
        try {
            const cachedDB = await DB.getSystemMap();
-           let currentMap: FolderMap = cachedDB ? cachedDB.map : {};
-           setGlobalLoadingMessage("Sinkronisasi Cloud...");
+           if (cachedDB) {
+               localMap = cachedDB.map;
+               systemMapRef.current = localMap;
+               setSystemMap(localMap);
+               if (cachedDB.fileId) setDbFileId(cachedDB.fileId);
+               
+               // Render UI immediately with cache
+               setIsSystemInitialized(true); 
+               handleRouting(localMap);
+               setIsGlobalLoading(false); // Stop blocking UI
+           } else {
+               setGlobalLoadingMessage("Menghubungkan ke Cloud...");
+           }
+       } catch (e) { console.error("Cache load error", e); }
+
+       // B. CLOUD CONNECT & SYNC (Background if cached)
+       try {
            const location = await API.locateSystemDB();
            let sysFolderId = location.systemFolderId;
            let currentFileId = location.fileId; 
+
            if (!sysFolderId) {
-               setGlobalLoadingMessage("Membuat Folder System...");
+               if(Object.keys(localMap).length === 0) setGlobalLoadingMessage("Membuat Folder System...");
                sysFolderId = await API.createSystemFolder();
            }
            setSystemFolderId(sysFolderId);
+
            if (!currentFileId) {
-               setGlobalLoadingMessage("Membuat Database Baru...");
-               if (!cachedDB) currentMap = { "root": { id: "root", name: "Home", parentId: "" } };
-               const newId = await API.createSystemDBFile(currentMap, sysFolderId);
-               currentFileId = newId;
+               // Only create NEW DB if completely missing
+               if(Object.keys(localMap).length === 0) {
+                   setGlobalLoadingMessage("Inisialisasi Database...");
+                   localMap = { "root": { id: "root", name: "Home", parentId: "" } };
+                   const newId = await API.createSystemDBFile(localMap, sysFolderId);
+                   currentFileId = newId;
+               } else {
+                   // If we have local cache but remote file missing (weird case), recreate remote from local
+                   const newId = await API.createSystemDBFile(localMap, sysFolderId);
+                   currentFileId = newId;
+               }
            } else {
-               setGlobalLoadingMessage("Mengunduh Database Terbaru...");
-               try {
-                   const content = await API.getFileContent(currentFileId);
-                   currentMap = JSON.parse(content);
-               } catch(e) { }
+               // Found existing remote DB
+               const content = await API.getFileContent(currentFileId);
+               const remoteMap = JSON.parse(content);
+               
+               // Sync Logic: Remote wins for structure
+               if (JSON.stringify(remoteMap) !== JSON.stringify(localMap)) {
+                   systemMapRef.current = remoteMap;
+                   setSystemMap(remoteMap);
+                   localMap = remoteMap; // Update ref for routing
+                   await DB.saveSystemMap({ fileId: currentFileId, map: remoteMap, lastSync: Date.now() });
+               }
            }
-           await DB.saveSystemMap({ fileId: currentFileId, map: currentMap, lastSync: Date.now() });
-           systemMapRef.current = currentMap;
-           setSystemMap(currentMap);
+           
            setDbFileId(currentFileId);
            setIsSystemInitialized(true);
-
-           const hash = window.location.hash.replace(/^#/, ''); 
-           const path = hash.split('/').filter(p => p);
-           if (path.length > 0) {
-               setGlobalLoadingMessage("Membuka Link...");
-               let parentSearchId = "root"; 
-               let foundId = "";
-               const traceHistory: {id:string, name:string}[] = [];
-               for (const segment of path) {
-                   const decodedName = decodeURIComponent(segment);
-                   const entryId = Object.keys(currentMap).find(key => {
-                       const node = currentMap[key];
-                       return node.name === decodedName && (node.parentId || "root") === parentSearchId;
-                   });
-                   if (entryId) { parentSearchId = entryId; traceHistory.push({ id: entryId, name: decodedName }); foundId = entryId; } 
-               }
-               if (foundId) { setFolderHistory(traceHistory); setCurrentFolderId(foundId); } else { setIsNotFound(true); }
-           } else { setCurrentFolderId(""); }
-       } catch (err) { setIsNotFound(true); } finally { setIsGlobalLoading(false); }
+           handleRouting(localMap); // Re-run routing with confirmed map
+           
+       } catch (err) {
+           console.error("Cloud init failed", err);
+           // If we have no cache and cloud failed, show error
+           if (Object.keys(localMap).length === 0) {
+               setIsNotFound(true); 
+           }
+       } finally {
+           setIsGlobalLoading(false);
+       }
     };
     initSystem();
-  }, []);
+  }, [handleRouting]);
 
   useEffect(() => {
     if (!isSystemInitialized || isNotFound) return;
@@ -224,8 +299,9 @@ const App = () => {
       items.forEach(item => {
           if (action === 'add' || action === 'update') {
               if (item.name) {
-                  const existing = nextMap[item.id] || {};
-                  nextMap[item.id] = { id: item.id, name: item.name, parentId: item.parentId !== undefined ? item.parentId : (existing.parentId || "root") };
+                  const existing = nextMap[item.id];
+                  const parentId = item.parentId !== undefined ? item.parentId : (existing ? existing.parentId : "root");
+                  nextMap[item.id] = { id: item.id, name: item.name, parentId };
               }
           } else if (action === 'remove') delete nextMap[item.id];
           else if (action === 'move') { if (nextMap[item.id] && item.parentId !== undefined) nextMap[item.id] = { ...nextMap[item.id], parentId: item.parentId }; }
@@ -268,34 +344,71 @@ const App = () => {
   const loadFolder = useCallback(async (folderId: string = "") => {
     setItems([]); setSelectedIds(new Set()); setLastSelectedId(null);
     let cachedItems: Item[] | null = null;
-    try { if (folderId === activeFolderIdRef.current) cachedItems = await DB.getCachedFolder(folderId); } catch (e) {}
+    
+    // 1. Try Load Cache First
+    try { 
+        if (folderId === activeFolderIdRef.current) {
+            cachedItems = await DB.getCachedFolder(folderId); 
+        }
+    } catch (e) {}
+    
     if (folderId !== activeFolderIdRef.current) return;
-    if (cachedItems !== null) setItems(cachedItems); else setLoading(true);
+    
+    // 2. Display Cache or Loading
+    if (cachedItems !== null) {
+        setItems(cachedItems); 
+    } else {
+        setLoading(true);
+    }
+
+    // 3. Fetch Fresh Data from Cloud
     try {
       const res = await API.getFolderContents(folderId);
       if (folderId !== activeFolderIdRef.current) return;
+      
       setLoading(false);
+      
       if (res.status === 'success') {
         const freshItems: Item[] = (Array.isArray(res.data) ? res.data : []);
         setParentFolderId(res.parentFolderId || ""); 
         freshItems.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+        
         if (folderId === "") {
             const bin = freshItems.find(i => i.name === RECYCLE_BIN_NAME && i.type === 'folder');
             if (bin) setRecycleBinId(bin.id);
         }
+        
+        // Merge with cache to preserve content if available (for faster notes viewing)
         const mergedItems = freshItems.map(newItem => {
             const cachedItem = cachedItems?.find(c => c.id === newItem.id);
             if (cachedItem && cachedItem.content && newItem.type === 'note') return { ...newItem, content: cachedItem.content };
             return newItem;
         });
+        
+        // Update State
         setItems(mergedItems);
+        
+        // Update Map from Folder Results (Self-Healing)
         const folders = freshItems.filter(i => i.type === 'folder');
-        if (folders.length > 0) updateMap('add', folders.map(f => ({ id: f.id, name: f.name, parentId: folderId || "root" })));
+        if (folders.length > 0) {
+             // Only update if not exists to avoid flicker
+             const currentMap = systemMapRef.current;
+             const newFolders = folders.filter(f => !currentMap[f.id]);
+             if (newFolders.length > 0) {
+                 updateMap('add', newFolders.map(f => ({ id: f.id, name: f.name, parentId: folderId || "root" })));
+             }
+        }
+
+        // Save to Cache
         await DB.cacheFolderContents(folderId, mergedItems);
+        
         const notesMissingContent = mergedItems.filter(i => i.type === 'note' && !i.content);
         prefetchNoteContents(folderId, notesMissingContent);
       }
-    } catch (e) { if (folderId === activeFolderIdRef.current) setLoading(false); }
+    } catch (e) { 
+        console.error("Load folder failed", e);
+        if (folderId === activeFolderIdRef.current) setLoading(false); 
+    }
   }, [dbFileId]);
 
   useEffect(() => { if (isSystemInitialized && !isNotFound) loadFolder(currentFolderId); }, [currentFolderId, loadFolder, isSystemInitialized, isNotFound]);
@@ -939,13 +1052,69 @@ const NoteItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onTog
 const ImageItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }: ItemComponentProps) => ( <div id={`item-${item.id}`} data-item-id={item.id} draggable={false} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} style={{ touchAction: 'pan-y' }} className={`group relative rounded-xl border transition-all cursor-pointer overflow-hidden aspect-square flex flex-col items-center justify-center bg-slate-950 item-clickable select-none ${selected ? 'border-blue-500 shadow-md ring-1 ring-blue-500' : 'border-slate-800 hover:border-slate-600'}`}> <ItemOverlay status={item.status} /> <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300 shadow-sm"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/></div> {item.thumbnail || item.url ? (<img src={item.thumbnail || item.url} alt={item.name} className="w-full h-full object-cover pointer-events-none" loading="lazy" referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.style.display = 'none'; e.currentTarget.parentElement?.classList.add('bg-slate-800'); }} />) : (<ImageIcon size={32} className="text-slate-600 pointer-events-none" />)} <div className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm p-1.5 truncate pointer-events-none"><span className="text-[10px] font-medium text-slate-200 block text-center truncate">{item.name}</span></div> </div> );
 
 const SelectionFloatingMenu = ({ selectedIds, items, onClear, onAction, containerRef, isInRecycleBin, recycleBinId, isSystemFolder, systemFolderId }: { selectedIds: Set<string>, items: Item[], onClear: () => void, onAction: (a: string) => void, containerRef: React.RefObject<HTMLDivElement>, isInRecycleBin: boolean, recycleBinId: string, isSystemFolder: boolean, systemFolderId: string | null }) => {
-    const [pos, setPos] = useState<{top?: number, left?: number, bottom?: number, x?:number}>({ bottom: 24, left: window.innerWidth / 2 }); const [styleType, setStyleType] = useState<'contextual' | 'dock'>('dock'); const menuRef = useRef<HTMLDivElement>(null); const isRecycleBinFolderSelected = !isInRecycleBin && Array.from(selectedIds).some(id => id === recycleBinId); const isSystemFolderSelected = !isInRecycleBin && Array.from(selectedIds).some(id => { const item = items.find(i => i.id === id); return item?.id === systemFolderId || item?.name === SYSTEM_FOLDER_NAME; });
+    const [pos, setPos] = useState<{top?: number, left?: number, bottom?: number, x?:number}>({ bottom: 24, left: window.innerWidth / 2 }); 
+    const [styleType, setStyleType] = useState<'contextual' | 'dock'>('dock'); 
+    const menuRef = useRef<HTMLDivElement>(null); 
+    const isRecycleBinFolderSelected = !isInRecycleBin && Array.from(selectedIds).some(id => id === recycleBinId); 
+    const isSystemFolderSelected = !isInRecycleBin && Array.from(selectedIds).some(id => { const item = items.find(i => i.id === id); return item?.id === systemFolderId || item?.name === SYSTEM_FOLDER_NAME; });
+    
     useLayoutEffect(() => {
         if (selectedIds.size === 0) return;
-        const updatePosition = () => { const rects: DOMRect[] = []; selectedIds.forEach(id => { const el = document.getElementById(`item-${id}`); if (el) rects.push(el.getBoundingClientRect()); }); if (rects.length === 0) { setStyleType('dock'); setPos({ bottom: 32, left: window.innerWidth / 2 }); return; } const viewMinY = Math.min(...rects.map(r => r.top)); const viewMaxY = Math.max(...rects.map(r => r.bottom)); const centerX = Math.min(...rects.map(r => r.left)) + (Math.max(...rects.map(r => r.right)) - Math.min(...rects.map(r => r.left))) / 2; const viewportHeight = window.innerHeight; if (selectedIds.size > 8 || (viewMaxY - viewMinY) > (viewportHeight * 0.4)) { setStyleType('dock'); setPos({ bottom: 32, left: window.innerWidth / 2 }); return; } const menuHeight = menuRef.current ? menuRef.current.offsetHeight : 60; const gap = 12; let targetTop = (viewMinY > (80 + menuHeight + gap)) ? window.scrollY + viewMinY - menuHeight - gap : window.scrollY + viewMaxY + gap; let finalLeft = centerX; if (menuRef.current) { const menuWidth = menuRef.current.offsetWidth; const minSafe = (menuWidth / 2) + 16; const maxSafe = window.innerWidth - (menuWidth / 2) - 16; finalLeft = Math.max(minSafe, Math.min(maxSafe, centerX)); } setStyleType('contextual'); setPos({ top: targetTop, left: finalLeft }); }; updatePosition(); window.addEventListener('resize', updatePosition); return () => window.removeEventListener('resize', updatePosition);
+        const updatePosition = () => { 
+            const rects: DOMRect[] = []; 
+            selectedIds.forEach(id => { const el = document.getElementById(`item-${id}`); if (el) rects.push(el.getBoundingClientRect()); }); 
+            if (rects.length === 0) { setStyleType('dock'); setPos({ bottom: 32, left: window.innerWidth / 2 }); return; } 
+            const viewMinY = Math.min(...rects.map(r => r.top)); 
+            const viewMaxY = Math.max(...rects.map(r => r.bottom)); 
+            const centerX = Math.min(...rects.map(r => r.left)) + (Math.max(...rects.map(r => r.right)) - Math.min(...rects.map(r => r.left))) / 2; 
+            const viewportHeight = window.innerHeight; 
+            if (selectedIds.size > 8 || (viewMaxY - viewMinY) > (viewportHeight * 0.4)) { setStyleType('dock'); setPos({ bottom: 32, left: window.innerWidth / 2 }); return; } 
+            const menuHeight = menuRef.current ? menuRef.current.offsetHeight : 60; 
+            const gap = 12; 
+            let targetTop = (viewMinY > (80 + menuHeight + gap)) ? window.scrollY + viewMinY - menuHeight - gap : window.scrollY + viewMaxY + gap; 
+            let finalLeft = centerX; 
+            if (menuRef.current) { const menuWidth = menuRef.current.offsetWidth; const minSafe = (menuWidth / 2) + 16; const maxSafe = window.innerWidth - (menuWidth / 2) - 16; finalLeft = Math.max(minSafe, Math.min(maxSafe, centerX)); } 
+            setStyleType('contextual'); setPos({ top: targetTop, left: finalLeft }); 
+        }; 
+        updatePosition(); 
+        window.addEventListener('resize', updatePosition); 
+        return () => window.removeEventListener('resize', updatePosition);
     }, [selectedIds, items]);
-    if (selectedIds.size === 0) return null; const dockStyle = "fixed z-50 transform -translate-x-1/2 flex items-center gap-1 bg-slate-900/90 backdrop-blur-md border border-blue-500/50 p-2 rounded-2xl shadow-2xl shadow-blue-500/10 animate-in zoom-in-95 slide-in-from-bottom-5 duration-200 transition-all max-w-[95vw] overflow-x-auto"; const contextStyle = "absolute z-50 transform -translate-x-1/2 flex items-center gap-1 bg-slate-900/90 backdrop-blur-md border border-blue-500/50 p-1.5 rounded-full shadow-2xl shadow-blue-500/20 animate-in fade-in zoom-in-95 duration-150 transition-all duration-300 ease-out max-w-[95vw] overflow-x-auto"; const isContext = styleType === 'contextual';
-    return ( <div ref={menuRef} className={isContext ? contextStyle : dockStyle} style={{ top: isContext ? pos.top : undefined, left: isContext ? pos.left : '50%', bottom: isContext ? undefined : pos.bottom }}> <div className={`flex items-center gap-2 ${isContext ? 'px-2' : 'px-3 border-r border-white/10 mr-1'}`}><span className="font-bold text-sm text-blue-100">{selectedIds.size}</span><button onClick={(e) => { e.stopPropagation(); onClear(); }} className="p-1 hover:bg-white/10 rounded-full transition-colors"><X size={14} /></button></div> {isRecycleBinFolderSelected ? (<span className="px-2 text-xs text-slate-400 font-medium">System Folder</span>) : isSystemFolderSelected ? (<span className="px-2 text-xs text-amber-500 font-medium flex items-center gap-1"><Lock size={12}/> Protected</span>) : isInRecycleBin ? (<> <button onClick={(e) => { e.stopPropagation(); onAction('restore'); }} className="p-2 hover:bg-green-500/20 hover:text-green-400 rounded-lg transition-colors tooltip" title="Restore"><RotateCcw size={18}/></button><div className="w-px h-6 bg-white/10 mx-1"></div><button onClick={(e) => { e.stopPropagation(); onAction('delete_permanent'); }} className="p-2 hover:bg-red-500/20 text-red-400 hover:text-red-300 rounded-lg transition-colors tooltip" title="Delete Permanently"><Ban size={18}/></button> </>) : isSystemFolder ? (<> <button onClick={(e) => { e.stopPropagation(); onAction('download'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Download"><Download size={18}/></button>{selectedIds.size === 1 && items.find(i => i.id === Array.from(selectedIds)[0])?.type === 'image' && (<button onClick={(e) => { e.stopPropagation(); onAction('copy_image'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Copy Image"><Image size={18}/></button>)} </>) : (<> <button onClick={(e) => { e.stopPropagation(); onAction('duplicate'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Duplicate"><Copy size={18}/></button><button onClick={(e) => { e.stopPropagation(); onAction('move'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Move"><Move size={18}/></button>{selectedIds.size === 1 && <button onClick={(e) => { e.stopPropagation(); onAction('rename'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Rename"><Edit size={18}/></button>}<button onClick={(e) => { e.stopPropagation(); onAction('download'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Download"><Download size={18}/></button><div className="w-px h-6 bg-white/10 mx-1"></div><button onClick={(e) => { e.stopPropagation(); onAction('delete'); }} className="p-2 hover:bg-red-500/20 text-red-400 hover:text-red-300 rounded-lg transition-colors tooltip" title="Delete"><Trash2 size={18}/></button> </>) } </div> );
+
+    if (selectedIds.size === 0) return null; 
+    const dockStyle = "fixed z-50 transform -translate-x-1/2 flex items-center gap-1 bg-slate-900/90 backdrop-blur-md border border-blue-500/50 p-2 rounded-2xl shadow-2xl shadow-blue-500/10 animate-in zoom-in-95 slide-in-from-bottom-5 duration-200 transition-all max-w-[95vw] overflow-x-auto"; 
+    const contextStyle = "absolute z-50 transform -translate-x-1/2 flex items-center gap-1 bg-slate-900/90 backdrop-blur-md border border-blue-500/50 p-1.5 rounded-full shadow-2xl shadow-blue-500/20 animate-in fade-in zoom-in-95 duration-150 transition-all duration-300 ease-out max-w-[95vw] overflow-x-auto"; 
+    const isContext = styleType === 'contextual';
+
+    return ( 
+        <div ref={menuRef} className={isContext ? contextStyle : dockStyle} style={{ top: isContext ? pos.top : undefined, left: isContext ? pos.left : '50%', bottom: isContext ? undefined : pos.bottom }}> 
+            <div className={`flex items-center gap-2 ${isContext ? 'px-2' : 'px-3 border-r border-white/10 mr-1'}`}>
+                <span className="font-bold text-sm text-blue-100">{selectedIds.size}</span>
+                <button onClick={(e) => { e.stopPropagation(); onClear(); }} className="p-1 hover:bg-white/10 rounded-full transition-colors"><X size={14} /></button>
+            </div> 
+            {isRecycleBinFolderSelected ? (
+                <span className="px-2 text-xs text-slate-400 font-medium">System Folder</span>
+            ) : isSystemFolderSelected ? (
+                <span className="px-2 text-xs text-amber-500 font-medium flex items-center gap-1"><Lock size={12}/> Protected</span>
+            ) : isInRecycleBin ? (<> 
+                <button onClick={(e) => { e.stopPropagation(); onAction('restore'); }} className="p-2 hover:bg-green-500/20 hover:text-green-400 rounded-lg transition-colors tooltip" title="Restore"><RotateCcw size={18}/></button>
+                <div className="w-px h-6 bg-white/10 mx-1"></div>
+                <button onClick={(e) => { e.stopPropagation(); onAction('delete_permanent'); }} className="p-2 hover:bg-red-500/20 text-red-400 hover:text-red-300 rounded-lg transition-colors tooltip" title="Delete Permanently"><Ban size={18}/></button> 
+            </>) : isSystemFolder ? (<> 
+                <button onClick={(e) => { e.stopPropagation(); onAction('download'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Download"><Download size={18}/></button>
+                {selectedIds.size === 1 && items.find(i => i.id === Array.from(selectedIds)[0])?.type === 'image' && (
+                    <button onClick={(e) => { e.stopPropagation(); onAction('copy_image'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Copy Image"><Image size={18}/></button>
+                )} 
+            </>) : (<> 
+                <button onClick={(e) => { e.stopPropagation(); onAction('duplicate'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Duplicate"><Copy size={18}/></button>
+                <button onClick={(e) => { e.stopPropagation(); onAction('move'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Move"><Move size={18}/></button>
+                {selectedIds.size === 1 && <button onClick={(e) => { e.stopPropagation(); onAction('rename'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Rename"><Edit size={18}/></button>}
+                <button onClick={(e) => { e.stopPropagation(); onAction('download'); }} className="p-2 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Download"><Download size={18}/></button>
+                <div className="w-px h-6 bg-white/10 mx-1"></div>
+                <button onClick={(e) => { e.stopPropagation(); onAction('delete'); }} className="p-2 hover:bg-red-500/20 text-red-400 hover:text-red-300 rounded-lg transition-colors tooltip" title="Delete"><Trash2 size={18}/></button> 
+            </>) } 
+        </div> 
+    );
 };
 
 export default App;

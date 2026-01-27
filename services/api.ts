@@ -166,10 +166,9 @@ export const locateSystemDB = async (): Promise<{ fileId: string | null, systemF
     const sysRes = await getFolderContents(systemFolder.id);
     if (sysRes.status !== 'success' || !Array.isArray(sysRes.data)) return { fileId: null, systemFolderId: systemFolder.id };
 
-    // ROBUST SEARCH: Find any file that contains the DB keyword
-    // This handles cases where Drive adds .txt, .json, or duplicates like "Copy of..."
+    // ROBUST SEARCH: Find any file that contains the DB keyword (Removed type check for robustness)
     const dbFile = sysRes.data.find((i: any) => 
-      i.name.includes(DB_FILENAME_KEYWORD) && i.type === 'note'
+      i.name.includes(DB_FILENAME_KEYWORD)
     );
 
     return { 
