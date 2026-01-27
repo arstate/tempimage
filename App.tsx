@@ -431,9 +431,10 @@ const App = () => {
 
   // --- ROBUST FILE ACTIONS (COPY & DOWNLOAD) ---
   
-  // Updated Helper: Uses Proxy fallback for CORS issues
+  // Updated Helper: Uses CANVAS CAPTURE for Google Drive images
+  // This avoids CORS Proxy blocks by "stealing" the pixels from the browser renderer
   const getBlobFromUrl = async (url: string): Promise<Blob> => {
-      // 1. Attempt Direct Fetch
+      // 1. Attempt Direct Fetch (Fastest if CORS allows)
       try {
           const response = await fetch(url, {
               mode: 'cors',
@@ -442,20 +443,37 @@ const App = () => {
           });
           if (response.ok) return await response.blob();
       } catch (e) {
-          console.warn("Direct fetch failed, attempting proxy...", e);
+          // Fallback to Canvas method
       }
 
-      // 2. Attempt via CORS Proxy (Public proxy used for demonstration)
-      try {
-          // Using a public proxy to bypass CORS if direct fetch fails
-          const proxyUrl = `https://corsproxy.io/?${encodeURIComponent(url)}`;
-          const response = await fetch(proxyUrl);
-          if (!response.ok) throw new Error(`Proxy status: ${response.status}`);
-          return await response.blob();
-      } catch (proxyError) {
-           console.error("Proxy fetch failed:", proxyError);
-           throw new Error("Gagal mengunduh: Proxy tidak dapat mengakses gambar.");
-      }
+      // 2. CANVAS FALLBACK (The "Silver Bullet" for Google Drive)
+      // Since Google images often allow "displaying" (via <img>) but block "downloading" (via fetch),
+      // we load it into an Image object and draw it to a canvas.
+      return new Promise((resolve, reject) => {
+          const img = new window.Image();
+          img.crossOrigin = "Anonymous"; // Required to prevent "tainted canvas"
+          img.src = url;
+          img.referrerPolicy = "no-referrer";
+          
+          img.onload = () => {
+              const canvas = document.createElement('canvas');
+              canvas.width = img.naturalWidth;
+              canvas.height = img.naturalHeight;
+              const ctx = canvas.getContext('2d');
+              if (!ctx) { reject(new Error("Canvas context failed")); return; }
+              try {
+                  ctx.drawImage(img, 0, 0);
+                  canvas.toBlob((blob) => {
+                      if (blob) resolve(blob);
+                      else reject(new Error("Canvas blob conversion failed"));
+                  }, 'image/png'); // Default to PNG for transparency support
+              } catch (err) {
+                  // This happens if the server strictly blocks cross-origin use even for display
+                  reject(new Error("Gambar terkunci (Tainted Canvas). Tidak bisa didownload langsung."));
+              }
+          };
+          img.onerror = () => reject(new Error("Gagal memuat gambar ke memori."));
+      });
   };
 
   const handleDownload = async (item: Item | string) => {
@@ -485,8 +503,12 @@ const App = () => {
         updateNotification(notifId, 'Download berhasil', 'success');
     } catch (e) {
         console.error(e);
-        // Show specific error notification
-        updateNotification(notifId, 'Gagal Download: Proxy Error / Network Blocked', 'error');
+        // Show specific error notification for the user
+        const msg = e instanceof Error ? e.message : "Network Error";
+        updateNotification(notifId, `Gagal: ${msg}`, 'error');
+        
+        // Final fallback: open in new tab if really desperate (optional, but user asked to avoid it)
+        // setTimeout(() => window.open(url, '_blank'), 1500); 
     } finally {
         setIsProcessingAction(false);
     }
@@ -508,7 +530,7 @@ const App = () => {
           updateNotification(notifId, 'Gambar disalin ke clipboard!', 'success');
       } catch (err) {
           console.error("Clipboard Error:", err);
-          updateNotification(notifId, 'Gagal menyalin: Proxy/Permission Error', 'error');
+          updateNotification(notifId, 'Gagal menyalin: Izin browser ditolak', 'error');
       }
   };
 
