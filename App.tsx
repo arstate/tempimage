@@ -148,7 +148,7 @@ const App = () => {
         setParentFolderId(res.parentFolderId || ""); 
 
         const mergedItems = freshItems.map(newItem => {
-            const cachedItem = cachedItems?.find(c => c.id === newItem.id);
+            const cachedItem = cachedItems?.find(c => r.id === newItem.id);
             if (cachedItem && cachedItem.content && newItem.type === 'note') {
                 return { ...newItem, content: cachedItem.content };
             }
@@ -320,7 +320,8 @@ const App = () => {
   };
 
   const executeAction = async (action: string) => {
-    const ids = Array.from(selectedIds);
+    // FIX: Cast ids to string[] to resolve TypeScript 'unknown[]' error
+    const ids = Array.from(selectedIds) as string[];
     const targetItem = contextMenu?.targetItem || (ids.length === 1 ? items.find(i => i.id === ids[0]) : null);
     
     setContextMenu(null);
@@ -448,7 +449,8 @@ const App = () => {
     e.preventDefault();
     setIsDraggingFile(false);
     if (e.dataTransfer.files.length > 0) {
-      const files = Array.from(e.dataTransfer.files);
+      // FIX: Cast files to File[] to avoid 'unknown' items in the array
+      const files = Array.from(e.dataTransfer.files) as File[];
       const notifId = addNotification(`Mengupload ${files.length} file...`, 'loading', 60000); // Long timeout for upload
       for (const file of files) {
           try { await API.uploadToDrive(file, currentFolderId); } catch(err) { console.error(err); }
@@ -599,7 +601,8 @@ const App = () => {
                             <input type="file" multiple className="hidden" onChange={(e) => {
                                 setIsNewDropdownOpen(false);
                                 if(e.target.files) {
-                                    const files = Array.from(e.target.files);
+                                    // FIX: Cast files to File[] to resolve 'unknown' typing issues
+                                    const files = Array.from(e.target.files) as File[];
                                     const notifId = addNotification(`Mengupload ${files.length} file...`, 'loading', 60000);
                                     Promise.all(files.map(f => API.uploadToDrive(f, currentFolderId)))
                                         .then(() => { updateNotification(notifId, 'Upload selesai', 'success'); loadFolder(currentFolderId); })
@@ -706,7 +709,8 @@ const App = () => {
                     <input type="file" multiple className="hidden" onChange={(e) => {
                         setContextMenu(null);
                         if(e.target.files) {
-                            const files = Array.from(e.target.files);
+                            // FIX: Cast files to File[] to resolve 'unknown' typing issues
+                            const files = Array.from(e.target.files) as File[];
                             const notifId = addNotification(`Mengupload ${files.length} file...`, 'loading', 60000);
                             Promise.all(files.map(f => API.uploadToDrive(f, currentFolderId)))
                                 .then(() => { updateNotification(notifId, 'Upload selesai', 'success'); loadFolder(currentFolderId); })

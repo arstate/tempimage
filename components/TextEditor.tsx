@@ -1,6 +1,6 @@
 
 import React, { useState, useEffect, useRef } from 'react';
-import { X, Save, Bold, Italic, Type, AlignLeft, AlertCircle } from 'lucide-react';
+import { X, Save, Bold, Italic, Copy, Scissors, Trash2, Type, AlignLeft, AlertCircle } from 'lucide-react';
 import { StoredNote } from '../types';
 
 interface TextEditorProps {
@@ -9,13 +9,29 @@ interface TextEditorProps {
   onClose: () => void;
 }
 
+interface SelectionMenuPos {
+  x: number;
+  y: number;
+  isFixed: boolean;
+}
+
 export const TextEditor: React.FC<TextEditorProps> = ({ note, onSave, onClose }) => {
   const [title, setTitle] = useState(note.title);
   const [isDirty, setIsDirty] = useState(false);
   const [showCloseConfirm, setShowCloseConfirm] = useState(false);
+  const [selectionPos, setSelectionPos] = useState<SelectionMenuPos | null>(null);
   
   const editorRef = useRef<HTMLDivElement>(null);
   const initialContentRef = useRef(note.content);
+
+  // 1. Lock Background Scroll
+  useEffect(() => {
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => {
+      document.body.style.overflow = originalOverflow;
+    };
+  }, []);
   
   // Set initial content
   useEffect(() => {
@@ -23,6 +39,38 @@ export const TextEditor: React.FC<TextEditorProps> = ({ note, onSave, onClose })
       editorRef.current.innerHTML = note.content;
     }
   }, []);
+
+  // --- SELECTION LOGIC ---
+  const handleSelectionChange = () => {
+    const selection = window.getSelection();
+    
+    if (!selection || selection.isCollapsed || !selection.toString().trim()) {
+      setSelectionPos(null);
+      return;
+    }
+
+    // Ensure selection is inside our editor
+    const range = selection.getRangeAt(0);
+    if (!editorRef.current?.contains(range.commonAncestorContainer)) {
+      setSelectionPos(null);
+      return;
+    }
+
+    const rect = range.getBoundingClientRect();
+    const viewportHeight = window.innerHeight;
+
+    // Logic: If selection height > 40% of viewport, stick to bottom
+    if (rect.height > viewportHeight * 0.4) {
+      setSelectionPos({ x: 0, y: 0, isFixed: true });
+    } else {
+      // Floating position (Above selection)
+      setSelectionPos({
+        x: rect.left + rect.width / 2,
+        y: rect.top - 55, // Distance above the text
+        isFixed: false
+      });
+    }
+  };
 
   // Detect content changes
   const handleInput = () => {
@@ -32,6 +80,7 @@ export const TextEditor: React.FC<TextEditorProps> = ({ note, onSave, onClose })
       const isTitleChanged = title !== note.title;
       setIsDirty(isContentChanged || isTitleChanged);
     }
+    handleSelectionChange();
   };
 
   const handleTitleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -42,13 +91,27 @@ export const TextEditor: React.FC<TextEditorProps> = ({ note, onSave, onClose })
   const handleFormat = (command: string, value?: string) => {
     document.execCommand(command, false, value);
     editorRef.current?.focus();
-    handleInput(); // Formatting is also a change
+    handleInput();
+    setSelectionPos(null); // Hide menu after action
+  };
+
+  // Specialized Selection Actions
+  const executeSelectionAction = (action: 'copy' | 'cut' | 'delete') => {
+    if (action === 'copy') {
+      document.execCommand('copy');
+    } else if (action === 'cut') {
+      document.execCommand('cut');
+      handleInput();
+    } else if (action === 'delete') {
+      document.execCommand('delete');
+      handleInput();
+    }
+    setSelectionPos(null);
   };
 
   const handleSave = () => {
     if (editorRef.current) {
       onSave(note.id, title, editorRef.current.innerHTML);
-      // Update initial ref so subsequent edits detect changes against this new version
       initialContentRef.current = editorRef.current.innerHTML;
       setIsDirty(false);
       setShowCloseConfirm(false);
@@ -126,15 +189,45 @@ export const TextEditor: React.FC<TextEditorProps> = ({ note, onSave, onClose })
         </div>
 
         {/* Editor Area */}
-        <div className="flex-1 bg-white overflow-y-auto cursor-text" onClick={() => editorRef.current?.focus()}>
+        <div 
+          className="flex-1 bg-white overflow-y-auto cursor-text relative" 
+          onClick={() => editorRef.current?.focus()}
+          onScroll={() => setSelectionPos(null)} // Hide on scroll to prevent misalignment
+        >
           <div 
             ref={editorRef}
             contentEditable
             onInput={handleInput}
+            onMouseUp={handleSelectionChange}
+            onKeyUp={handleSelectionChange}
             className="min-h-full p-8 md:p-12 outline-none text-slate-900 text-lg leading-relaxed max-w-3xl mx-auto wysiwyg-content"
             style={{ fontFamily: 'Inter, sans-serif' }}
           >
           </div>
+
+          {/* --- SMART SELECTION TOOLBAR --- */}
+          {selectionPos && (
+            <div 
+              className={`z-[250] flex items-center gap-1 bg-slate-900/95 backdrop-blur-md border border-slate-700 p-1.5 rounded-full shadow-2xl animate-in fade-in zoom-in-95 duration-150 transition-all ${selectionPos.isFixed ? 'fixed bottom-8 left-1/2 -translate-x-1/2' : 'absolute'}`}
+              style={!selectionPos.isFixed ? { 
+                top: selectionPos.y, 
+                left: selectionPos.x, 
+                transform: 'translateX(-50%)' 
+              } : {}}
+              onMouseDown={(e) => e.preventDefault()} // Prevent losing selection
+            >
+              <button onClick={() => executeSelectionAction('copy')} className="flex items-center gap-2 px-3 py-1.5 hover:bg-slate-800 rounded-full text-xs font-semibold text-slate-200 transition-colors">
+                <Copy size={14} className="text-blue-400" /> Copy
+              </button>
+              <button onClick={() => executeSelectionAction('cut')} className="flex items-center gap-2 px-3 py-1.5 hover:bg-slate-800 rounded-full text-xs font-semibold text-slate-200 transition-colors">
+                <Scissors size={14} className="text-emerald-400" /> Cut
+              </button>
+              <div className="w-px h-4 bg-slate-700 mx-1"></div>
+              <button onClick={() => executeSelectionAction('delete')} className="flex items-center gap-2 px-3 py-1.5 hover:bg-red-500/10 rounded-full text-xs font-semibold text-red-400 transition-colors">
+                <Trash2 size={14} /> Delete
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Footer Status */}
