@@ -275,7 +275,7 @@ const App = () => {
   // --- POINTER LOGIC (Select vs Drag) ---
   
   const handlePointerDown = (e: React.PointerEvent) => {
-     if ((e.target as HTMLElement).closest('button, .item-handle')) return;
+     if ((e.target as HTMLElement).closest('button, .item-handle, .native-draggable')) return;
      if (!e.isPrimary) return;
 
      const target = e.target as HTMLElement;
@@ -1332,95 +1332,19 @@ const ItemOverlay = ({ status }: { status?: string }) => {
 
 // UPDATED Common Draggable Handle (To enable drag only on intent)
 const DragHandle = ({ item }: { item: Item }) => {
-    // Store both file object (for desktop drop) and base64 string (for legacy drop)
-    const [dragData, setDragData] = useState<{ file: File, base64: string } | null>(null);
-    const [isLoading, setIsLoading] = useState(false);
-
-    // Triggered on hover
-    const prepareDragData = async () => {
-        if (dragData || isLoading) return;
-        if (item.type === 'folder') return;
-        
-        setIsLoading(true);
-        const url = item.url || item.thumbnail;
-        if (!url) { setIsLoading(false); return; }
-
-        try {
-             let blob: Blob;
-             try {
-                 const res = await fetch(url, { cache: 'force-cache', referrerPolicy: 'no-referrer' });
-                 if (!res.ok) throw new Error("Direct fetch failed");
-                 blob = await res.blob();
-             } catch (e) {
-                 const proxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(url)}&output=png`;
-                 const res = await fetch(proxyUrl);
-                 if (!res.ok) throw new Error("Proxy failed");
-                 blob = await res.blob();
-             }
-
-             // FIX: Ensure correct extension
-             const mime = blob.type;
-             let ext = mime.split('/')[1] || 'bin';
-             if(ext === 'jpeg') ext = 'jpg';
-             if(ext === 'plain') ext = 'txt';
-             
-             let fileName = item.name;
-             // Add extension if missing
-             if (!fileName.toLowerCase().includes('.')) {
-                 fileName = `${fileName}.${ext}`;
-             }
-
-             const file = new File([blob], fileName, { type: mime });
-             const base64 = await API.fileToBase64(blob);
-             
-             setDragData({ file, base64 });
-        } catch (err) {
-             console.warn("Failed to prepare drag data", err);
-        } finally {
-            setIsLoading(false);
-        }
-    };
-
+    // Keep internal handle for moving items within the app (sorting, folders)
+    // or for explicit visual cue.
     return (
-    <div 
-        className="absolute top-2 right-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity p-2 bg-slate-800/80 rounded-lg hover:bg-slate-700 cursor-grab active:cursor-grabbing text-slate-400 item-handle backdrop-blur-sm border border-slate-600/30 shadow-lg"
-        draggable={true}
-        onMouseEnter={prepareDragData}
-        onDragStart={(e) => {
-            // 1. Internal ID
-            e.dataTransfer.setData("text/item-id", item.id);
-            
-            if (item.type === 'image') {
-                const url = item.url || item.thumbnail || "";
-                
-                // --- NEW: Add Specific Drive Link (Requested Feature) ---
-                const driveThumbnailLink = `https://drive.google.com/thumbnail?id=${item.id}&sz=s16383`;
-                e.dataTransfer.setData("text/uri-list", driveThumbnailLink);
-                e.dataTransfer.setData("text/plain", driveThumbnailLink);
-
-                // Ghost image
-                const imgEl = document.getElementById(`item-${item.id}`)?.querySelector('img') as HTMLImageElement;
-                if (imgEl) e.dataTransfer.setDragImage(imgEl, imgEl.width / 2, imgEl.height / 2);
-
-                if (dragData) {
-                     e.dataTransfer.effectAllowed = "copy";
-                     // KEY: Add File object
-                     e.dataTransfer.items.add(dragData.file);
-                     
-                     // Legacy
-                     e.dataTransfer.setData("DownloadURL", `${dragData.file.type}:${dragData.file.name}:${dragData.base64}`); // Use base64 or blob? Base64 is safer across origins if small enough.
-                } 
-            } else if (item.type === 'note' && item.content) {
-                 e.dataTransfer.setData("text/plain", stripHtml(item.content));
-            }
-
-            e.stopPropagation();
-        }}
-        // Trigger prefetch on pointer down too (for touch/quick clicks)
-        onPointerDown={(e) => { prepareDragData(); e.stopPropagation(); }}
-    >
-        <GripVertical size={18} />
-    </div>
+        <div 
+            className="absolute top-2 right-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity p-2 bg-slate-800/80 rounded-lg hover:bg-slate-700 cursor-grab active:cursor-grabbing text-slate-400 item-handle backdrop-blur-sm border border-slate-600/30 shadow-lg"
+            draggable={true}
+            onDragStart={(e) => {
+                 e.dataTransfer.setData("text/item-id", item.id);
+                 e.stopPropagation();
+            }}
+        >
+            <GripVertical size={18} />
+        </div>
     );
 };
 
@@ -1508,7 +1432,69 @@ const NoteItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onTog
     );
 };
 
-const ImageItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }: any) => (
+const ImageItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }: any) => {
+    // STATE FOR DRAGGING FILES
+    const [dragData, setDragData] = useState<{ file: File, base64: string } | null>(null);
+    const [isLoadingDrag, setIsLoadingDrag] = useState(false);
+
+    // Prepare Drag Data on Hover
+    const prepareDragData = async () => {
+        if (dragData || isLoadingDrag) return;
+        
+        setIsLoadingDrag(true);
+        const url = item.url || item.thumbnail;
+        if (!url) { setIsLoadingDrag(false); return; }
+
+        try {
+             let blob: Blob;
+
+             // Optimization: Handle Data URI locally (cache from DB)
+             if (url.startsWith('data:')) {
+                 const arr = url.split(',');
+                 const mime = arr[0].match(/:(.*?);/)?.[1] || 'application/octet-stream';
+                 const bstr = atob(arr[1]);
+                 let n = bstr.length;
+                 const u8arr = new Uint8Array(n);
+                 while(n--){ u8arr[n] = bstr.charCodeAt(n); }
+                 blob = new Blob([u8arr], {type: mime});
+             } else {
+                 // Fetch from cache or network
+                 try {
+                     const res = await fetch(url, { cache: 'force-cache', referrerPolicy: 'no-referrer' });
+                     if (!res.ok) throw new Error("Direct fetch failed");
+                     blob = await res.blob();
+                 } catch (e) {
+                     const proxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(url)}&output=png`;
+                     const res = await fetch(proxyUrl);
+                     if (!res.ok) throw new Error("Proxy failed");
+                     blob = await res.blob();
+                 }
+             }
+
+             // FIX: Ensure correct extension
+             const mime = blob.type;
+             let ext = mime.split('/')[1] || 'bin';
+             if(ext === 'jpeg') ext = 'jpg';
+             if(ext === 'plain') ext = 'txt';
+             
+             let fileName = item.name;
+             // Add extension if missing
+             if (!fileName.toLowerCase().includes('.')) {
+                 fileName = `${fileName}.${ext}`;
+             }
+
+             const file = new File([blob], fileName, { type: mime });
+             const base64 = url.startsWith('data:') ? url : await API.fileToBase64(blob);
+             
+             setDragData({ file, base64 });
+        } catch (err) {
+             console.warn("Failed to prepare drag data", err);
+        } finally {
+            setIsLoadingDrag(false);
+        }
+    };
+
+    return (
     <div 
         id={`item-${item.id}`} 
         data-item-id={item.id} 
@@ -1516,6 +1502,8 @@ const ImageItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onTo
         onClick={(e) => onClick(e, item)} 
         onDoubleClick={(e) => onDoubleClick(e, item)} 
         onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} 
+        // Trigger prefetch on Hover over entire container
+        onMouseEnter={prepareDragData}
         style={{ touchAction: 'pan-y' }}
         className={`group relative rounded-xl border transition-all cursor-pointer overflow-hidden aspect-square flex flex-col items-center justify-center bg-slate-950 item-clickable select-none ${selected ? 'border-blue-500 shadow-md ring-1 ring-blue-500' : 'border-slate-800 hover:border-slate-600'}`}
     >
@@ -1530,9 +1518,32 @@ const ImageItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onTo
              <img 
                 src={item.thumbnail || item.url} 
                 alt={item.name} 
-                className="w-full h-full object-cover pointer-events-none" 
+                className="w-full h-full object-cover native-draggable" // removed pointer-events-none
                 loading="lazy" 
                 referrerPolicy="no-referrer"
+                crossOrigin="anonymous" // Attempt to allow native drag
+                draggable={true} // ENABLE NATIVE DRAG
+                onDragStart={(e) => {
+                     const url = item.url || item.thumbnail || "";
+                     const driveThumbnailLink = `https://drive.google.com/thumbnail?id=${item.id}&sz=s16383`;
+                     
+                     // 1. Text/URI for simple drops
+                     e.dataTransfer.setData("text/uri-list", driveThumbnailLink);
+                     e.dataTransfer.setData("text/plain", driveThumbnailLink);
+                     
+                     // 2. Text/HTML (CRITICAL FOR WA WEB)
+                     // Using proxy url for the html tag to ensure visibility across origins
+                     const displayUrl = url.startsWith('http') ? url : driveThumbnailLink;
+                     e.dataTransfer.setData("text/html", `<img src="${displayUrl}" alt="${item.name}" />`);
+
+                     // 3. Files (For Desktop/System drop)
+                     if (dragData) {
+                         e.dataTransfer.effectAllowed = "copy";
+                         e.dataTransfer.items.add(dragData.file);
+                     }
+
+                     e.stopPropagation();
+                }}
                 onError={(e) => {
                     e.currentTarget.style.display = 'none';
                     e.currentTarget.parentElement?.classList.add('bg-slate-800');
@@ -1545,7 +1556,8 @@ const ImageItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onTo
              <span className="text-[10px] font-medium text-slate-200 block text-center truncate">{item.name}</span>
         </div>
     </div>
-);
+    );
+};
 
 // --- FLOATING MENU ---
 const SelectionFloatingMenu = ({ selectedIds, items, onClear, onAction, containerRef, isInRecycleBin, recycleBinId }: { selectedIds: Set<string>, items: Item[], onClear: () => void, onAction: (a: string) => void, containerRef: React.RefObject<HTMLDivElement>, isInRecycleBin: boolean, recycleBinId: string }) => {
