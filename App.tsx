@@ -1128,7 +1128,8 @@ const App = () => {
                             <h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2"><FileText size={14}/> Notes</h2>
                             <div className="h-px bg-slate-800 flex-1"></div>
                         </div>
-                        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">
+                        {/* UPDATE: Increased grid columns to match images/folders, making items smaller */}
+                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
                             {groupedItems.notes.map(item => (
                                 <NoteItem key={item.id} item={item} selected={selectedIds.has(item.id)} onClick={handleItemClick} onDoubleClick={handleItemDoubleClick} onContextMenu={handleContextMenu} onToggleSelect={() => handleToggleSelect(item.id)} />
                             ))}
@@ -1331,37 +1332,36 @@ const ItemOverlay = ({ status }: { status?: string }) => {
 
 // UPDATED Common Draggable Handle (To enable drag only on intent)
 const DragHandle = ({ item }: { item: Item }) => {
-    const [cachedBlob, setCachedBlob] = useState<string | null>(null);
+    // Store both file object (for desktop drop) and base64 string (for legacy drop)
+    const [dragData, setDragData] = useState<{ file: File, base64: string } | null>(null);
 
     // Pre-fetch blob on hover/active to ensure file drag works (without crossOrigin issues)
     const prepareDragData = async () => {
-        if (cachedBlob) return;
+        if (dragData) return;
         const url = item.url || item.thumbnail;
         if (!url) return;
 
-        // Helper to fetch using proxy if needed
-        const fetchBase64 = async (targetUrl: string) => {
+        try {
+             // Try direct fetch (hits browser cache if available)
+             // Use fallback proxy if CORS fails
+             let blob: Blob;
              try {
-                 // Try direct (hits browser cache if available)
-                 let res = await fetch(targetUrl, { cache: 'force-cache' });
+                 const res = await fetch(url, { cache: 'force-cache' });
                  if (!res.ok) throw new Error("Direct fetch failed");
-                 const blob = await res.blob();
-                 return await API.fileToBase64(blob);
+                 blob = await res.blob();
              } catch (e) {
-                 // Fallback to Proxy
-                 try {
-                     const proxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(targetUrl)}&output=png`;
-                     let res = await fetch(proxyUrl);
-                     if (!res.ok) throw new Error("Proxy failed");
-                     const blob = await res.blob();
-                     return await API.fileToBase64(blob);
-                 } catch (err) { return null; }
+                 const proxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(url)}&output=png`;
+                 const res = await fetch(proxyUrl);
+                 if (!res.ok) throw new Error("Proxy failed");
+                 blob = await res.blob();
              }
-        };
 
-        if (item.type === 'image') {
-            const base64 = await fetchBase64(url);
-            if (base64) setCachedBlob(base64);
+             const file = new File([blob], item.name, { type: blob.type });
+             const base64 = await API.fileToBase64(blob);
+             
+             setDragData({ file, base64 });
+        } catch (err) {
+             console.warn("Failed to prepare drag data", err);
         }
     };
 
@@ -1373,29 +1373,26 @@ const DragHandle = ({ item }: { item: Item }) => {
         onDragStart={(e) => {
             // 1. Internal ID for moving folders
             e.dataTransfer.setData("text/item-id", item.id);
-            e.dataTransfer.effectAllowed = "all";
-
+            
             // 2. External Drag Logic
             if (item.type === 'image') {
                 const url = item.url || item.thumbnail || "";
-                
-                // Get extension
-                let mime = 'image/png';
-                if (item.name.toLowerCase().endsWith('.jpg') || item.name.toLowerCase().endsWith('.jpeg')) mime = 'image/jpeg';
-                else if (item.name.toLowerCase().endsWith('.webp')) mime = 'image/webp';
-                else if (item.name.toLowerCase().endsWith('.gif')) mime = 'image/gif';
                 
                 // Find visible image for ghost
                 const imgEl = document.getElementById(`item-${item.id}`)?.querySelector('img') as HTMLImageElement;
                 if (imgEl) e.dataTransfer.setDragImage(imgEl, imgEl.width / 2, imgEl.height / 2);
 
-                // USE CACHED BLOB IF AVAILABLE (Best for Desktop Drop)
-                if (cachedBlob) {
-                     e.dataTransfer.setData("DownloadURL", `${mime}:${item.name}:${cachedBlob}`);
-                     e.dataTransfer.setData("text/html", `<img src="${cachedBlob}" alt="${item.name}" />`);
-                     e.dataTransfer.setData("text/uri-list", cachedBlob); // Base64 uri
+                if (dragData) {
+                     e.dataTransfer.effectAllowed = "copy";
+                     // KEY FIX: Add actual File object to items. This enables Drag-to-Desktop.
+                     e.dataTransfer.items.add(dragData.file);
+                     
+                     // Legacy/Fallback support
+                     e.dataTransfer.setData("DownloadURL", `${dragData.file.type}:${item.name}:${dragData.base64}`);
+                     e.dataTransfer.setData("text/html", `<img src="${dragData.base64}" alt="${item.name}" />`);
+                     e.dataTransfer.setData("text/uri-list", dragData.base64);
                 } else {
-                     // Fallback to URL (Link Drop)
+                     // Fallback if data isn't ready yet (should rarely happen due to hover prefetch)
                      e.dataTransfer.setData("text/uri-list", url);
                      e.dataTransfer.setData("text/plain", url);
                 }
@@ -1462,7 +1459,7 @@ const NoteItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onTog
         onDoubleClick={(e) => onDoubleClick(e, item)} 
         onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} 
         style={{ touchAction: 'pan-y' }}
-        className={`group relative p-4 rounded-sm border transition-all cursor-pointer flex flex-col gap-2 item-clickable select-none aspect-[4/3] shadow-lg hover:shadow-xl hover:-translate-y-1 hover:rotate-1 duration-200 ${
+        className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col gap-2 item-clickable select-none aspect-square shadow-lg hover:shadow-xl hover:-translate-y-1 hover:rotate-1 duration-200 ${
             selected 
             ? 'bg-yellow-200 border-blue-500 ring-2 ring-blue-500 scale-[1.02] z-10' 
             : 'bg-[#fff9c4] border-transparent hover:border-yellow-300'
@@ -1479,10 +1476,12 @@ const NoteItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onTog
 
         {/* Content Area */}
         <div className="flex-1 w-full overflow-hidden flex flex-col">
-            <h4 className="text-xs font-bold text-slate-900 mb-1.5 truncate border-b border-slate-800/10 pb-1">
+            {/* UPDATE: Increased title text size (text-sm) */}
+            <h4 className="text-sm font-bold text-slate-900 mb-1.5 truncate border-b border-slate-800/10 pb-1">
                 {item.name.replace('.txt', '')}
             </h4>
-            <p className="text-[10px] text-slate-800/90 leading-relaxed font-sans font-medium break-words whitespace-pre-wrap line-clamp-6">
+            {/* UPDATE: Increased content text size (text-xs) */}
+            <p className="text-xs text-slate-800/90 leading-relaxed font-sans font-medium break-words whitespace-pre-wrap line-clamp-6">
                 {cleanText || <span className="italic text-slate-500">Kosong...</span>}
             </p>
         </div>
