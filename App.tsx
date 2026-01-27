@@ -70,14 +70,20 @@ const App = () => {
   // --- NOTIFICATIONS STATE ---
   const [notifications, setNotifications] = useState<Notification[]>([]);
 
-  // --- POINTER SELECTION STATE (REPLACES MOUSE/TOUCH) ---
+  // --- POINTER SELECTION & DRAG STATE ---
   const [isDragSelecting, setIsDragSelecting] = useState(false);
   const [selectionBox, setSelectionBox] = useState<{x:number, y:number, width:number, height:number} | null>(null);
   
+  // Custom Drag State (Long Press)
+  const [customDragItem, setCustomDragItem] = useState<Item | null>(null);
+  const [customDragPos, setCustomDragPos] = useState<{x:number, y:number} | null>(null);
+  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
+
   const containerRef = useRef<HTMLDivElement>(null);
   const dragStartPos = useRef<{x:number, y:number} | null>(null);
-  const lastTouchedIdRef = useRef<string | null>(null); // For Swipe Selection (Paint)
-  const isPaintingRef = useRef<boolean>(false); // Track if we are actively painting selection
+  const lastTouchedIdRef = useRef<string | null>(null);
+  const isPaintingRef = useRef<boolean>(false); 
+  const longPressTimerRef = useRef<any>(null);
 
   // --- EDITOR & MODALS ---
   const [modal, setModal] = useState<ModalState | null>(null);
@@ -266,10 +272,9 @@ const App = () => {
       throw new Error("Could not create Recycle Bin");
   };
 
-  // --- POINTER SELECTION LOGIC (UNIFIED MOUSE & TOUCH) ---
+  // --- POINTER LOGIC (Select vs Drag) ---
   
   const handlePointerDown = (e: React.PointerEvent) => {
-     // Ignore clicks on buttons/interactive elements within items
      if ((e.target as HTMLElement).closest('button, .item-handle')) return;
      if (!e.isPrimary) return;
 
@@ -277,28 +282,47 @@ const App = () => {
      const isCheckbox = target.closest('.selection-checkbox');
      const itemRow = target.closest('[data-item-id]');
      
-     // Start Tracking Position
      dragStartPos.current = { x: e.clientX, y: e.clientY };
      
-     // 1. Checkbox Click (Immediate Toggle + Prepare Drag)
+     // Clear any existing timer
+     if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+
+     // 1. Checkbox Click (Immediate Toggle)
      if (isCheckbox && itemRow) {
          const id = itemRow.getAttribute('data-item-id');
          if(id) {
              handleToggleSelect(id); 
              lastTouchedIdRef.current = id; 
-             isPaintingRef.current = true; // Mark as painting to avoid conflicts
+             isPaintingRef.current = true;
          }
-         // Capture pointer immediately for checkbox drag
          containerRef.current?.setPointerCapture(e.pointerId);
          setIsDragSelecting(true);
      } 
-     // 2. Item Body Click (Wait for move to capture)
+     // 2. Item Body Click (Prepare for either Select Swipe OR Long Press Drag)
      else if (itemRow) {
-         // DO NOT CAPTURE POINTER YET.
-         // Let browser handle "Click" and "DoubleClick" naturally unless we move.
+         const id = itemRow.getAttribute('data-item-id');
+         if (id) {
+             const clickedItem = items.find(i => i.id === id);
+             if (clickedItem) {
+                 // Start LONG PRESS Timer
+                 longPressTimerRef.current = setTimeout(() => {
+                     // Timer fired: User held still. Enable DRAG mode.
+                     setCustomDragItem(clickedItem);
+                     setCustomDragPos({ x: e.clientX, y: e.clientY });
+                     
+                     // Ensure the item dragged is selected
+                     if (!selectedIds.has(clickedItem.id)) {
+                         setSelectedIds(new Set([clickedItem.id]));
+                     }
+
+                     // Haptic Feedback
+                     if (navigator.vibrate) navigator.vibrate(50);
+                 }, 500); // 500ms for long press
+             }
+         }
          isPaintingRef.current = false; 
      }
-     // 3. Background Click (Immediate Capture for Box Select)
+     // 3. Background Click
      else {
          isPaintingRef.current = false;
          setSelectionBox({ x: e.clientX, y: e.clientY, width: 0, height: 0 });
@@ -314,30 +338,56 @@ const App = () => {
   const handlePointerMove = (e: React.PointerEvent) => {
      if (!dragStartPos.current) return;
 
+     // IF CUSTOM DRAG MODE IS ACTIVE (Long Press was triggered)
+     if (customDragItem) {
+         // Update visual position
+         setCustomDragPos({ x: e.clientX, y: e.clientY });
+         
+         // Find drop target (Folder) under cursor
+         // We hide the ghost temporarily to see what's underneath, or use elementFromPoint carefully
+         const elements = document.elementsFromPoint(e.clientX, e.clientY);
+         // Find nearest folder row that is NOT the dragged item
+         const folderEl = elements.find(el => {
+             const row = el.closest('[data-folder-id]');
+             const id = row?.getAttribute('data-folder-id');
+             return id && id !== customDragItem.id && !selectedIds.has(id);
+         })?.closest('[data-folder-id]');
+
+         if (folderEl) {
+             setDropTargetId(folderEl.getAttribute('data-folder-id'));
+         } else {
+             setDropTargetId(null);
+         }
+         return;
+     }
+
      const moveDist = Math.sqrt(Math.pow(e.clientX - dragStartPos.current.x, 2) + Math.pow(e.clientY - dragStartPos.current.y, 2));
      
-     // Threshold to consider it a drag/swipe
+     // Threshold exceeded: It's a movement!
      if (moveDist > 8) {
-         // If we haven't started selecting yet (e.g. started on item body), start now
+         // CANCEL LONG PRESS TIMER if moving
+         if (longPressTimerRef.current) {
+             clearTimeout(longPressTimerRef.current);
+             longPressTimerRef.current = null;
+         }
+
          if (!isDragSelecting) {
              setIsDragSelecting(true);
-             containerRef.current?.setPointerCapture(e.pointerId); // Take control from browser
+             containerRef.current?.setPointerCapture(e.pointerId);
          }
 
          const target = document.elementFromPoint(e.clientX, e.clientY);
          const itemRow = target?.closest('[data-item-id]');
          
-         // MODE 1: Item-based Swipe (Paint Selection)
+         // Paint Selection Mode
          if (selectionBox === null) {
-             isPaintingRef.current = true; // Confirm paint mode
+             isPaintingRef.current = true;
 
-             // If we just started dragging from body, ensure start item is selected
              if (lastTouchedIdRef.current === null) {
                   const startTarget = document.elementFromPoint(dragStartPos.current.x, dragStartPos.current.y);
                   const startRow = startTarget?.closest('[data-item-id]');
                   const startId = startRow?.getAttribute('data-item-id');
                   if (startId) {
-                      // If starting a drag on body, add it to selection if not present
                       if (!selectedIds.has(startId)) {
                           setSelectedIds(prev => new Set(prev).add(startId));
                       }
@@ -349,7 +399,6 @@ const App = () => {
                  const id = itemRow.getAttribute('data-item-id');
                  if (id && id !== lastTouchedIdRef.current) {
                      lastTouchedIdRef.current = id;
-                     // Add to selection (Paint)
                      setSelectedIds(prev => {
                          const next = new Set(prev);
                          next.add(id);
@@ -358,11 +407,10 @@ const App = () => {
                  }
              }
          }
-         // MODE 2: Background Box Selection
+         // Box Selection Mode
          else {
              const currentX = e.clientX;
              const currentY = e.clientY;
-             
              const x = Math.min(dragStartPos.current.x, currentX);
              const y = Math.min(dragStartPos.current.y, currentY);
              const width = Math.abs(currentX - dragStartPos.current.x);
@@ -384,8 +432,37 @@ const App = () => {
      }
   };
 
-  const handlePointerUp = (e: React.PointerEvent) => {
-      // Cleanup
+  const handlePointerUp = async (e: React.PointerEvent) => {
+      // Clear Timer
+      if (longPressTimerRef.current) {
+          clearTimeout(longPressTimerRef.current);
+          longPressTimerRef.current = null;
+      }
+
+      // Handle Drop (If Custom Dragging)
+      if (customDragItem && dropTargetId) {
+          const idsToMove = selectedIds.size > 0 ? Array.from(selectedIds) : [customDragItem.id];
+          const targetName = items.find(i => i.id === dropTargetId)?.name || "Folder";
+          
+          const notifId = addNotification(`Memindahkan ${idsToMove.length} item ke ${targetName}...`, 'loading');
+          setIsProcessingAction(true);
+          try {
+              await API.moveItems(idsToMove, dropTargetId);
+              updateNotification(notifId, 'Berhasil dipindahkan', 'success');
+              await loadFolder(currentFolderId);
+          } catch(err) {
+              updateNotification(notifId, 'Gagal pindah', 'error');
+          } finally {
+              setIsProcessingAction(false);
+          }
+      }
+
+      // Reset Drag State
+      setCustomDragItem(null);
+      setCustomDragPos(null);
+      setDropTargetId(null);
+
+      // Handle Cleanup
       setIsDragSelecting(false);
       setSelectionBox(null);
       dragStartPos.current = null;
@@ -408,12 +485,10 @@ const App = () => {
       setLastSelectedId(id);
   };
 
-  // Triggered by onClick on Item Body
   const handleItemClick = (e: React.MouseEvent, item: Item) => {
-    // If we were painting/swiping, ignore this click (it's part of the drag)
-    if (isPaintingRef.current) return;
+    // If painting or dragging, ignore click
+    if (isPaintingRef.current || customDragItem) return;
     
-    // Check for modifier keys
     if (e.shiftKey && lastSelectedId) {
         const lastIndex = items.findIndex(i => i.id === lastSelectedId);
         const currentIndex = items.findIndex(i => i.id === item.id);
@@ -426,10 +501,8 @@ const App = () => {
             setSelectedIds(newSet);
         }
     } else if (e.ctrlKey || e.metaKey) {
-        // Ctrl+Click = Toggle
         handleToggleSelect(item.id);
     } else {
-        // Standard Click = Single Select (Reset others)
         setSelectedIds(new Set([item.id]));
         setLastSelectedId(item.id);
     }
@@ -592,26 +665,106 @@ const App = () => {
          }
        });
     }
+    // ... rest of actions (same as before)
     else if (action === 'restore') {
-        if (ids.length === 0) return;
-        setItems(prev => prev.map(i => ids.includes(i.id) ? { ...i, status: 'restoring' } : i));
-        setSelectedIds(new Set());
-        setIsProcessingAction(true);
-        const notifId = addNotification(`Mengembalikan ${ids.length} item...`, 'loading');
-        try {
-            for (const id of ids) {
-                let originalParent = await DB.getDeletedMeta(id);
-                if (!originalParent) originalParent = "";
-                await API.moveItems([id], originalParent);
-                await DB.removeDeletedMeta(id);
-            }
-            updateNotification(notifId, 'Item berhasil dikembalikan', 'success');
-            await loadFolder(currentFolderId);
-        } catch(e) { updateNotification(notifId, 'Gagal restore', 'error'); } 
-        finally { setIsProcessingAction(false); }
-    }
-    else if (action === 'empty_bin') {
-        if (!recycleBinId) return;
+         if (ids.length === 0) return;
+         setItems(prev => prev.map(i => ids.includes(i.id) ? { ...i, status: 'restoring' } : i));
+         setSelectedIds(new Set());
+         setIsProcessingAction(true);
+         const notifId = addNotification(`Mengembalikan ${ids.length} item...`, 'loading');
+         try {
+             for (const id of ids) {
+                 let originalParent = await DB.getDeletedMeta(id);
+                 if (!originalParent) originalParent = "";
+                 await API.moveItems([id], originalParent);
+                 await DB.removeDeletedMeta(id);
+             }
+             updateNotification(notifId, 'Item berhasil dikembalikan', 'success');
+             await loadFolder(currentFolderId);
+         } catch(e) { updateNotification(notifId, 'Gagal restore', 'error'); } 
+         finally { setIsProcessingAction(false); }
+     }
+     else if (action === 'duplicate') {
+         if (ids.length === 0) return;
+         setIsProcessingAction(true);
+         const notifId = addNotification(`Menduplikasi ${ids.length} item...`, 'loading');
+         try {
+             await API.duplicateItems(ids);
+             updateNotification(notifId, 'Berhasil diduplikasi', 'success');
+             loadFolder(currentFolderId);
+         } catch(e) { updateNotification(notifId, 'Gagal duplikasi', 'error'); }
+         finally { setIsProcessingAction(false); }
+     }
+     else if (action === 'move') {
+         if (ids.length === 0) return;
+         const availableFolders = items.filter(i => i.type === 'folder' && !ids.includes(i.id));
+         const options = [];
+         if (currentFolderId) options.push({ label: '📁 .. (Folder Induk)', value: parentFolderId || "" }); 
+         availableFolders.forEach(f => options.push({ label: `📁 ${f.name}`, value: f.id }));
+         if (options.length === 0) { setModal({ type: 'alert', title: 'Info', message: 'Tidak ada tujuan.' }); return; }
+         setModal({
+             type: 'select',
+             title: `Pindahkan ${ids.length} Item`,
+             message: 'Pilih folder tujuan:',
+             options: options,
+             confirmText: 'Pindahkan',
+             onConfirm: async (targetId) => {
+                  if (targetId === undefined) return;
+                  setModal(null); setIsProcessingAction(true);
+                  const notifId = addNotification('Memindahkan item...', 'loading');
+                  try {
+                      await API.moveItems(ids, targetId);
+                      updateNotification(notifId, 'Berhasil dipindahkan', 'success');
+                      loadFolder(currentFolderId);
+                  } catch(e) { updateNotification(notifId, 'Gagal memindahkan', 'error'); }
+                  finally { setIsProcessingAction(false); }
+             }
+         });
+     }
+     else if (action === 'rename') {
+         if (!targetItem) return;
+         setModal({
+             type: 'input',
+             title: 'Ganti Nama',
+             inputValue: targetItem.name,
+             confirmText: 'Simpan',
+             onConfirm: async (newName) => {
+                 if(newName && newName !== targetItem.name) {
+                     setModal(null); setIsProcessingAction(true);
+                     const notifId = addNotification('Mengganti nama...', 'loading');
+                     try {
+                         await API.renameItem(targetItem.id, newName);
+                         updateNotification(notifId, 'Nama berhasil diganti', 'success');
+                         loadFolder(currentFolderId);
+                     } catch(e) { updateNotification(notifId, 'Gagal ganti nama', 'error'); }
+                     finally { setIsProcessingAction(false); }
+                 }
+             }
+         });
+     }
+     else if (action === 'new_folder') {
+         setModal({
+             type: 'input',
+             title: 'Folder Baru',
+             inputValue: 'Folder Baru',
+             confirmText: 'Buat',
+             onConfirm: async (name) => {
+                 if(name) {
+                     setModal(null); setIsProcessingAction(true);
+                     const notifId = addNotification('Membuat folder...', 'loading');
+                     try {
+                         await API.createFolder(currentFolderId, name);
+                         updateNotification(notifId, 'Folder berhasil dibuat', 'success');
+                         loadFolder(currentFolderId);
+                     } catch(e) { updateNotification(notifId, 'Gagal buat folder', 'error'); }
+                     finally { setIsProcessingAction(false); }
+                 }
+             }
+         });
+     }
+     else if (action === 'empty_bin') {
+         // ... existing logic
+          if (!recycleBinId) return;
         const res = await API.getFolderContents(recycleBinId);
         const binItems: Item[] = Array.isArray(res.data) ? res.data : [];
         const binIds = binItems.map(i => i.id);
@@ -634,9 +787,9 @@ const App = () => {
                 finally { setIsProcessingAction(false); }
             }
         });
-    }
-    else if (action === 'restore_all') {
-         if (!recycleBinId) return;
+     }
+     else if (action === 'restore_all') {
+          if (!recycleBinId) return;
          const res = await API.getFolderContents(recycleBinId);
          const binItems: Item[] = Array.isArray(res.data) ? res.data : [];
          const binIds = binItems.map(i => i.id);
@@ -655,85 +808,7 @@ const App = () => {
              if (currentFolderId === recycleBinId) loadFolder(recycleBinId);
          } catch(e) { updateNotification(notifId, 'Gagal restore all', 'error'); }
          finally { setIsProcessingAction(false); }
-    }
-    else if (action === 'duplicate') {
-        if (ids.length === 0) return;
-        setIsProcessingAction(true);
-        const notifId = addNotification(`Menduplikasi ${ids.length} item...`, 'loading');
-        try {
-            await API.duplicateItems(ids);
-            updateNotification(notifId, 'Berhasil diduplikasi', 'success');
-            loadFolder(currentFolderId);
-        } catch(e) { updateNotification(notifId, 'Gagal duplikasi', 'error'); }
-        finally { setIsProcessingAction(false); }
-    }
-    else if (action === 'move') {
-        if (ids.length === 0) return;
-        const availableFolders = items.filter(i => i.type === 'folder' && !ids.includes(i.id));
-        const options = [];
-        if (currentFolderId) options.push({ label: '📁 .. (Folder Induk)', value: parentFolderId || "" }); 
-        availableFolders.forEach(f => options.push({ label: `📁 ${f.name}`, value: f.id }));
-        if (options.length === 0) { setModal({ type: 'alert', title: 'Info', message: 'Tidak ada tujuan.' }); return; }
-        setModal({
-            type: 'select',
-            title: `Pindahkan ${ids.length} Item`,
-            message: 'Pilih folder tujuan:',
-            options: options,
-            confirmText: 'Pindahkan',
-            onConfirm: async (targetId) => {
-                 if (targetId === undefined) return;
-                 setModal(null); setIsProcessingAction(true);
-                 const notifId = addNotification('Memindahkan item...', 'loading');
-                 try {
-                     await API.moveItems(ids, targetId);
-                     updateNotification(notifId, 'Berhasil dipindahkan', 'success');
-                     loadFolder(currentFolderId);
-                 } catch(e) { updateNotification(notifId, 'Gagal memindahkan', 'error'); }
-                 finally { setIsProcessingAction(false); }
-            }
-        });
-    }
-    else if (action === 'rename') {
-        if (!targetItem) return;
-        setModal({
-            type: 'input',
-            title: 'Ganti Nama',
-            inputValue: targetItem.name,
-            confirmText: 'Simpan',
-            onConfirm: async (newName) => {
-                if(newName && newName !== targetItem.name) {
-                    setModal(null); setIsProcessingAction(true);
-                    const notifId = addNotification('Mengganti nama...', 'loading');
-                    try {
-                        await API.renameItem(targetItem.id, newName);
-                        updateNotification(notifId, 'Nama berhasil diganti', 'success');
-                        loadFolder(currentFolderId);
-                    } catch(e) { updateNotification(notifId, 'Gagal ganti nama', 'error'); }
-                    finally { setIsProcessingAction(false); }
-                }
-            }
-        });
-    }
-    else if (action === 'new_folder') {
-        setModal({
-            type: 'input',
-            title: 'Folder Baru',
-            inputValue: 'Folder Baru',
-            confirmText: 'Buat',
-            onConfirm: async (name) => {
-                if(name) {
-                    setModal(null); setIsProcessingAction(true);
-                    const notifId = addNotification('Membuat folder...', 'loading');
-                    try {
-                        await API.createFolder(currentFolderId, name);
-                        updateNotification(notifId, 'Folder berhasil dibuat', 'success');
-                        loadFolder(currentFolderId);
-                    } catch(e) { updateNotification(notifId, 'Gagal buat folder', 'error'); }
-                    finally { setIsProcessingAction(false); }
-                }
-            }
-        });
-    }
+     }
   };
 
   // --- UPLOAD LOGIC ---
@@ -767,6 +842,7 @@ const App = () => {
     e.preventDefault();
     setIsDraggingFile(false);
     
+    // Legacy Desktop Drag
     if (e.dataTransfer && e.dataTransfer.types && e.dataTransfer.types.includes("text/item-id")) {
         const movedItemId = e.dataTransfer.getData("text/item-id");
         let targetElement = e.target as HTMLElement;
@@ -853,13 +929,32 @@ const App = () => {
       }}
       onDragLeave={() => setIsDraggingFile(false)}
       onDrop={handleDrop}
-      // Replaced Mouse/Touch with Pointer Events for Universal Swipe
+      // Replaced Mouse/Touch with Pointer Events for Universal Swipe & Long Press
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
       onPointerCancel={handlePointerUp}
     >
       
+      {/* CUSTOM DRAG LAYER (GHOST) */}
+      {customDragItem && customDragPos && (
+          <div 
+              className="fixed z-[999] pointer-events-none p-4 rounded-xl border border-blue-500 bg-slate-800/90 shadow-2xl flex flex-col items-center gap-2 w-32 backdrop-blur-sm"
+              style={{ 
+                  left: customDragPos.x, 
+                  top: customDragPos.y,
+                  transform: 'translate(-50%, -50%) rotate(5deg)'
+              }}
+          >
+              {customDragItem.type === 'folder' ? <Folder size={32} className="text-blue-500"/> : 
+               customDragItem.type === 'note' ? <FileText size={32} className="text-yellow-500"/> :
+               (customDragItem.thumbnail ? <img src={customDragItem.thumbnail} className="w-16 h-16 object-cover rounded"/> : <ImageIcon size={32} className="text-purple-500"/>)}
+              <span className="text-[10px] font-bold text-slate-200 truncate w-full text-center">
+                  {selectedIds.size > 1 ? `${selectedIds.size} Items` : customDragItem.name}
+              </span>
+          </div>
+      )}
+
       {selectionBox && (
           <div className="fixed z-50 bg-blue-500/20 border border-blue-400 pointer-events-none"
              style={{ left: selectionBox.x, top: selectionBox.y, width: selectionBox.width, height: selectionBox.height }} />
@@ -970,7 +1065,17 @@ const App = () => {
                         </div>
                         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">
                             {groupedItems.folders.map(item => (
-                                <FolderItem key={item.id} item={item} isRecycleBin={item.id === recycleBinId} selected={selectedIds.has(item.id)} onClick={handleItemClick} onDoubleClick={handleItemDoubleClick} onContextMenu={handleContextMenu} onToggleSelect={() => handleToggleSelect(item.id)} />
+                                <FolderItem 
+                                    key={item.id} 
+                                    item={item} 
+                                    isRecycleBin={item.id === recycleBinId} 
+                                    selected={selectedIds.has(item.id)} 
+                                    isDropTarget={dropTargetId === item.id}
+                                    onClick={handleItemClick} 
+                                    onDoubleClick={handleItemDoubleClick} 
+                                    onContextMenu={handleContextMenu} 
+                                    onToggleSelect={() => handleToggleSelect(item.id)} 
+                                />
                             ))}
                         </div>
                     </section>
@@ -1192,7 +1297,7 @@ const DragHandle = ({ itemId }: { itemId: string }) => (
     </div>
 );
 
-const FolderItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect, isRecycleBin }: any) => (
+const FolderItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect, isRecycleBin, isDropTarget }: any) => (
     <div 
         id={`item-${item.id}`} 
         data-folder-id={item.id} 
@@ -1204,7 +1309,10 @@ const FolderItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onT
         onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} 
         // Add pan-y touch-action to allow vertical scrolling but let JS capture horizontal swipes
         style={{ touchAction: 'pan-y' }}
-        className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col items-center gap-2 item-clickable select-none ${selected ? 'bg-blue-500/20 border-blue-500 shadow-md ring-1 ring-blue-500' : 'bg-slate-900 border-slate-800 hover:bg-slate-800 hover:border-slate-600'}`}
+        className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col items-center gap-2 item-clickable select-none ${
+            isDropTarget ? 'bg-blue-500/40 border-blue-400 scale-105 shadow-xl ring-2 ring-blue-400 z-30' :
+            selected ? 'bg-blue-500/20 border-blue-500 shadow-md ring-1 ring-blue-500' : 'bg-slate-900 border-slate-800 hover:bg-slate-800 hover:border-slate-600'
+        }`}
     >
         <ItemOverlay status={item.status} />
         
