@@ -56,6 +56,19 @@ export interface FolderMap {
   [id: string]: FolderNode;
 }
 
+export interface Comment {
+  id: string;
+  itemId: string;
+  author: string;
+  text: string;
+  timestamp: number;
+  parentId?: string; // For replies
+}
+
+export interface CommentDB {
+  [itemId: string]: Comment[];
+}
+
 export interface SystemDB {
   fileId: string | null; // ID of the JSON file on Drive
   map: FolderMap;

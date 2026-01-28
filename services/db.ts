@@ -1,12 +1,13 @@
 
-import { Gallery, StoredImage, StoredNote, Item, SystemDB, FolderMap } from '../types';
+import { Gallery, StoredImage, StoredNote, Item, SystemDB, FolderMap, CommentDB } from '../types';
 
-const DB_NAME = 'ZombioGalleryDB_V3'; // Keep Name
+const DB_NAME = 'ZombioGalleryDB_V3'; 
 const STORE_GALLERIES = 'galleries';
 const STORE_FOLDER_CACHE = 'folder_cache';
 const STORE_DELETED_META = 'deleted_meta'; 
-const STORE_SYSTEM_MAP = 'system_map'; // New Store for Folder Mapping
-const DB_VERSION = 6; // Incremented
+const STORE_SYSTEM_MAP = 'system_map'; 
+const STORE_COMMENTS = 'comments';
+const DB_VERSION = 7; 
 
 export const initDB = (): Promise<IDBDatabase> => {
   return new Promise((resolve, reject) => {
@@ -28,7 +29,11 @@ export const initDB = (): Promise<IDBDatabase> => {
       }
 
       if (!db.objectStoreNames.contains(STORE_SYSTEM_MAP)) {
-        db.createObjectStore(STORE_SYSTEM_MAP, { keyPath: 'key' }); // Singleton store
+        db.createObjectStore(STORE_SYSTEM_MAP, { keyPath: 'key' });
+      }
+
+      if (!db.objectStoreNames.contains(STORE_COMMENTS)) {
+        db.createObjectStore(STORE_COMMENTS, { keyPath: 'key' });
       }
     };
 
@@ -137,5 +142,28 @@ export const saveSystemMap = async (data: SystemDB): Promise<void> => {
   const tx = db.transaction(STORE_SYSTEM_MAP, 'readwrite');
   const store = tx.objectStore(STORE_SYSTEM_MAP);
   store.put({ key: 'main_map', data: data });
+  return new Promise((resolve) => { tx.oncomplete = () => resolve(); });
+};
+
+// --- COMMENT DB FUNCTIONS ---
+
+export const getCommentsCache = async (): Promise<CommentDB | null> => {
+  const db = await initDB();
+  return new Promise((resolve) => {
+    const tx = db.transaction(STORE_COMMENTS, 'readonly');
+    const store = tx.objectStore(STORE_COMMENTS);
+    const request = store.get('comments_map');
+    request.onsuccess = () => {
+      resolve(request.result ? request.result.data : null);
+    };
+    request.onerror = () => resolve(null);
+  });
+};
+
+export const saveCommentsCache = async (data: CommentDB): Promise<void> => {
+  const db = await initDB();
+  const tx = db.transaction(STORE_COMMENTS, 'readwrite');
+  const store = tx.objectStore(STORE_COMMENTS);
+  store.put({ key: 'comments_map', data: data });
   return new Promise((resolve) => { tx.oncomplete = () => resolve(); });
 };

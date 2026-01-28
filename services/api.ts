@@ -1,10 +1,11 @@
 
-import { Item, FolderMap } from '../types';
+import { Item, FolderMap, CommentDB } from '../types';
 
 // URL Final Baru (File Manager Backend)
 const API_URL = "https://script.google.com/macros/s/AKfycbw-khPTpmPiuUhTzo-vqtkHZTqJ3MLqZtP-btpHLbnBVyJ13Z6k5glBBpMWomP8p6BIog/exec";
 
-const DB_FILENAME_KEYWORD = "system_zombio_db"; // Keyword to search
+const DB_FILENAME_KEYWORD = "system_zombio_db"; 
+const COMMENT_DB_FILENAME = "COMENTDATABASE";
 const SYSTEM_FOLDER_NAME = "System";
 
 interface ApiResponse {
@@ -52,7 +53,6 @@ export const fileToBase64 = (file: File | Blob): Promise<string> => {
 
 // --- FILE MANAGER API ACTIONS ---
 
-// 1. Get Folder Contents
 export const getFolderContents = async (folderId: string = ""): Promise<ApiResponse> => {
   return callGoogleScript({
     action: "getFolderContents",
@@ -60,7 +60,6 @@ export const getFolderContents = async (folderId: string = ""): Promise<ApiRespo
   });
 };
 
-// 2. Create Folder
 export const createFolder = async (parentId: string, name: string): Promise<ApiResponse> => {
   return callGoogleScript({
     action: "createFolder",
@@ -69,7 +68,6 @@ export const createFolder = async (parentId: string, name: string): Promise<ApiR
   });
 };
 
-// 3. Rename Item
 export const renameItem = async (itemId: string, newName: string): Promise<ApiResponse> => {
   return callGoogleScript({
     action: "renameItem",
@@ -78,7 +76,6 @@ export const renameItem = async (itemId: string, newName: string): Promise<ApiRe
   });
 };
 
-// 4. Delete Items
 export const deleteItems = async (itemIds: string[]): Promise<ApiResponse> => {
   return callGoogleScript({
     action: "deleteItems",
@@ -86,7 +83,6 @@ export const deleteItems = async (itemIds: string[]): Promise<ApiResponse> => {
   });
 };
 
-// 5. Move Items
 export const moveItems = async (itemIds: string[], targetFolderId: string): Promise<ApiResponse> => {
   return callGoogleScript({
     action: "moveItems",
@@ -95,7 +91,6 @@ export const moveItems = async (itemIds: string[], targetFolderId: string): Prom
   });
 };
 
-// 6. Duplicate Items
 export const duplicateItems = async (itemIds: string[]): Promise<ApiResponse> => {
   return callGoogleScript({
     action: "duplicateItems",
@@ -103,7 +98,6 @@ export const duplicateItems = async (itemIds: string[]): Promise<ApiResponse> =>
   });
 };
 
-// 7. Get File Content
 export const getFileContent = async (fileId: string): Promise<string> => {
   const result = await callGoogleScript({
     action: "getFileContent",
@@ -117,7 +111,6 @@ export const getFileContent = async (fileId: string): Promise<string> => {
   }
 };
 
-// 8. Upload Image
 export const uploadToDrive = async (file: File, folderId: string): Promise<any> => {
   const base64 = await fileToBase64(file);
   
@@ -135,7 +128,6 @@ export const uploadToDrive = async (file: File, folderId: string): Promise<any> 
   return result.data;
 };
 
-// 9. Save Note
 export const saveNoteToDrive = async (title: string, content: string, folderId: string, fileId?: string): Promise<any> => {
   const result = await callGoogleScript({
     action: "saveNote", 
@@ -149,37 +141,31 @@ export const saveNoteToDrive = async (title: string, content: string, folderId: 
   return result.data;
 };
 
-// --- SYSTEM DATABASE (JSON ON DRIVE) ---
+// --- SYSTEM DATABASE ---
 
-// Returns: { fileId: string | null, systemFolderId: string | null }
-export const locateSystemDB = async (): Promise<{ fileId: string | null, systemFolderId: string | null }> => {
+export const locateSystemDB = async (): Promise<{ fileId: string | null, commentFileId: string | null, systemFolderId: string | null }> => {
   try {
-    // 1. Check Root for "System" folder
     const rootRes = await getFolderContents("");
-    if (rootRes.status !== 'success' || !Array.isArray(rootRes.data)) return { fileId: null, systemFolderId: null };
+    if (rootRes.status !== 'success' || !Array.isArray(rootRes.data)) return { fileId: null, commentFileId: null, systemFolderId: null };
     
     const systemFolder = rootRes.data.find((i: any) => i.name === SYSTEM_FOLDER_NAME && i.type === 'folder');
-    
-    if (!systemFolder) return { fileId: null, systemFolderId: null };
+    if (!systemFolder) return { fileId: null, commentFileId: null, systemFolderId: null };
 
-    // 2. Check inside "System" folder for DB file
     const sysRes = await getFolderContents(systemFolder.id);
-    if (sysRes.status !== 'success' || !Array.isArray(sysRes.data)) return { fileId: null, systemFolderId: systemFolder.id };
+    if (sysRes.status !== 'success' || !Array.isArray(sysRes.data)) return { fileId: null, commentFileId: null, systemFolderId: systemFolder.id };
 
-    // ROBUST SEARCH: Find any file that contains the DB keyword
-    // This handles cases where Drive adds .txt, .json, or duplicates like "Copy of..."
-    const dbFile = sysRes.data.find((i: any) => 
-      i.name.includes(DB_FILENAME_KEYWORD) && i.type === 'note'
-    );
+    const dbFile = sysRes.data.find((i: any) => i.name.includes(DB_FILENAME_KEYWORD) && i.type === 'note');
+    const commentFile = sysRes.data.find((i: any) => i.name.includes(COMMENT_DB_FILENAME) && i.type === 'note');
 
     return { 
       fileId: dbFile ? dbFile.id : null, 
+      commentFileId: commentFile ? commentFile.id : null,
       systemFolderId: systemFolder.id 
     };
 
   } catch (e) {
     console.error("Error locating system DB:", e);
-    return { fileId: null, systemFolderId: null };
+    return { fileId: null, commentFileId: null, systemFolderId: null };
   }
 };
 
@@ -191,15 +177,24 @@ export const createSystemFolder = async (): Promise<string> => {
 
 export const createSystemDBFile = async (initialMap: FolderMap, folderId: string): Promise<string> => {
   const content = JSON.stringify(initialMap);
-  // We use the base keyword. The backend script will likely append .txt
   const res = await saveNoteToDrive(DB_FILENAME_KEYWORD, content, folderId); 
   if (res && res.id) return res.id;
   throw new Error("Failed to create system DB file");
 };
 
+export const createCommentDBFile = async (initialComments: CommentDB, folderId: string): Promise<string> => {
+  const content = JSON.stringify(initialComments);
+  const res = await saveNoteToDrive(COMMENT_DB_FILENAME, content, folderId); 
+  if (res && res.id) return res.id;
+  throw new Error("Failed to create comment DB file");
+};
+
 export const updateSystemDBFile = async (fileId: string, map: FolderMap): Promise<void> => {
   const content = JSON.stringify(map);
-  // Re-save using the same fileId to overwrite. Title is ignored if fileId is present usually, 
-  // but we keep consistency.
   await saveNoteToDrive(DB_FILENAME_KEYWORD, content, "", fileId); 
+};
+
+export const updateCommentDBFile = async (fileId: string, comments: CommentDB): Promise<void> => {
+  const content = JSON.stringify(comments);
+  await saveNoteToDrive(COMMENT_DB_FILENAME, content, "", fileId); 
 };

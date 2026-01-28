@@ -5,17 +5,17 @@ import {
   ArrowLeft, Plus, Trash2, Copy, Move, Edit, CheckSquare, 
   Loader2, Home, Upload, ChevronRight, X, AlertCircle, Download, CornerUpLeft,
   CheckCircle, XCircle, Image, RotateCcw, Ban, GripVertical, Database, Lock, ShieldAlert, Cloud, CloudUpload, FileJson, RefreshCw,
-  CheckCheck
+  CheckCheck, MessageSquare, Reply, Send, User, Clock
 } from 'lucide-react';
 import * as API from './services/api';
 import * as DB from './services/db';
-import { Item, StoredNote, DownloadItem, FolderMap, SystemDB } from './types';
+import { Item, StoredNote, DownloadItem, FolderMap, SystemDB, Comment, CommentDB } from './types';
 import { TextEditor } from './components/TextEditor';
 import { UploadProgress, UploadItem } from './components/UploadProgress';
 import { DownloadProgress } from './components/DownloadProgress';
 
 // --- TYPES ---
-type ModalType = 'input' | 'confirm' | 'alert' | 'select' | 'password' | null;
+type ModalType = 'input' | 'confirm' | 'alert' | 'select' | 'password' | 'comment' | null;
 interface ModalState {
   type: ModalType;
   title: string;
@@ -25,6 +25,7 @@ interface ModalState {
   onConfirm?: (value?: string) => void;
   confirmText?: string;
   isDanger?: boolean;
+  targetItem?: Item;
 }
 
 interface Notification {
@@ -55,14 +56,18 @@ const App = () => {
   const [systemMap, setSystemMap] = useState<FolderMap>({});
   const systemMapRef = useRef<FolderMap>({}); 
   const [dbFileId, setDbFileId] = useState<string | null>(null);
+  const [commentFileId, setCommentFileId] = useState<string | null>(null);
+  const [comments, setComments] = useState<CommentDB>({});
+  const commentsRef = useRef<CommentDB>({});
   const [systemFolderId, setSystemFolderId] = useState<string | null>(null);
   const [isSystemInitialized, setIsSystemInitialized] = useState(false);
   const [isNotFound, setIsNotFound] = useState(false); 
   const [isSavingDB, setIsSavingDB] = useState(false);
+  const [isSavingComments, setIsSavingComments] = useState(false);
   const saveTimeoutRef = useRef<any>(null);
+  const commentSaveTimeoutRef = useRef<any>(null);
   const [isGlobalLoading, setIsGlobalLoading] = useState(true); 
   const [globalLoadingMessage, setGlobalLoadingMessage] = useState("Memulai Sistem...");
-  const [isProcessingAction, setIsProcessingAction] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [lastSelectedId, setLastSelectedId] = useState<string | null>(null); 
   const [contextMenu, setContextMenu] = useState<{x:number, y:number, targetItem?: Item, isRecycleBinBtn?: boolean} | null>(null);
@@ -78,7 +83,6 @@ const App = () => {
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const dragStartPos = useRef<{x:number, y:number} | null>(null);
-  const lastTouchedIdRef = useRef<string | null>(null);
   const isPaintingRef = useRef<boolean>(false); 
   const longPressTimerRef = useRef<any>(null);
   const activeFolderIdRef = useRef<string>(currentFolderId);
@@ -88,6 +92,11 @@ const App = () => {
   const [previewImage, setPreviewImage] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const selectRef = useRef<HTMLSelectElement>(null);
+
+  // Comment input state
+  const [commentName, setCommentName] = useState(localStorage.getItem('zombio_comment_name') || '');
+  const [commentText, setCommentText] = useState('');
+  const [replyingTo, setReplyingTo] = useState<string | null>(null);
 
   useEffect(() => { activeFolderIdRef.current = currentFolderId; }, [currentFolderId]);
 
@@ -107,8 +116,21 @@ const App = () => {
               setIsSavingDB(false);
               await DB.saveSystemMap({ fileId: dbFileId, map: systemMapRef.current, lastSync: Date.now() });
           } catch (e) { setIsSavingDB(false); }
-      }, 1500); 
+      }, 3000); 
   }, [dbFileId]);
+
+  const triggerCommentSync = useCallback(() => {
+    if (!commentFileId) return;
+    if (commentSaveTimeoutRef.current) clearTimeout(commentSaveTimeoutRef.current);
+    setIsSavingComments(true);
+    commentSaveTimeoutRef.current = setTimeout(async () => {
+        try {
+            await API.updateCommentDBFile(commentFileId, commentsRef.current);
+            setIsSavingComments(false);
+            await DB.saveCommentsCache(commentsRef.current);
+        } catch (e) { setIsSavingComments(false); }
+    }, 2000);
+  }, [commentFileId]);
 
   useEffect(() => {
     if (!isSystemInitialized || !dbFileId || isSavingDB) return;
@@ -124,41 +146,74 @@ const App = () => {
                     if (currentFolderId) loadFolder(currentFolderId);
                 }
             }
+            if (!isSavingComments && commentFileId) {
+                const content = await API.getFileContent(commentFileId);
+                const remoteComments = JSON.parse(content);
+                if (JSON.stringify(remoteComments) !== JSON.stringify(commentsRef.current)) {
+                  commentsRef.current = remoteComments;
+                  setComments(remoteComments);
+                  await DB.saveCommentsCache(remoteComments);
+                }
+            }
         } catch (e) {}
     }, 60000); 
     return () => clearInterval(interval);
-  }, [isSystemInitialized, dbFileId, isSavingDB, currentFolderId]);
+  }, [isSystemInitialized, dbFileId, commentFileId, isSavingDB, isSavingComments, currentFolderId]);
 
   useEffect(() => {
     const initSystem = async () => {
        try {
            const cachedDB = await DB.getSystemMap();
+           const cachedComments = await DB.getCommentsCache();
            let currentMap: FolderMap = cachedDB ? cachedDB.map : {};
+           let currentComments: CommentDB = cachedComments || {};
+           
            setGlobalLoadingMessage("Sinkronisasi Cloud...");
            const location = await API.locateSystemDB();
            let sysFolderId = location.systemFolderId;
            let currentFileId = location.fileId; 
+           let currentCommentFileId = location.commentFileId;
+
            if (!sysFolderId) {
                setGlobalLoadingMessage("Membuat Folder System...");
                sysFolderId = await API.createSystemFolder();
            }
            setSystemFolderId(sysFolderId);
+
            if (!currentFileId) {
                setGlobalLoadingMessage("Membuat Database Baru...");
                if (!cachedDB) currentMap = { "root": { id: "root", name: "Home", parentId: "" } };
-               const newId = await API.createSystemDBFile(currentMap, sysFolderId);
-               currentFileId = newId;
+               currentFileId = await API.createSystemDBFile(currentMap, sysFolderId);
            } else {
-               setGlobalLoadingMessage("Mengunduh Database Terbaru...");
+               setGlobalLoadingMessage("Mengunduh Database...");
                try {
                    const content = await API.getFileContent(currentFileId);
                    currentMap = JSON.parse(content);
                } catch(e) { }
            }
+
+           if (!currentCommentFileId) {
+             setGlobalLoadingMessage("Membuat DB Komentar...");
+             currentCommentFileId = await API.createCommentDBFile(currentComments, sysFolderId);
+           } else {
+             setGlobalLoadingMessage("Mengunduh Komentar...");
+             try {
+                const content = await API.getFileContent(currentCommentFileId);
+                currentComments = JSON.parse(content);
+             } catch(e) {}
+           }
+
            await DB.saveSystemMap({ fileId: currentFileId, map: currentMap, lastSync: Date.now() });
+           await DB.saveCommentsCache(currentComments);
+           
            systemMapRef.current = currentMap;
            setSystemMap(currentMap);
            setDbFileId(currentFileId);
+           
+           commentsRef.current = currentComments;
+           setComments(currentComments);
+           setCommentFileId(currentCommentFileId);
+
            setIsSystemInitialized(true);
            const hash = window.location.hash.replace(/^#/, ''); 
            const path = hash.split('/').filter(p => p);
@@ -189,7 +244,6 @@ const App = () => {
     if (window.location.hash !== `#${newHash}`) { window.history.replaceState(null, '', `#${newHash}`); }
   }, [currentFolderId, folderHistory, isSystemInitialized, isNotFound]);
 
-  // Rename param from 'items' to 'updateItems' to avoid shadowing state 'items'
   const updateMap = (action: 'add' | 'remove' | 'update' | 'move', updateItems: {id: string, name?: string, parentId?: string}[]) => {
       const nextMap = { ...systemMapRef.current };
       updateItems.forEach(item => {
@@ -264,7 +318,7 @@ const App = () => {
         prefetchNoteContents(folderId, notesMissingContent);
       }
     } catch (e) { if (folderId === activeFolderIdRef.current) setLoading(false); }
-  }, [dbFileId, prefetchNoteContents]);
+  }, [prefetchNoteContents]);
 
   useEffect(() => { if (isSystemInitialized && !isNotFound) loadFolder(currentFolderId); }, [currentFolderId, loadFolder, isSystemInitialized, isNotFound]);
 
@@ -280,7 +334,7 @@ const App = () => {
   };
 
   const handlePointerDown = (e: React.PointerEvent) => {
-     if ((e.target as HTMLElement).closest('button, .item-handle, .floating-ui, select, input')) return;
+     if ((e.target as HTMLElement).closest('button, .item-handle, .floating-ui, select, input, .comment-area')) return;
      if (!e.isPrimary) return;
      const target = e.target as HTMLElement;
      const checkbox = target.closest('.selection-checkbox');
@@ -291,7 +345,7 @@ const App = () => {
      if (checkbox && itemRow) {
          e.stopPropagation();
          const id = itemRow.getAttribute('data-item-id');
-         if(id) { handleToggleSelect(id); lastTouchedIdRef.current = id; isPaintingRef.current = true; }
+         if(id) { handleToggleSelect(id); isPaintingRef.current = true; }
          containerRef.current?.setPointerCapture(e.pointerId); setIsDragSelecting(true);
      } else if (itemRow) {
          const id = itemRow.getAttribute('data-item-id');
@@ -362,7 +416,6 @@ const App = () => {
       setIsDragSelecting(false);
       setSelectionBox(null);
       dragStartPos.current = null;
-      lastTouchedIdRef.current = null;
       isPaintingRef.current = false;
       if (containerRef.current) { try { containerRef.current.releasePointerCapture(e.pointerId); } catch(err) {} }
 
@@ -454,13 +507,36 @@ const App = () => {
       if (!selectedIds.has(item.id)) { setSelectedIds(new Set([item.id])); setLastSelectedId(item.id); } 
       setContextMenu({ x, y, targetItem: item }); 
     } else { 
-      // FIX: Check if we are in Recycle Bin to show Empty Bin option
       if (currentFolderId === recycleBinId && recycleBinId !== "") {
           setContextMenu({ x, y, isRecycleBinBtn: true });
       } else {
           setContextMenu({ x, y, targetItem: undefined }); 
       }
     }
+  };
+
+  const handleAddComment = () => {
+    if (!commentName.trim() || !commentText.trim() || !modal?.targetItem) return;
+    
+    localStorage.setItem('zombio_comment_name', commentName);
+    const newComment: Comment = {
+      id: Date.now().toString(),
+      itemId: modal.targetItem.id,
+      author: commentName,
+      text: commentText,
+      timestamp: Date.now(),
+      parentId: replyingTo || undefined
+    };
+
+    const nextComments = { ...commentsRef.current };
+    if (!nextComments[modal.targetItem.id]) nextComments[modal.targetItem.id] = [];
+    nextComments[modal.targetItem.id].push(newComment);
+    
+    commentsRef.current = nextComments;
+    setComments(nextComments);
+    setCommentText('');
+    setReplyingTo(null);
+    triggerCommentSync();
   };
 
   const downloadWithProgress = async (url: string, name: string, isImage: boolean) => {
@@ -554,6 +630,12 @@ const App = () => {
       setContextMenu(null);
 
       switch (action) {
+          case 'comment':
+            const target = items.find(i => i.id === ids[0]);
+            if (target) {
+              setModal({ type: 'comment', title: `Komentar: ${target.name}`, targetItem: target });
+            }
+            break;
           case 'new_folder':
               setModal({
                   type: 'input', title: 'Folder Baru', message: 'Masukkan nama folder:', inputValue: 'New Folder',
@@ -710,27 +792,43 @@ const App = () => {
           case 'restore_all':
               const notifRA = addNotification('Mengembalikan semua item...', 'loading');
               try {
-                  let idsToRestore: string[] = [];
-                  if (currentFolderId === recycleBinId) idsToRestore = items.map(i => i.id);
-                  else {
+                  let itemsToRestore: Item[] = [];
+                  // Explicitly fetch correct items to restore, handling case where we are not in Recycle Bin
+                  if (currentFolderId === recycleBinId) {
+                      itemsToRestore = [...items];
+                  } else {
                       const binId = await getOrCreateRecycleBin();
                       const res = await API.getFolderContents(binId);
-                      // Explicitly type mapped data
-                      if (res.status === 'success' && Array.isArray(res.data)) idsToRestore = (res.data as any[]).map(i => i.id);
+                      if (res.status === 'success' && Array.isArray(res.data)) {
+                          itemsToRestore = res.data as Item[];
+                      }
                   }
-                  if (idsToRestore.length === 0) { updateNotification(notifRA, 'Recycle Bin sudah kosong', 'success'); return; }
+                  
+                  if (itemsToRestore.length === 0) { 
+                      updateNotification(notifRA, 'Recycle Bin sudah kosong', 'success'); 
+                      return; 
+                  }
+                  
                   const restoreMap: Record<string, string[]> = {}; 
-                  for (const id of idsToRestore) {
-                      const op = await DB.getDeletedMeta(id);
+                  for (const itemToRestore of itemsToRestore) {
+                      const op = await DB.getDeletedMeta(itemToRestore.id);
                       const target = op || "root";
                       if (!restoreMap[target]) restoreMap[target] = [];
-                      restoreMap[target].push(id);
+                      restoreMap[target].push(itemToRestore.id);
                   }
+                  
+                  // Process restoration by target folder
                   for (const [tf, iids] of Object.entries(restoreMap)) {
                       await API.moveItems(iids, tf);
-                      // Adding explicit types to filter/map to avoid unknown inference
-                      const foldersRestored = items.filter((i: Item) => iids.includes(i.id) && i.type === 'folder');
-                      if (foldersRestored.length > 0) updateMap('move', foldersRestored.map((f: Item) => ({ id: f.id, parentId: tf })));
+                      // Correctly identifying folders among restored items using correctly typed list
+                      const foldersRestored = itemsToRestore.filter((i: Item) => iids.includes(i.id) && i.type === 'folder');
+                      if (foldersRestored.length > 0) {
+                          // Update map with correctly inferred or typed properties to avoid unknown property errors
+                          updateMap('move', foldersRestored.map((f: Item) => ({ 
+                              id: f.id, 
+                              parentId: tf 
+                          })));
+                      }
                       for(const id of iids) await DB.removeDeletedMeta(id);
                   }
                   updateNotification(notifRA, 'Semua item dikembalikan', 'success');
@@ -827,8 +925,8 @@ const App = () => {
         </div>
         {currentFolderId !== recycleBinId && !isSystemFolder && (
         <div className="flex items-center gap-2 new-dropdown-container">
-            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all duration-300 ${isSavingDB ? 'bg-blue-500/10 text-blue-400' : 'bg-slate-800 text-slate-500'}`}>
-                {isSavingDB ? <><Loader2 size={14} className="animate-spin" /> <span className="hidden sm:inline">Syncing...</span></> : <><Cloud size={14} /> <span className="hidden sm:inline">Synced</span></>}
+            <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium transition-all duration-300 ${isSavingDB || isSavingComments ? 'bg-blue-500/10 text-blue-400' : 'bg-slate-800 text-slate-500'}`}>
+                {isSavingDB || isSavingComments ? <><Loader2 size={14} className="animate-spin" /> <span className="hidden sm:inline">Syncing...</span></> : <><Cloud size={14} /> <span className="hidden sm:inline">Synced</span></>}
             </div>
             <div className="relative">
                 <button onPointerDown={(e) => { e.stopPropagation(); setIsNewDropdownOpen(!isNewDropdownOpen); }} className={`px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold shadow-lg transition-all border border-transparent ${isNewDropdownOpen ? 'bg-slate-800 border-slate-700 text-white' : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-900/20'}`}><Plus size={18} /> <span className="hidden sm:inline">Baru</span></button>
@@ -863,9 +961,9 @@ const App = () => {
             </div>
         ) : (
             <>
-                {groupedItems.folders.length > 0 && ( <section><div className="flex items-center gap-3 mb-4"><h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2"><Folder size={14}/> Folders</h2><div className="h-px bg-slate-800 flex-1"></div></div><div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">{groupedItems.folders.map(item => (<FolderItem key={item.id} item={item} isRecycleBin={item.id === recycleBinId} isSystem={item.id === systemFolderId || item.name === SYSTEM_FOLDER_NAME} selected={selectedIds.has(item.id)} isDropTarget={dropTargetId === item.id} onClick={handleItemClick} onDoubleClick={handleItemDoubleClick} onContextMenu={handleContextMenu} onToggleSelect={() => handleToggleSelect(item.id)} />))}</div></section> )}
-                {groupedItems.notes.length > 0 && ( <section><div className="flex items-center gap-3 mb-4 mt-8"><h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2"><FileText size={14}/> Notes</h2><div className="h-px bg-slate-800 flex-1"></div></div><div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">{groupedItems.notes.map(item => (<NoteItem key={item.id} item={item} selected={selectedIds.has(item.id)} onClick={handleItemClick} onDoubleClick={handleItemDoubleClick} onContextMenu={handleContextMenu} onToggleSelect={() => handleToggleSelect(item.id)} />))}</div></section> )}
-                {groupedItems.images.length > 0 && ( <section><div className="flex items-center gap-3 mb-4 mt-8"><h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2"><ImageIcon size={14}/> Images</h2><div className="h-px bg-slate-800 flex-1"></div></div><div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">{groupedItems.images.map(item => (<ImageItem key={item.id} item={item} selected={selectedIds.has(item.id)} onClick={handleItemClick} onDoubleClick={handleItemDoubleClick} onContextMenu={handleContextMenu} onToggleSelect={() => handleToggleSelect(item.id)} />))}</div></section> )}
+                {groupedItems.folders.length > 0 && ( <section><div className="flex items-center gap-3 mb-4"><h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2"><Folder size={14}/> Folders</h2><div className="h-px bg-slate-800 flex-1"></div></div><div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">{groupedItems.folders.map(item => (<FolderItem key={item.id} item={item} hasComments={(comments[item.id]?.length || 0) > 0} isRecycleBin={item.id === recycleBinId} isSystem={item.id === systemFolderId || item.name === SYSTEM_FOLDER_NAME} selected={selectedIds.has(item.id)} isDropTarget={dropTargetId === item.id} onClick={handleItemClick} onDoubleClick={handleItemDoubleClick} onContextMenu={handleContextMenu} onToggleSelect={() => handleToggleSelect(item.id)} onCommentClick={() => setModal({ type: 'comment', title: `Komentar: ${item.name}`, targetItem: item })} />))}</div></section> )}
+                {groupedItems.notes.length > 0 && ( <section><div className="flex items-center gap-3 mb-4 mt-8"><h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2"><FileText size={14}/> Notes</h2><div className="h-px bg-slate-800 flex-1"></div></div><div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">{groupedItems.notes.map(item => (<NoteItem key={item.id} item={item} hasComments={(comments[item.id]?.length || 0) > 0} selected={selectedIds.has(item.id)} onClick={handleItemClick} onDoubleClick={handleItemDoubleClick} onContextMenu={handleContextMenu} onToggleSelect={() => handleToggleSelect(item.id)} onCommentClick={() => setModal({ type: 'comment', title: `Komentar: ${item.name}`, targetItem: item })} />))}</div></section> )}
+                {groupedItems.images.length > 0 && ( <section><div className="flex items-center gap-3 mb-4 mt-8"><h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2"><ImageIcon size={14}/> Images</h2><div className="h-px bg-slate-800 flex-1"></div></div><div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">{groupedItems.images.map(item => (<ImageItem key={item.id} item={item} hasComments={(comments[item.id]?.length || 0) > 0} selected={selectedIds.has(item.id)} onClick={handleItemClick} onDoubleClick={handleItemDoubleClick} onContextMenu={handleContextMenu} onToggleSelect={() => handleToggleSelect(item.id)} onCommentClick={() => setModal({ type: 'comment', title: `Komentar: ${item.name}`, targetItem: item })} />))}</div></section> )}
             </>
         )}
       </main>
@@ -876,12 +974,142 @@ const App = () => {
           </div>
       )}
 
-      {contextMenu && ( <><div className="fixed inset-0 z-[99]" onClick={() => setContextMenu(null)} onContextMenu={(e) => { e.preventDefault(); setContextMenu(null); }}></div><div className="fixed z-[100] bg-slate-800 border border-slate-700 rounded-lg shadow-2xl py-1.5 min-w-[200px] animate-in fade-in zoom-in-95 duration-100 overflow-hidden floating-ui" onPointerDown={(e) => e.stopPropagation()} style={{ top: Math.min(contextMenu.y, window.innerHeight - 300), left: Math.min(contextMenu.x, window.innerWidth - 220) }}>{contextMenu.isRecycleBinBtn ? (<> <div className="px-3 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-700/50 mb-1">Recycle Bin Options</div><button onClick={() => executeAction('empty_bin')} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-400 hover:text-red-300 flex items-center gap-3 text-sm transition-colors"><Trash2 size={16}/> Empty Recycle Bin</button><button onClick={() => executeAction('restore_all')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><RotateCcw size={16} className="text-green-400"/> Restore All Items</button> </>) : contextMenu.targetItem ? (<> <div className="px-3 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-700/50 mb-1 truncate max-w-[200px]">{contextMenu.targetItem.name}</div>{(contextMenu.targetItem.id === recycleBinId || contextMenu.targetItem.id === systemFolderId || contextMenu.targetItem.name === SYSTEM_FOLDER_NAME) ? (<div className="px-3 py-2 text-xs text-slate-500 italic">System Folder (Protected)</div>) : (currentFolderId === recycleBinId ? (<> <button onClick={() => executeAction('restore')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><RotateCcw size={16} className="text-green-400"/> Restore</button><button onClick={() => executeAction('delete_permanent')} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-400 hover:text-red-300 flex items-center gap-3 text-sm transition-colors"><Ban size={16}/> Delete Permanently</button> </>) : isSystemFolder ? (<> <button onClick={() => executeAction('download')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Download size={16} className="text-slate-400"/> Download</button> {contextMenu.targetItem.type === 'image' && (<button onClick={() => executeAction('copy_image')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Image size={16} className="text-slate-400"/> Copy Image</button>)} <div className="px-3 py-2 text-xs text-amber-500/70 italic flex items-center gap-1"><Lock size={12}/> Read-Only</div> </>) : (<> <button onClick={() => executeAction('rename')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Edit size={16} className="text-slate-400"/> Rename</button><button onClick={() => executeAction('duplicate')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Copy size={16} className="text-slate-400"/> Copy</button><button onClick={() => executeAction('move')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Move size={16} className="text-slate-400"/> Move</button>{contextMenu.targetItem.type !== 'folder' && (<><button onClick={() => executeAction('download')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Download size={16} className="text-slate-400"/> Download</button>{contextMenu.targetItem.type === 'image' && (<button onClick={() => executeAction('copy_image')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Image size={16} className="text-slate-400"/> Copy Image</button>)}</>)}<div className="h-px bg-slate-700 my-1"/><button onClick={() => executeAction('delete')} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-400 hover:text-red-300 flex items-center gap-3 text-sm transition-colors"><Trash2 size={16}/> Delete</button></>))} </>) : (<> {currentFolderId === recycleBinId ? (<> <button onClick={() => executeAction('empty_bin')} className="w-full text-left px-3 py-2.5 hover:bg-red-500/10 text-red-400 hover:text-red-300 flex items-center gap-3 text-sm transition-colors"><Trash2 size={16}/> Empty Recycle Bin</button><button onClick={() => executeAction('restore_all')} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><RotateCcw size={16} className="text-green-400"/> Restore All Items</button><div className="h-px bg-slate-700 my-1"/><button onClick={() => { setContextMenu(null); loadFolder(currentFolderId); }} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Loader2 size={16} className="text-slate-400"/> Refresh</button> </>) : isSystemFolder ? (<> <div className="px-3 py-2.5 text-xs text-amber-500 flex items-center gap-2"><Lock size={14}/> System Folder Protected</div><div className="h-px bg-slate-700 my-1"/><button onClick={() => { setContextMenu(null); loadFolder(currentFolderId); }} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Loader2 size={16} className="text-slate-400"/> Refresh</button> </>) : (<> <button onClick={() => executeAction('new_folder')} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Folder size={16} className="text-blue-400"/> New Folder</button><button onClick={handleCreateNote} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><FileText size={16} className="text-yellow-400"/> New Note</button><label className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 cursor-pointer transition-colors" onClick={(e) => e.stopPropagation()}><Upload size={16} className="text-green-400"/> Upload File<input type="file" multiple className="hidden" onClick={(e) => { (e.target as HTMLInputElement).value = ''; }} onChange={(e) => { setContextMenu(null); if(e.target.files) handleUploadFiles(Array.from(e.target.files)); }} /></label><div className="h-px bg-slate-700 my-1"/><button onClick={() => { setContextMenu(null); loadFolder(currentFolderId); }} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Loader2 size={16} className="text-slate-400"/> Refresh</button> </>) } </>) }</div></>)}
+      {contextMenu && ( <><div className="fixed inset-0 z-[99]" onClick={() => setContextMenu(null)} onContextMenu={(e) => { e.preventDefault(); setContextMenu(null); }}></div><div className="fixed z-[100] bg-slate-800 border border-slate-700 rounded-lg shadow-2xl py-1.5 min-w-[200px] animate-in fade-in zoom-in-95 duration-100 overflow-hidden floating-ui" onPointerDown={(e) => e.stopPropagation()} style={{ top: Math.min(contextMenu.y, window.innerHeight - 300), left: Math.min(contextMenu.x, window.innerWidth - 220) }}>{contextMenu.isRecycleBinBtn ? (<> <div className="px-3 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-700/50 mb-1">Recycle Bin Options</div><button onClick={() => executeAction('empty_bin')} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-400 hover:text-red-300 flex items-center gap-3 text-sm transition-colors"><Trash2 size={16}/> Empty Recycle Bin</button><button onClick={() => executeAction('restore_all')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><RotateCcw size={16} className="text-green-400"/> Restore All Items</button> </>) : contextMenu.targetItem ? (<> <div className="px-3 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider border-b border-slate-700/50 mb-1 truncate max-w-[200px]">{contextMenu.targetItem.name}</div>{(contextMenu.targetItem.id === recycleBinId || contextMenu.targetItem.id === systemFolderId || contextMenu.targetItem.name === SYSTEM_FOLDER_NAME) ? (<div className="px-3 py-2 text-xs text-slate-500 italic">System Folder (Protected)</div>) : (currentFolderId === recycleBinId ? (<> <button onClick={() => executeAction('restore')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><RotateCcw size={16} className="text-green-400"/> Restore</button><button onClick={() => executeAction('delete_permanent')} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-400 hover:text-red-300 flex items-center gap-3 text-sm transition-colors"><Ban size={16}/> Delete Permanently</button> </>) : isSystemFolder ? (<> <button onClick={() => executeAction('comment')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><MessageSquare size={16} className="text-blue-400"/> Komentari</button><button onClick={() => executeAction('download')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Download size={16} className="text-slate-400"/> Download</button> {contextMenu.targetItem.type === 'image' && (<button onClick={() => executeAction('copy_image')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Image size={16} className="text-slate-400"/> Copy Image</button>)} <div className="px-3 py-2 text-xs text-amber-500/70 italic flex items-center gap-1"><Lock size={12}/> Read-Only</div> </>) : (<> <button onClick={() => executeAction('comment')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><MessageSquare size={16} className="text-blue-400"/> Komentari</button><button onClick={() => executeAction('rename')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Edit size={16} className="text-slate-400"/> Rename</button><button onClick={() => executeAction('duplicate')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Copy size={16} className="text-slate-400"/> Copy</button><button onClick={() => executeAction('move')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Move size={16} className="text-slate-400"/> Move</button>{contextMenu.targetItem.type !== 'folder' && (<><button onClick={() => executeAction('download')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Download size={16} className="text-slate-400"/> Download</button>{contextMenu.targetItem.type === 'image' && (<button onClick={() => executeAction('copy_image')} className="w-full text-left px-3 py-2 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Image size={16} className="text-slate-400"/> Copy Image</button>)}</>)}<div className="h-px bg-slate-700 my-1"/><button onClick={() => executeAction('delete')} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-400 hover:text-red-300 flex items-center gap-3 text-sm transition-colors"><Trash2 size={16}/> Delete</button></>))} </>) : (<> {currentFolderId === recycleBinId ? (<> <button onClick={() => executeAction('empty_bin')} className="w-full text-left px-3 py-2.5 hover:bg-red-500/10 text-red-400 hover:text-red-300 flex items-center gap-3 text-sm transition-colors"><Trash2 size={16}/> Empty Recycle Bin</button><button onClick={() => executeAction('restore_all')} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><RotateCcw size={16} className="text-green-400"/> Restore All Items</button><div className="h-px bg-slate-700 my-1"/><button onClick={() => { setContextMenu(null); loadFolder(currentFolderId); }} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Loader2 size={16} className="text-slate-400"/> Refresh</button> </>) : isSystemFolder ? (<> <div className="px-3 py-2.5 text-xs text-amber-500 flex items-center gap-2"><Lock size={14}/> System Folder Protected</div><div className="h-px bg-slate-700 my-1"/><button onClick={() => { setContextMenu(null); loadFolder(currentFolderId); }} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Loader2 size={16} className="text-slate-400"/> Refresh</button> </>) : (<> <button onClick={() => executeAction('new_folder')} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Folder size={16} className="text-blue-400"/> New Folder</button><button onClick={handleCreateNote} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><FileText size={16} className="text-yellow-400"/> New Note</button><label className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 cursor-pointer transition-colors" onClick={(e) => e.stopPropagation()}><Upload size={16} className="text-green-400"/> Upload File<input type="file" multiple className="hidden" onClick={(e) => { (e.target as HTMLInputElement).value = ''; }} onChange={(e) => { setContextMenu(null); if(e.target.files) handleUploadFiles(Array.from(e.target.files)); }} /></label><div className="h-px bg-slate-700 my-1"/><button onClick={() => { setContextMenu(null); loadFolder(currentFolderId); }} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 flex items-center gap-3 text-sm text-slate-200 transition-colors"><Loader2 size={16} className="text-slate-400"/> Refresh</button> </>) } </>) }</div></>)}
       
       {viewingRawFile && (<div className="fixed inset-0 z-[200] flex items-center justify-center p-4"><div className="absolute inset-0 bg-black/80 backdrop-blur-sm animate-in fade-in" onClick={() => setViewingRawFile(null)} /><div className="relative w-full max-w-4xl h-[80vh] bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95"><div className="bg-slate-950 px-4 py-3 border-b border-slate-800 flex items-center justify-between"><div className="flex items-center gap-3"><FileJson size={20} className="text-blue-400" /><h3 className="text-sm font-bold text-slate-200">{viewingRawFile.title}</h3><span className="px-2 py-0.5 bg-slate-800 rounded text-[10px] text-slate-500 uppercase">Read Only</span></div><button onClick={() => setViewingRawFile(null)} className="p-2 hover:bg-slate-800 rounded-lg text-slate-400 hover:text-white transition-colors"><X size={20} /></button></div><div className="flex-1 overflow-auto p-4 bg-[#0d1117]"><pre className="text-xs md:text-sm font-mono text-slate-300 whitespace-pre-wrap break-all leading-relaxed">{viewingRawFile.content}</pre></div></div></div>)}
       {previewImage && (<div className="fixed inset-0 z-[150] bg-black/95 backdrop-blur flex items-center justify-center p-4 animate-in fade-in" onClick={() => setPreviewImage(null)}><div className="absolute top-4 right-4 z-10 flex gap-2"><button onClick={(e) => { e.stopPropagation(); handleCopyImage(previewImage); }} className="p-2 bg-white/10 rounded-full hover:bg-white/20 text-white"><Image size={24}/></button><button onClick={(e) => { e.stopPropagation(); downloadWithProgress(previewImage, "image.jpg", true); }} className="p-2 bg-white/10 rounded-full hover:bg-white/20 text-white"><Download size={24}/></button><button onClick={() => setPreviewImage(null)} className="p-2 bg-white/10 rounded-full hover:bg-white/20 text-white"><X size={24}/></button></div><img src={previewImage} className="max-w-full max-h-full object-contain rounded-lg shadow-2xl" onClick={(e) => e.stopPropagation()} referrerPolicy="no-referrer" /></div>)}
       {editingNote && <TextEditor note={editingNote} onSave={handleSaveNote} onClose={() => setEditingNote(null)} />}
-      {modal && (<div className="fixed inset-0 z-[200] flex items-center justify-center p-4"><div className="absolute inset-0 bg-black/60 backdrop-blur-sm animate-in fade-in" onClick={() => setModal(null)} /><div className="relative w-full max-w-sm bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95"><div className="p-6"><h3 className="text-lg font-bold mb-2 flex items-center gap-2">{modal.isDanger && <AlertCircle className="text-red-500" size={20} />}{modal.title}</h3>{modal.message && <p className="text-sm text-slate-400 mb-4">{modal.message}</p>}{modal.type === 'input' && (<input ref={inputRef} type="text" defaultValue={modal.inputValue} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500" onKeyDown={(e) => { if(e.key === 'Enter') modal.onConfirm?.(e.currentTarget.value); }} onChange={(e) => { if (modal) modal.inputValue = e.target.value; }} autoFocus />)}{modal.type === 'password' && (<input ref={inputRef} type="password" className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500" onKeyDown={(e) => { if(e.key === 'Enter') modal.onConfirm?.(e.currentTarget.value); }} onChange={(e) => { if (modal) modal.inputValue = e.target.value; }} autoFocus placeholder="Masukkan password..." />)}{modal.type === 'select' && modal.options && (<select ref={selectRef} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500" onChange={(e) => { if (modal) modal.inputValue = e.target.value; }} defaultValue={modal.options[0]?.value}>{modal.options.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}</select>)}</div><div className="bg-slate-800/50 p-4 flex gap-3 border-t border-slate-800"><button onClick={() => setModal(null)} className="flex-1 py-2 rounded-lg text-sm font-medium hover:bg-slate-700 transition-colors text-slate-300">Batal</button><button onClick={() => { let val = modal.inputValue; if (modal.type === 'select' && !val && modal.options && modal.options.length > 0) val = modal.options[0].value; modal.onConfirm?.(val); }} className={`flex-1 py-2 rounded-lg text-sm font-medium text-white shadow-lg transition-transform active:scale-95 ${modal.isDanger ? 'bg-red-600 hover:bg-red-500' : 'bg-blue-600 hover:bg-blue-500'}`}>{modal.confirmText || 'OK'}</button></div></div></div>)}
+      
+      {/* --- MODAL SYSTEM --- */}
+      {modal && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm animate-in fade-in" onClick={() => { setModal(null); setReplyingTo(null); }} />
+          
+          <div className={`relative w-full ${modal.type === 'comment' ? 'max-w-2xl' : 'max-w-sm'} bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95`}>
+            
+            {/* COMMENT UI */}
+            {modal.type === 'comment' ? (
+              <div className="flex flex-col h-[80vh] md:h-[600px] comment-area">
+                <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950">
+                  <h3 className="text-lg font-bold flex items-center gap-2"><MessageSquare className="text-blue-400" size={20}/> {modal.title}</h3>
+                  <button onClick={() => { setModal(null); setReplyingTo(null); }} className="p-2 hover:bg-slate-800 rounded-lg text-slate-400"><X size={20}/></button>
+                </div>
+                
+                {/* Comment List */}
+                <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-900/50">
+                  {modal.targetItem && (comments[modal.targetItem.id] || []).length === 0 ? (
+                    <div className="h-full flex flex-col items-center justify-center text-slate-500 opacity-50 italic">
+                      <MessageSquare size={48} className="mb-2"/>
+                      <p>Belum ada komentar.</p>
+                    </div>
+                  ) : (
+                    modal.targetItem && comments[modal.targetItem.id]
+                      .filter(c => !c.parentId) // Main comments
+                      .map(comment => (
+                        <div key={comment.id} className="space-y-3">
+                          {/* Main Comment Bubble */}
+                          <div className="flex gap-3 group">
+                            <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
+                              {comment.author[0].toUpperCase()}
+                            </div>
+                            <div className="flex-1">
+                              <div className="bg-slate-800 p-3 rounded-2xl rounded-tl-none border border-slate-700 shadow-sm">
+                                <div className="flex items-center justify-between mb-1">
+                                  <span className="text-sm font-bold text-blue-400">{comment.author}</span>
+                                  <span className="text-[10px] text-slate-500 flex items-center gap-1"><Clock size={10}/> {new Date(comment.timestamp).toLocaleString()}</span>
+                                </div>
+                                <p className="text-sm text-slate-200">{comment.text}</p>
+                              </div>
+                              <button 
+                                onClick={() => setReplyingTo(comment.id)}
+                                className="text-[10px] font-bold text-slate-500 hover:text-blue-400 mt-1 flex items-center gap-1 ml-1"
+                              >
+                                <Reply size={10}/> BALAS
+                              </button>
+                            </div>
+                          </div>
+
+                          {/* Replies */}
+                          {comments[modal.targetItem!.id]
+                            .filter(r => r.parentId === comment.id)
+                            .map(reply => (
+                              <div key={reply.id} className="flex gap-3 ml-11">
+                                <div className="w-6 h-6 rounded-full bg-slate-700 flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0">
+                                  {reply.author[0].toUpperCase()}
+                                </div>
+                                <div className="flex-1 bg-slate-800/40 p-2.5 rounded-xl rounded-tl-none border border-slate-700/50 shadow-sm">
+                                  <div className="flex items-center justify-between mb-1">
+                                    <span className="text-xs font-bold text-slate-300">{reply.author}</span>
+                                    <span className="text-[9px] text-slate-500">{new Date(reply.timestamp).toLocaleString()}</span>
+                                  </div>
+                                  <p className="text-xs text-slate-300">{reply.text}</p>
+                                </div>
+                              </div>
+                            ))}
+                        </div>
+                      ))
+                  )}
+                </div>
+
+                {/* Input Section */}
+                <div className="p-4 bg-slate-950 border-t border-slate-800 space-y-3">
+                  {replyingTo && (
+                    <div className="flex items-center justify-between bg-blue-500/10 px-3 py-1 rounded-lg border border-blue-500/20">
+                      <span className="text-[10px] text-blue-400 font-bold flex items-center gap-1">
+                        <Reply size={12}/> Membalas komentar...
+                      </span>
+                      <button onClick={() => setReplyingTo(null)} className="text-blue-400 p-1"><X size={12}/></button>
+                    </div>
+                  )}
+                  <div className="flex gap-2">
+                    <div className="relative flex-shrink-0 w-24">
+                      <input 
+                        type="text" 
+                        placeholder="Nama" 
+                        value={commentName}
+                        onChange={(e) => setCommentName(e.target.value)}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-2 text-xs text-white focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                    <div className="relative flex-1">
+                      <textarea 
+                        placeholder="Tulis komentar..." 
+                        rows={1}
+                        value={commentText}
+                        onChange={(e) => setCommentText(e.target.value)}
+                        onKeyDown={(e) => { if(e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleAddComment(); } }}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 resize-none h-9"
+                      />
+                    </div>
+                    <button 
+                      onClick={handleAddComment}
+                      disabled={!commentName.trim() || !commentText.trim()}
+                      className="p-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-30 text-white rounded-lg transition-colors"
+                    >
+                      <Send size={18}/>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              // REGULAR MODALS
+              <>
+                <div className="p-6">
+                  <h3 className="text-lg font-bold mb-2 flex items-center gap-2">{modal.isDanger && <AlertCircle className="text-red-500" size={20} />}{modal.title}</h3>
+                  {modal.message && <p className="text-sm text-slate-400 mb-4">{modal.message}</p>}
+                  {modal.type === 'input' && (<input ref={inputRef} type="text" defaultValue={modal.inputValue} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500" onKeyDown={(e) => { if(e.key === 'Enter') modal.onConfirm?.(e.currentTarget.value); }} onChange={(e) => { if (modal) modal.inputValue = e.target.value; }} autoFocus />)}
+                  {modal.type === 'password' && (<input ref={inputRef} type="password" className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500" onKeyDown={(e) => { if(e.key === 'Enter') modal.onConfirm?.(e.currentTarget.value); }} onChange={(e) => { if (modal) modal.inputValue = e.target.value; }} autoFocus placeholder="Masukkan password..." />)}
+                  {modal.type === 'select' && modal.options && (<select ref={selectRef} className="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-blue-500" onChange={(e) => { if (modal) modal.inputValue = e.target.value; }} defaultValue={modal.options[0]?.value}>{modal.options.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}</select>)}
+                </div>
+                <div className="bg-slate-800/50 p-4 flex gap-3 border-t border-slate-800">
+                  <button onClick={() => setModal(null)} className="flex-1 py-2 rounded-lg text-sm font-medium hover:bg-slate-700 transition-colors text-slate-300">Batal</button>
+                  <button onClick={() => { let val = modal.inputValue; if (modal.type === 'select' && !val && modal.options && modal.options.length > 0) val = modal.options[0].value; modal.onConfirm?.(val); }} className={`flex-1 py-2 rounded-lg text-sm font-medium text-white shadow-lg transition-transform active:scale-95 ${modal.isDanger ? 'bg-red-600 hover:bg-red-500' : 'bg-blue-600 hover:bg-blue-500'}`}>{modal.confirmText || 'OK'}</button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -890,10 +1118,12 @@ const App = () => {
 interface ItemComponentProps {
   item: Item;
   selected: boolean;
+  hasComments?: boolean;
   onClick: (e: React.MouseEvent, item: Item) => void;
   onDoubleClick: (e: React.MouseEvent, item: Item) => void | Promise<void>;
   onContextMenu: (e: React.MouseEvent | React.PointerEvent, item: Item) => void;
   onToggleSelect: () => void;
+  onCommentClick?: () => void;
 }
 
 const ItemOverlay = ({ status }: { status?: string }) => { 
@@ -921,9 +1151,19 @@ const MoreBtn = ({ onTrigger, selected }: { onTrigger: (e: React.MouseEvent | Re
   </button> 
 );
 
-const FolderItem: React.FC<ItemComponentProps & { isRecycleBin?: boolean; isSystem?: boolean; isDropTarget?: boolean }> = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect, isRecycleBin, isSystem, isDropTarget }) => ( <div id={`item-${item.id}`} data-folder-id={item.id} data-item-id={item.id} draggable={false} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} style={{ touchAction: 'pan-y' }} className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col items-center gap-2 item-clickable select-none ${isDropTarget ? 'bg-blue-500/40 border-blue-400 scale-105 shadow-xl ring-2 ring-blue-400 z-30' : selected ? 'bg-blue-500/20 border-blue-500 shadow-md ring-1 ring-blue-500' : 'bg-slate-900 border-slate-800 hover:bg-slate-800 hover:border-slate-600'}`}> <ItemOverlay status={item.status} /> <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/></div> {!isRecycleBin && !isSystem && <MoreBtn onTrigger={(e) => onContextMenu(e, item)} selected={selected} />} {isRecycleBin ? (<Trash2 size={48} className="text-red-500 fill-red-500/10 drop-shadow-md pointer-events-none" />) : isSystem ? (<div className="relative"><Folder size={48} className="text-slate-500 fill-slate-500/10 drop-shadow-md pointer-events-none" /><Lock size={16} className="absolute bottom-0 right-0 text-amber-400 bg-slate-900 rounded-full p-0.5 border border-slate-800" /></div>) : (<Folder size={48} className="text-blue-500 fill-blue-500/10 drop-shadow-md pointer-events-none" />)} <span className={`text-xs font-medium text-center truncate w-full px-1 ${isRecycleBin ? 'text-red-400' : isSystem ? 'text-slate-400' : 'text-slate-200'}`}>{item.name}</span> </div> );
-const NoteItem: React.FC<ItemComponentProps> = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }) => { const isDBFile = item.name.includes(DB_FILENAME_BASE); const cleanText = stripHtml(item.content || item.snippet || "").slice(0, 150); return ( <div id={`item-${item.id}`} data-item-id={item.id} draggable={false} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} style={{ touchAction: 'pan-y' }} className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col gap-2 item-clickable select-none aspect-square shadow-lg hover:shadow-xl hover:-translate-y-1 hover:rotate-1 duration-200 ${selected ? 'bg-yellow-200 border-blue-500 ring-2 ring-blue-500 scale-[1.02] z-10' : isDBFile ? 'bg-slate-800 border-slate-700 hover:border-blue-500/50' : 'bg-[#fff9c4] border-transparent hover:border-yellow-300'}`}> <ItemOverlay status={item.status} /> <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><CheckSquare size={18} className={selected ? "text-blue-600 bg-white rounded shadow-sm" : "text-slate-600/50 hover:text-slate-900"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/></div> <MoreBtn onTrigger={(e) => onContextMenu(e, item)} selected={selected} /> {isDBFile ? (<div className="flex-1 w-full flex flex-col items-center justify-center text-slate-400"><Database size={32} className="mb-2 text-blue-500" /><span className="text-xs font-mono font-bold text-center break-all">{item.name}</span></div>) : (<><div className="flex-1 w-full overflow-hidden flex flex-col"><h4 className="text-sm font-bold text-slate-900 mb-1.5 truncate border-b border-slate-800/10 pb-1">{item.name.replace('.txt', '')}</h4><p className="text-xs text-slate-800/90 leading-relaxed font-sans font-medium break-words whitespace-pre-wrap line-clamp-6">{cleanText || <span className="italic text-slate-500">Kosong...</span>}</p></div><div className="flex items-center justify-between w-full pt-2 mt-auto opacity-50"><FileText size={10} className="text-slate-600" /><span className="text-[9px] text-slate-600">{new Date(item.lastUpdated).toLocaleDateString()}</span></div></>)} </div> ); };
-const ImageItem: React.FC<ItemComponentProps> = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }) => ( <div id={`item-${item.id}`} data-item-id={item.id} draggable={false} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} style={{ touchAction: 'pan-y' }} className={`group relative rounded-xl border transition-all cursor-pointer overflow-hidden aspect-square flex flex-col items-center justify-center bg-slate-950 item-clickable select-none ${selected ? 'border-blue-500 shadow-md ring-1 ring-blue-500' : 'border-slate-800 hover:border-slate-600'}`}> <ItemOverlay status={item.status} /> <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300 shadow-sm"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/></div> <MoreBtn onTrigger={(e) => onContextMenu(e, item)} selected={selected} /> {item.thumbnail || item.url ? (<img src={item.thumbnail || item.url} alt={item.name} className="w-full h-full object-cover pointer-events-none" loading="lazy" referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.style.display = 'none'; e.currentTarget.parentElement?.classList.add('bg-slate-800'); }} />) : (<ImageIcon size={32} className="text-slate-600 pointer-events-none" />)} <div className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm p-1.5 truncate pointer-events-none"><span className="text-[10px] font-medium text-slate-200 block text-center truncate">{item.name}</span></div> </div> );
+const CommentBadge = ({ onClick }: { onClick?: () => void }) => (
+  <button 
+    onClick={(e) => { e.stopPropagation(); onClick?.(); }}
+    className="absolute top-1 left-1 z-30 p-1.5 bg-blue-600 text-white rounded-full shadow-lg hover:bg-blue-500 transition-all hover:scale-110 border border-blue-400/50"
+    title="Lihat Komentar"
+  >
+    <MessageSquare size={12} fill="currentColor"/>
+  </button>
+);
+
+const FolderItem: React.FC<ItemComponentProps & { isRecycleBin?: boolean; isSystem?: boolean; isDropTarget?: boolean }> = ({ item, selected, hasComments, onClick, onDoubleClick, onContextMenu, onToggleSelect, onCommentClick, isRecycleBin, isSystem, isDropTarget }) => ( <div id={`item-${item.id}`} data-folder-id={item.id} data-item-id={item.id} draggable={false} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} style={{ touchAction: 'pan-y' }} className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col items-center gap-2 item-clickable select-none ${isDropTarget ? 'bg-blue-500/40 border-blue-400 scale-105 shadow-xl ring-2 ring-blue-400 z-30' : selected ? 'bg-blue-500/20 border-blue-500 shadow-md ring-1 ring-blue-500' : 'bg-slate-900 border-slate-800 hover:bg-slate-800 hover:border-slate-600'}`}> <ItemOverlay status={item.status} /> {hasComments && <CommentBadge onClick={onCommentClick}/>} <div className={`absolute top-2 left-8 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/></div> {!isRecycleBin && !isSystem && <MoreBtn onTrigger={(e) => onContextMenu(e, item)} selected={selected} />} {isRecycleBin ? (<Trash2 size={48} className="text-red-500 fill-red-500/10 drop-shadow-md pointer-events-none" />) : isSystem ? (<div className="relative"><Folder size={48} className="text-slate-500 fill-slate-500/10 drop-shadow-md pointer-events-none" /><Lock size={16} className="absolute bottom-0 right-0 text-amber-400 bg-slate-900 rounded-full p-0.5 border border-slate-800" /></div>) : (<Folder size={48} className="text-blue-500 fill-blue-500/10 drop-shadow-md pointer-events-none" />)} <span className={`text-xs font-medium text-center truncate w-full px-1 ${isRecycleBin ? 'text-red-400' : isSystem ? 'text-slate-400' : 'text-slate-200'}`}>{item.name}</span> </div> );
+const NoteItem: React.FC<ItemComponentProps> = ({ item, selected, hasComments, onClick, onDoubleClick, onContextMenu, onToggleSelect, onCommentClick }) => { const isDBFile = item.name.includes(DB_FILENAME_BASE); const cleanText = stripHtml(item.content || item.snippet || "").slice(0, 150); return ( <div id={`item-${item.id}`} data-item-id={item.id} draggable={false} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} style={{ touchAction: 'pan-y' }} className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col gap-2 item-clickable select-none aspect-square shadow-lg hover:shadow-xl hover:-translate-y-1 hover:rotate-1 duration-200 ${selected ? 'bg-yellow-200 border-blue-500 ring-2 ring-blue-500 scale-[1.02] z-10' : isDBFile ? 'bg-slate-800 border-slate-700 hover:border-blue-500/50' : 'bg-[#fff9c4] border-transparent hover:border-yellow-300'}`}> <ItemOverlay status={item.status} /> {hasComments && <CommentBadge onClick={onCommentClick}/>} <div className={`absolute top-2 left-8 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><CheckSquare size={18} className={selected ? "text-blue-600 bg-white rounded shadow-sm" : "text-slate-600/50 hover:text-slate-900"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/></div> <MoreBtn onTrigger={(e) => onContextMenu(e, item)} selected={selected} /> {isDBFile ? (<div className="flex-1 w-full flex flex-col items-center justify-center text-slate-400"><Database size={32} className="mb-2 text-blue-500" /><span className="text-xs font-mono font-bold text-center break-all">{item.name}</span></div>) : (<><div className="flex-1 w-full overflow-hidden flex flex-col"><h4 className="text-sm font-bold text-slate-900 mb-1.5 truncate border-b border-slate-800/10 pb-1">{item.name.replace('.txt', '')}</h4><p className="text-xs text-slate-800/90 leading-relaxed font-sans font-medium break-words whitespace-pre-wrap line-clamp-6">{cleanText || <span className="italic text-slate-500">Kosong...</span>}</p></div><div className="flex items-center justify-between w-full pt-2 mt-auto opacity-50"><FileText size={10} className="text-slate-600" /><span className="text-[9px] text-slate-600">{new Date(item.lastUpdated).toLocaleDateString()}</span></div></>)} </div> ); };
+const ImageItem: React.FC<ItemComponentProps> = ({ item, selected, hasComments, onClick, onDoubleClick, onContextMenu, onToggleSelect, onCommentClick }) => ( <div id={`item-${item.id}`} data-item-id={item.id} draggable={false} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} style={{ touchAction: 'pan-y' }} className={`group relative rounded-xl border transition-all cursor-pointer overflow-hidden aspect-square flex flex-col items-center justify-center bg-slate-950 item-clickable select-none ${selected ? 'border-blue-500 shadow-md ring-1 ring-blue-500' : 'border-slate-800 hover:border-slate-600'}`}> <ItemOverlay status={item.status} /> {hasComments && <CommentBadge onClick={onCommentClick}/>} <div className={`absolute top-2 left-8 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300 shadow-sm"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/></div> <MoreBtn onTrigger={(e) => onContextMenu(e, item)} selected={selected} /> {item.thumbnail || item.url ? (<img src={item.thumbnail || item.url} alt={item.name} className="w-full h-full object-cover pointer-events-none" loading="lazy" referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.style.display = 'none'; e.currentTarget.parentElement?.classList.add('bg-slate-800'); }} />) : (<ImageIcon size={32} className="text-slate-600 pointer-events-none" />)} <div className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm p-1.5 truncate pointer-events-none"><span className="text-[10px] font-medium text-slate-200 block text-center truncate">{item.name}</span></div> </div> );
 
 const SelectionFloatingMenu = ({ selectedIds, items, onClear, onSelectAll, onAction, containerRef, isInRecycleBin, recycleBinId, isSystemFolder, systemFolderId }: { selectedIds: Set<string>, items: Item[], onClear: () => void, onSelectAll: () => void, onAction: (a: string) => void, containerRef: React.RefObject<HTMLDivElement>, isInRecycleBin: boolean, recycleBinId: string, isSystemFolder: boolean, systemFolderId: string | null }) => {
     const [pos, setPos] = useState<{top?: number, left?: number, bottom?: number, x?:number}>({ bottom: 24, left: window.innerWidth / 2 }); const [styleType, setStyleType] = useState<'contextual' | 'dock'>('dock'); const menuRef = useRef<HTMLDivElement>(null); 
@@ -949,7 +1189,7 @@ const SelectionFloatingMenu = ({ selectedIds, items, onClear, onSelectAll, onAct
     const dockStyle = "fixed z-[999] transform -translate-x-1/2 flex items-center gap-2 bg-slate-900/90 backdrop-blur-md border border-blue-500/50 p-2 rounded-2xl shadow-2xl shadow-blue-500/10 animate-in zoom-in-95 slide-in-from-bottom-5 duration-200 transition-all max-w-[95vw] overflow-x-auto pointer-events-auto floating-ui"; 
     const contextStyle = "absolute z-[999] transform -translate-x-1/2 flex items-center gap-2 bg-slate-900/90 backdrop-blur-md border border-blue-500/50 p-1.5 rounded-full shadow-2xl shadow-blue-500/20 animate-in fade-in zoom-in-95 duration-150 transition-all duration-300 ease-out max-w-[95vw] overflow-x-auto pointer-events-auto floating-ui"; 
     const isContext = styleType === 'contextual';
-    return ( <div ref={menuRef} className={isContext ? contextStyle : dockStyle} onPointerDown={(e) => e.stopPropagation()} style={{ top: isContext ? pos.top : undefined, left: isContext ? pos.left : '50%', bottom: isContext ? undefined : pos.bottom }}> <div className={`flex items-center gap-2 ${isContext ? 'px-2' : 'px-3 border-r border-white/10 mr-1'}`}><span className="font-bold text-sm text-blue-100">{selectedIds.size}</span><button onClick={(e) => { e.stopPropagation(); onClear(); }} className="p-1.5 hover:bg-white/10 rounded-full transition-colors"><X size={14} /></button><button onClick={(e) => { e.stopPropagation(); onSelectAll(); }} className="p-1.5 hover:bg-white/10 hover:text-blue-400 rounded-full transition-colors" title="Select All in Category"><CheckCheck size={14} /></button></div> {isRecycleBinFolderSelected ? (<span className="px-2 text-xs text-slate-400 font-medium">System Folder</span>) : isSystemFolderSelected ? (<span className="px-2 text-xs text-amber-500 font-medium flex items-center gap-1"><Lock size={12}/> Protected</span>) : isInRecycleBin ? (<> <button onClick={(e) => { e.stopPropagation(); onAction('restore'); }} className="p-2.5 hover:bg-green-500/20 hover:text-green-400 rounded-lg transition-colors tooltip" title="Restore"><RotateCcw size={18}/></button><div className="w-px h-6 bg-white/10 mx-1"></div><button onClick={(e) => { e.stopPropagation(); onAction('delete_permanent'); }} className="p-2.5 hover:bg-red-500/20 text-red-400 hover:text-red-300 rounded-lg transition-colors tooltip" title="Delete Permanently"><Ban size={18}/></button> </>) : isSystemFolder ? (<> <button onClick={(e) => { e.stopPropagation(); onAction('download'); }} className="p-2.5 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Download"><Download size={18}/></button> {singleSelectedItem && singleSelectedItem.type === 'image' && (<button onClick={(e) => { e.stopPropagation(); onAction('copy_image'); }} className="p-2.5 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Copy Image"><Image size={18}/></button>)} <div className="px-3 py-2 text-xs text-amber-500/70 italic flex items-center gap-1"><Lock size={12}/> Read-Only</div> </>) : (<> <button onClick={(e) => { e.stopPropagation(); onAction('duplicate'); }} className="p-2.5 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Duplicate"><Copy size={18}/></button><button onClick={(e) => { e.stopPropagation(); onAction('move'); }} className="p-2.5 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Move"><Move size={18}/></button>{selectedIds.size === 1 && <button onClick={(e) => { e.stopPropagation(); onAction('rename'); }} className="p-2.5 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Rename"><Edit size={18}/></button>}<button onClick={(e) => { e.stopPropagation(); onAction('download'); }} className="p-2.5 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Download"><Download size={18}/></button><div className="w-px h-6 bg-white/10 mx-1"></div><button onClick={(e) => { e.stopPropagation(); onAction('delete'); }} className="p-2.5 hover:bg-red-500/20 text-red-400 hover:text-red-300 rounded-lg transition-colors tooltip" title="Delete"><Trash2 size={18}/></button> </>) } </div> );
+    return ( <div ref={menuRef} className={isContext ? contextStyle : dockStyle} onPointerDown={(e) => e.stopPropagation()} style={{ top: isContext ? pos.top : undefined, left: isContext ? pos.left : '50%', bottom: isContext ? undefined : pos.bottom }}> <div className={`flex items-center gap-2 ${isContext ? 'px-2' : 'px-3 border-r border-white/10 mr-1'}`}><span className="font-bold text-sm text-blue-100">{selectedIds.size}</span><button onClick={(e) => { e.stopPropagation(); onClear(); }} className="p-1.5 hover:bg-white/10 rounded-full transition-colors"><X size={14} /></button><button onClick={(e) => { e.stopPropagation(); onSelectAll(); }} className="p-1.5 hover:bg-white/10 hover:text-blue-400 rounded-full transition-colors" title="Select All in Category"><CheckCheck size={14} /></button></div> {isRecycleBinFolderSelected ? (<span className="px-2 text-xs text-slate-400 font-medium">System Folder</span>) : isSystemFolderSelected ? (<span className="px-2 text-xs text-amber-500 font-medium flex items-center gap-1"><Lock size={12}/> Protected</span>) : isInRecycleBin ? (<> <button onClick={(e) => { e.stopPropagation(); onAction('restore'); }} className="p-2.5 hover:bg-green-500/20 hover:text-green-400 rounded-lg transition-colors tooltip" title="Restore"><RotateCcw size={18}/></button><div className="w-px h-6 bg-white/10 mx-1"></div><button onClick={(e) => { e.stopPropagation(); onAction('delete_permanent'); }} className="p-2.5 hover:bg-red-500/20 text-red-400 hover:text-red-300 rounded-lg transition-colors tooltip" title="Delete Permanently"><Ban size={18}/></button> </>) : isSystemFolder ? (<> <button onClick={(e) => { e.stopPropagation(); onAction('comment'); }} className="p-2.5 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Comment"><MessageSquare size={18}/></button><button onClick={(e) => { e.stopPropagation(); onAction('download'); }} className="p-2.5 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Download"><Download size={18}/></button> {singleSelectedItem && singleSelectedItem.type === 'image' && (<button onClick={(e) => { e.stopPropagation(); onAction('copy_image'); }} className="p-2.5 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Copy Image"><Image size={18}/></button>)} <div className="px-3 py-2 text-xs text-amber-500/70 italic flex items-center gap-1"><Lock size={12}/> Read-Only</div> </>) : (<> <button onClick={(e) => { e.stopPropagation(); onAction('comment'); }} className="p-2.5 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Comment"><MessageSquare size={18}/></button><button onClick={(e) => { e.stopPropagation(); onAction('duplicate'); }} className="p-2.5 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Duplicate"><Copy size={18}/></button><button onClick={(e) => { e.stopPropagation(); onAction('move'); }} className="p-2.5 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Move"><Move size={18}/></button>{selectedIds.size === 1 && <button onClick={(e) => { e.stopPropagation(); onAction('rename'); }} className="p-2.5 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Rename"><Edit size={18}/></button>}<button onClick={(e) => { e.stopPropagation(); onAction('download'); }} className="p-2.5 hover:bg-blue-500/20 hover:text-blue-400 rounded-lg transition-colors tooltip" title="Download"><Download size={18}/></button><div className="w-px h-6 bg-white/10 mx-1"></div><button onClick={(e) => { e.stopPropagation(); onAction('delete'); }} className="p-2.5 hover:bg-red-500/20 text-red-400 hover:text-red-300 rounded-lg transition-colors tooltip" title="Delete"><Trash2 size={18}/></button> </>) } </div> );
 };
 
 export default App;
