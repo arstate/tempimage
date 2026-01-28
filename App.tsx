@@ -106,18 +106,26 @@ const App = () => {
     return () => { document.body.style.overflow = ''; };
   }, [previewImage]);
 
+  // --- CLOUD SYNC LOGIC (ROBUST) ---
   const triggerCloudSync = useCallback(() => {
+      // Logic: Save current map to local DB immediately, then queue cloud save
+      DB.saveSystemMap({ fileId: dbFileId, map: systemMapRef.current, lastSync: Date.now() });
+
       if (!dbFileId) return;
+      
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
       setIsSavingDB(true);
+      
       saveTimeoutRef.current = setTimeout(async () => {
           try {
               // OVERWRITE: Always use dbFileId to overwrite existing cloud file
               await API.updateSystemDBFile(dbFileId, systemMapRef.current);
               setIsSavingDB(false);
-              await DB.saveSystemMap({ fileId: dbFileId, map: systemMapRef.current, lastSync: Date.now() });
-          } catch (e) { setIsSavingDB(false); }
-      }, 2000); 
+          } catch (e) { 
+            console.error("Cloud Sync Failed", e);
+            setIsSavingDB(false); 
+          }
+      }, 3000); // 3 seconds debounce
   }, [dbFileId]);
 
   const triggerCommentSync = useCallback(() => {
@@ -126,7 +134,6 @@ const App = () => {
     setIsSavingComments(true);
     commentSaveTimeoutRef.current = setTimeout(async () => {
         try {
-            // OVERWRITE: Always use commentFileId to overwrite existing cloud file
             await API.updateCommentDBFile(commentFileId, commentsRef.current);
             setIsSavingComments(false);
             await DB.saveCommentsCache(commentsRef.current);
@@ -142,6 +149,7 @@ const App = () => {
             if (!isSavingDB) {
                 const content = await API.getFileContent(dbFileId);
                 const remoteMap = JSON.parse(content);
+                // Simple comparison
                 if (JSON.stringify(remoteMap) !== JSON.stringify(systemMapRef.current)) {
                     systemMapRef.current = remoteMap;
                     setSystemMap(remoteMap);
@@ -149,20 +157,12 @@ const App = () => {
                     if (activeFolderIdRef.current !== undefined) loadFolder(activeFolderIdRef.current);
                 }
             }
-            if (!isSavingComments && commentFileId) {
-                const content = await API.getFileContent(commentFileId);
-                const remoteComments = JSON.parse(content);
-                if (JSON.stringify(remoteComments) !== JSON.stringify(commentsRef.current)) {
-                  commentsRef.current = remoteComments;
-                  setComments(remoteComments);
-                  await DB.saveCommentsCache(remoteComments);
-                }
-            }
         } catch (e) {}
-    }, 30000); 
+    }, 60000); // Check every 60s
     return () => clearInterval(interval);
-  }, [isSystemInitialized, dbFileId, commentFileId, isSavingDB, isSavingComments]);
+  }, [isSystemInitialized, dbFileId, isSavingDB]);
 
+  // --- INITIALIZATION ---
   useEffect(() => {
     const initSystem = async () => {
        try {
@@ -191,6 +191,8 @@ const App = () => {
                try {
                    const content = await API.getFileContent(currentDbFileId);
                    finalMap = JSON.parse(content);
+                   // Ensure root exists
+                   if (!finalMap["root"]) finalMap["root"] = { id: "root", name: "Home", parentId: "" };
                } catch(e) { console.error("Failed to parse cloud DB", e); }
            } else {
                setGlobalLoadingMessage("Inisialisasi Database...");
@@ -230,15 +232,30 @@ const App = () => {
                let parentSearchId = "root"; 
                let foundId = "";
                const traceHistory: {id:string, name:string}[] = [];
+               
+               // Robust Path Traversal
                for (const segment of path) {
                    const decodedName = decodeURIComponent(segment);
+                   // Case-insensitive search in map
                    const entryId = Object.keys(finalMap).find(key => {
                        const node = finalMap[key];
-                       return node.name === decodedName && (node.parentId || "root") === parentSearchId;
+                       return node.name.toLowerCase() === decodedName.toLowerCase() && 
+                              (node.parentId || "root") === parentSearchId;
                    });
-                   if (entryId) { parentSearchId = entryId; traceHistory.push({ id: entryId, name: decodedName }); foundId = entryId; } 
+
+                   if (entryId) { 
+                       parentSearchId = entryId; 
+                       traceHistory.push({ id: entryId, name: finalMap[entryId].name }); // Use name from map for correctness
+                       foundId = entryId; 
+                   } else {
+                       break; // Stop if path breaks
+                   }
                }
-               if (foundId) { setFolderHistory(traceHistory); setCurrentFolderId(foundId); }
+               
+               if (foundId) { 
+                   setFolderHistory(traceHistory); 
+                   setCurrentFolderId(foundId); 
+               }
            }
        } catch (err) { 
            console.error("System Init Error:", err);
@@ -250,27 +267,47 @@ const App = () => {
     initSystem();
   }, []);
 
+  // --- URL HASH UPDATER ---
   useEffect(() => {
     if (!isSystemInitialized || isNotFound) return;
+    
+    // Generate Hash from History
     const pathSegments = folderHistory.map(f => encodeURIComponent(f.name));
-    const newHash = pathSegments.length > 0 ? '/' + pathSegments.join('/') : '';
-    if (window.location.hash !== `#${newHash}`) { window.history.replaceState(null, '', `#${newHash}`); }
+    const newHash = pathSegments.length > 0 ? '/' + pathSegments.join('/') : '/';
+    
+    if (window.location.hash !== `#${newHash}`) { 
+        window.history.replaceState(null, '', `#${newHash}`); 
+    }
   }, [currentFolderId, folderHistory, isSystemInitialized, isNotFound]);
 
+  // --- SYSTEM MAP UPDATE LOGIC ---
   const updateMap = (action: 'add' | 'remove' | 'update' | 'move', updateItems: {id: string, name?: string, parentId?: string}[]) => {
       const nextMap = { ...systemMapRef.current };
+      
       updateItems.forEach(item => {
           if (action === 'add' || action === 'update') {
               if (item.name) {
+                  // Merge with existing to preserve keys if partial update
                   const existing = nextMap[item.id];
-                  nextMap[item.id] = { id: item.id, name: item.name, parentId: item.parentId !== undefined ? item.parentId : (existing?.parentId || "root") };
+                  nextMap[item.id] = { 
+                      id: item.id, 
+                      name: item.name, 
+                      parentId: item.parentId !== undefined ? item.parentId : (existing?.parentId || "root") 
+                  };
               }
-          } else if (action === 'remove') delete nextMap[item.id];
-          else if (action === 'move') { if (nextMap[item.id] && item.parentId !== undefined) nextMap[item.id] = { ...nextMap[item.id], parentId: item.parentId }; }
+          } else if (action === 'remove') {
+              delete nextMap[item.id];
+          } else if (action === 'move') { 
+              if (nextMap[item.id] && item.parentId !== undefined) {
+                  nextMap[item.id] = { ...nextMap[item.id], parentId: item.parentId }; 
+              }
+          }
       });
+
       systemMapRef.current = nextMap;
       setSystemMap(nextMap);
-      DB.saveSystemMap({ fileId: dbFileId, map: nextMap, lastSync: Date.now() });
+      
+      // Force Cloud Sync
       triggerCloudSync();
   };
 
@@ -303,29 +340,47 @@ const App = () => {
   const loadFolder = useCallback(async (folderId: string = "") => {
     setItems([]); setSelectedIds(new Set()); setLastSelectedId(null);
     let cachedItems: Item[] | null = null;
+    
+    // Load Cache First
     try { if (folderId === activeFolderIdRef.current) cachedItems = await DB.getCachedFolder(folderId); } catch (e) {}
     if (folderId !== activeFolderIdRef.current) return;
     if (cachedItems !== null) setItems(cachedItems); else setLoading(true);
+    
     try {
       const res = await API.getFolderContents(folderId);
       if (folderId !== activeFolderIdRef.current) return;
       setLoading(false);
+      
       if (res.status === 'success') {
         const freshItems: Item[] = (Array.isArray(res.data) ? res.data : []);
         setParentFolderId(res.parentFolderId || ""); 
+        
         freshItems.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
+        
         if (folderId === "") {
             const bin = freshItems.find(i => i.name === RECYCLE_BIN_NAME && i.type === 'folder');
             if (bin) setRecycleBinId(bin.id);
         }
+
         const mergedItems = freshItems.map(newItem => {
             const cachedItem = cachedItems?.find(c => c.id === newItem.id);
             if (cachedItem && cachedItem.content && newItem.type === 'note') return { ...newItem, content: cachedItem.content };
             return newItem;
         });
+
         setItems(mergedItems);
+
+        // --- CRITICAL: UPDATE SYSTEM MAP WITH FOUND FOLDERS ---
+        // This ensures the database link domain updates every time we browse
         const folders = freshItems.filter(i => i.type === 'folder');
-        if (folders.length > 0) updateMap('add', folders.map(f => ({ id: f.id, name: f.name, parentId: folderId || "root" })));
+        if (folders.length > 0) {
+            updateMap('add', folders.map(f => ({ 
+                id: f.id, 
+                name: f.name, 
+                parentId: folderId || "root" 
+            })));
+        }
+
         await DB.cacheFolderContents(folderId, mergedItems);
         const notesMissingContent = mergedItems.filter(i => i.type === 'note' && !i.content);
         prefetchNoteContents(folderId, notesMissingContent);
@@ -1199,3 +1254,4 @@ const SelectionFloatingMenu = ({ selectedIds, items, onClear, onSelectAll, onAct
 };
 
 export default App;
+    
