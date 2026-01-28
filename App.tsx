@@ -64,6 +64,8 @@ const App = () => {
   const [isNotFound, setIsNotFound] = useState(false); 
   const [isSavingDB, setIsSavingDB] = useState(false);
   const [isSavingComments, setIsSavingComments] = useState(false);
+  const [isRefreshingComments, setIsRefreshingComments] = useState(false);
+  const [isPostingComment, setIsPostingComment] = useState(false);
   const saveTimeoutRef = useRef<any>(null);
   const commentSaveTimeoutRef = useRef<any>(null);
   const [isGlobalLoading, setIsGlobalLoading] = useState(true); 
@@ -101,47 +103,69 @@ const App = () => {
   useEffect(() => { activeFolderIdRef.current = currentFolderId; }, [currentFolderId]);
 
   useEffect(() => {
-    if (previewImage) document.body.style.overflow = 'hidden';
+    if (previewImage || modal) document.body.style.overflow = 'hidden';
     else document.body.style.overflow = '';
     return () => { document.body.style.overflow = ''; };
-  }, [previewImage]);
+  }, [previewImage, modal]);
 
   // --- CLOUD SYNC LOGIC (ROBUST) ---
   const triggerCloudSync = useCallback(() => {
-      // Logic: Save current map to local DB immediately, then queue cloud save
       DB.saveSystemMap({ fileId: dbFileId, map: systemMapRef.current, lastSync: Date.now() });
-
       if (!dbFileId) return;
-      
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
       setIsSavingDB(true);
-      
       saveTimeoutRef.current = setTimeout(async () => {
           try {
-              // OVERWRITE: Always use dbFileId to overwrite existing cloud file
               await API.updateSystemDBFile(dbFileId, systemMapRef.current);
               setIsSavingDB(false);
           } catch (e) { 
             console.error("Cloud Sync Failed", e);
             setIsSavingDB(false); 
           }
-      }, 3000); // 3 seconds debounce
+      }, 3000);
   }, [dbFileId]);
 
-  const triggerCommentSync = useCallback(() => {
+  const triggerCommentSync = useCallback(async (immediate = false) => {
     if (!commentFileId) return;
     if (commentSaveTimeoutRef.current) clearTimeout(commentSaveTimeoutRef.current);
-    setIsSavingComments(true);
-    commentSaveTimeoutRef.current = setTimeout(async () => {
-        try {
-            await API.updateCommentDBFile(commentFileId, commentsRef.current);
-            setIsSavingComments(false);
-            await DB.saveCommentsCache(commentsRef.current);
-        } catch (e) { setIsSavingComments(false); }
-    }, 2000);
+    
+    const doSync = async () => {
+      try {
+        setIsSavingComments(true);
+        await API.updateCommentDBFile(commentFileId, commentsRef.current);
+        await DB.saveCommentsCache(commentsRef.current);
+      } catch (e) {
+        console.error("Comment Sync Error:", e);
+      } finally {
+        setIsSavingComments(false);
+      }
+    };
+
+    if (immediate) {
+      await doSync();
+    } else {
+      commentSaveTimeoutRef.current = setTimeout(doSync, 2000);
+    }
   }, [commentFileId]);
 
-  // Real-time interval check for cloud updates (from other devices)
+  const handleRefreshComments = useCallback(async () => {
+    if (!commentFileId) return;
+    setIsRefreshingComments(true);
+    try {
+      const content = await API.getFileContent(commentFileId);
+      const remoteComments = JSON.parse(content);
+      commentsRef.current = remoteComments;
+      setComments(remoteComments);
+      await DB.saveCommentsCache(remoteComments);
+    } catch (e) {
+      console.error("Failed to refresh comments:", e);
+      addNotification("Gagal memuat komentar terbaru", "error");
+    } finally {
+      setIsRefreshingComments(false);
+    }
+  }, [commentFileId]);
+
+  // Real-time interval check for cloud updates
   useEffect(() => {
     if (!isSystemInitialized || !dbFileId || isSavingDB) return;
     const interval = setInterval(async () => {
@@ -149,7 +173,6 @@ const App = () => {
             if (!isSavingDB) {
                 const content = await API.getFileContent(dbFileId);
                 const remoteMap = JSON.parse(content);
-                // Simple comparison
                 if (JSON.stringify(remoteMap) !== JSON.stringify(systemMapRef.current)) {
                     systemMapRef.current = remoteMap;
                     setSystemMap(remoteMap);
@@ -158,7 +181,7 @@ const App = () => {
                 }
             }
         } catch (e) {}
-    }, 60000); // Check every 60s
+    }, 60000);
     return () => clearInterval(interval);
   }, [isSystemInitialized, dbFileId, isSavingDB]);
 
@@ -168,8 +191,6 @@ const App = () => {
        try {
            setIsGlobalLoading(true);
            setGlobalLoadingMessage("Mencari Folder System...");
-           
-           // 1. Locate System folder and files on Drive FIRST (Avoid device conflict)
            const cloudLocation = await API.locateSystemDB();
            let sysFolderId = cloudLocation.systemFolderId;
            let currentDbFileId = cloudLocation.fileId; 
@@ -178,20 +199,17 @@ const App = () => {
            let finalMap: FolderMap = { "root": { id: "root", name: "Home", parentId: "" } };
            let finalComments: CommentDB = {};
 
-           // 2. Create System Folder if truly missing on Drive
            if (!sysFolderId) {
                setGlobalLoadingMessage("Membuat Folder System Baru...");
                sysFolderId = await API.createSystemFolder();
            }
            setSystemFolderId(sysFolderId);
 
-           // 3. Sync Database File
            if (currentDbFileId) {
                setGlobalLoadingMessage("Mengunduh Database Utama...");
                try {
                    const content = await API.getFileContent(currentDbFileId);
                    finalMap = JSON.parse(content);
-                   // Ensure root exists
                    if (!finalMap["root"]) finalMap["root"] = { id: "root", name: "Home", parentId: "" };
                } catch(e) { console.error("Failed to parse cloud DB", e); }
            } else {
@@ -199,7 +217,6 @@ const App = () => {
                currentDbFileId = await API.createSystemDBFile(finalMap, sysFolderId);
            }
 
-           // 4. Sync Comment File
            if (currentCommentFileId) {
                setGlobalLoadingMessage("Mengunduh Komentar...");
                try {
@@ -211,7 +228,6 @@ const App = () => {
                currentCommentFileId = await API.createCommentDBFile(finalComments, sysFolderId);
            }
 
-           // 5. Update Local State and IndexedDB Cache
            systemMapRef.current = finalMap;
            setSystemMap(finalMap);
            setDbFileId(currentDbFileId);
@@ -225,7 +241,6 @@ const App = () => {
 
            setIsSystemInitialized(true);
            
-           // Handle Hash Deep Linking
            const hash = window.location.hash.replace(/^#/, ''); 
            if (hash && hash !== '/') {
                const path = hash.split('/').filter(p => p);
@@ -233,10 +248,8 @@ const App = () => {
                let foundId = "";
                const traceHistory: {id:string, name:string}[] = [];
                
-               // Robust Path Traversal
                for (const segment of path) {
                    const decodedName = decodeURIComponent(segment);
-                   // Case-insensitive search in map
                    const entryId = Object.keys(finalMap).find(key => {
                        const node = finalMap[key];
                        return node.name.toLowerCase() === decodedName.toLowerCase() && 
@@ -245,10 +258,10 @@ const App = () => {
 
                    if (entryId) { 
                        parentSearchId = entryId; 
-                       traceHistory.push({ id: entryId, name: finalMap[entryId].name }); // Use name from map for correctness
+                       traceHistory.push({ id: entryId, name: finalMap[entryId].name });
                        foundId = entryId; 
                    } else {
-                       break; // Stop if path breaks
+                       break; 
                    }
                }
                
@@ -270,11 +283,8 @@ const App = () => {
   // --- URL HASH UPDATER ---
   useEffect(() => {
     if (!isSystemInitialized || isNotFound) return;
-    
-    // Generate Hash from History
     const pathSegments = folderHistory.map(f => encodeURIComponent(f.name));
     const newHash = pathSegments.length > 0 ? '/' + pathSegments.join('/') : '/';
-    
     if (window.location.hash !== `#${newHash}`) { 
         window.history.replaceState(null, '', `#${newHash}`); 
     }
@@ -283,11 +293,9 @@ const App = () => {
   // --- SYSTEM MAP UPDATE LOGIC ---
   const updateMap = (action: 'add' | 'remove' | 'update' | 'move', updateItems: {id: string, name?: string, parentId?: string}[]) => {
       const nextMap = { ...systemMapRef.current };
-      
       updateItems.forEach(item => {
           if (action === 'add' || action === 'update') {
               if (item.name) {
-                  // Merge with existing to preserve keys if partial update
                   const existing = nextMap[item.id];
                   nextMap[item.id] = { 
                       id: item.id, 
@@ -303,11 +311,8 @@ const App = () => {
               }
           }
       });
-
       systemMapRef.current = nextMap;
       setSystemMap(nextMap);
-      
-      // Force Cloud Sync
       triggerCloudSync();
   };
 
@@ -340,8 +345,6 @@ const App = () => {
   const loadFolder = useCallback(async (folderId: string = "") => {
     setItems([]); setSelectedIds(new Set()); setLastSelectedId(null);
     let cachedItems: Item[] | null = null;
-    
-    // Load Cache First
     try { if (folderId === activeFolderIdRef.current) cachedItems = await DB.getCachedFolder(folderId); } catch (e) {}
     if (folderId !== activeFolderIdRef.current) return;
     if (cachedItems !== null) setItems(cachedItems); else setLoading(true);
@@ -354,33 +357,21 @@ const App = () => {
       if (res.status === 'success') {
         const freshItems: Item[] = (Array.isArray(res.data) ? res.data : []);
         setParentFolderId(res.parentFolderId || ""); 
-        
         freshItems.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
-        
         if (folderId === "") {
             const bin = freshItems.find(i => i.name === RECYCLE_BIN_NAME && i.type === 'folder');
             if (bin) setRecycleBinId(bin.id);
         }
-
         const mergedItems = freshItems.map(newItem => {
             const cachedItem = cachedItems?.find(c => c.id === newItem.id);
             if (cachedItem && cachedItem.content && newItem.type === 'note') return { ...newItem, content: cachedItem.content };
             return newItem;
         });
-
         setItems(mergedItems);
-
-        // --- CRITICAL: UPDATE SYSTEM MAP WITH FOUND FOLDERS ---
-        // This ensures the database link domain updates every time we browse
         const folders = freshItems.filter(i => i.type === 'folder');
         if (folders.length > 0) {
-            updateMap('add', folders.map(f => ({ 
-                id: f.id, 
-                name: f.name, 
-                parentId: folderId || "root" 
-            })));
+            updateMap('add', folders.map(f => ({ id: f.id, name: f.name, parentId: folderId || "root" })));
         }
-
         await DB.cacheFolderContents(folderId, mergedItems);
         const notesMissingContent = mergedItems.filter(i => i.type === 'note' && !i.content);
         prefetchNoteContents(folderId, notesMissingContent);
@@ -409,7 +400,6 @@ const App = () => {
      const itemRow = target.closest('[data-item-id]');
      dragStartPos.current = { x: e.clientX, y: e.clientY };
      if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
-     
      if (checkbox && itemRow) {
          e.stopPropagation();
          const id = itemRow.getAttribute('data-item-id');
@@ -474,10 +464,8 @@ const App = () => {
 
   const handlePointerUp = async (e: React.PointerEvent) => {
       if (longPressTimerRef.current) { clearTimeout(longPressTimerRef.current); longPressTimerRef.current = null; }
-      
       const currentDrag = customDragItem;
       const targetId = dropTargetId;
-
       setCustomDragItem(null);
       setCustomDragPos(null);
       setDropTargetId(null);
@@ -486,7 +474,6 @@ const App = () => {
       dragStartPos.current = null;
       isPaintingRef.current = false;
       if (containerRef.current) { try { containerRef.current.releasePointerCapture(e.pointerId); } catch(err) {} }
-
       if (currentDrag && targetId) {
           if (targetId === systemFolderId) {
               addNotification("Tidak bisa memindahkan ke Folder System", "error");
@@ -570,7 +557,6 @@ const App = () => {
     e.preventDefault();
     const x = (e as any).pageX || (e as any).clientX;
     const y = (e as any).pageY || (e as any).clientY;
-    
     if (item) { 
       if (!selectedIds.has(item.id)) { setSelectedIds(new Set([item.id])); setLastSelectedId(item.id); } 
       setContextMenu({ x, y, targetItem: item }); 
@@ -583,10 +569,12 @@ const App = () => {
     }
   };
 
-  const handleAddComment = () => {
+  const handleAddComment = async () => {
     if (!commentName.trim() || !commentText.trim() || !modal?.targetItem) return;
     
+    setIsPostingComment(true);
     localStorage.setItem('zombio_comment_name', commentName);
+    
     const newComment: Comment = {
       id: Date.now().toString(),
       itemId: modal.targetItem.id,
@@ -602,9 +590,17 @@ const App = () => {
     
     commentsRef.current = nextComments;
     setComments(nextComments);
-    setCommentText('');
-    setReplyingTo(null);
-    triggerCommentSync();
+    
+    try {
+      await triggerCommentSync(true); // Immediate sync
+      setCommentText('');
+      setReplyingTo(null);
+      addNotification("Komentar terkirim", "success");
+    } catch (e) {
+      addNotification("Gagal mengirim komentar", "error");
+    } finally {
+      setIsPostingComment(false);
+    }
   };
 
   const downloadWithProgress = async (url: string, name: string, isImage: boolean) => {
@@ -701,6 +697,7 @@ const App = () => {
           case 'comment':
             const target = items.find(i => i.id === ids[0]);
             if (target) {
+              await handleRefreshComments();
               setModal({ type: 'comment', title: `Komentar: ${target.name}`, targetItem: target });
             }
             break;
@@ -870,12 +867,10 @@ const App = () => {
                           itemsToRestore = res.data as Item[];
                       }
                   }
-                  
                   if (itemsToRestore.length === 0) { 
                       updateNotification(notifRA, 'Recycle Bin sudah kosong', 'success'); 
                       return; 
                   }
-                  
                   const restoreMap: Record<string, string[]> = {}; 
                   for (const itemToRestore of itemsToRestore) {
                       const op = await DB.getDeletedMeta(itemToRestore.id);
@@ -883,7 +878,6 @@ const App = () => {
                       if (!restoreMap[target]) restoreMap[target] = [];
                       restoreMap[target].push(itemToRestore.id);
                   }
-                  
                   for (const [tf, iids] of Object.entries(restoreMap)) {
                       await API.moveItems(iids, tf);
                       const foldersRestored = itemsToRestore.filter((i: Item) => iids.includes(i.id) && i.type === 'folder');
@@ -1022,9 +1016,9 @@ const App = () => {
             </div>
         ) : (
             <>
-                {groupedItems.folders.length > 0 && ( <section><div className="flex items-center gap-3 mb-4"><h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2"><Folder size={14}/> Folders</h2><div className="h-px bg-slate-800 flex-1"></div></div><div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">{groupedItems.folders.map(item => (<FolderItem key={item.id} item={item} hasComments={(comments[item.id]?.length || 0) > 0} isRecycleBin={item.id === recycleBinId} isSystem={item.id === systemFolderId || item.name === SYSTEM_FOLDER_NAME} selected={selectedIds.has(item.id)} isDropTarget={dropTargetId === item.id} onClick={handleItemClick} onDoubleClick={handleItemDoubleClick} onContextMenu={handleContextMenu} onToggleSelect={() => handleToggleSelect(item.id)} onCommentClick={() => setModal({ type: 'comment', title: `Komentar: ${item.name}`, targetItem: item })} />))}</div></section> )}
-                {groupedItems.notes.length > 0 && ( <section><div className="flex items-center gap-3 mb-4 mt-8"><h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2"><FileText size={14}/> Notes</h2><div className="h-px bg-slate-800 flex-1"></div></div><div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">{groupedItems.notes.map(item => (<NoteItem key={item.id} item={item} hasComments={(comments[item.id]?.length || 0) > 0} selected={selectedIds.has(item.id)} onClick={handleItemClick} onDoubleClick={handleItemDoubleClick} onContextMenu={handleContextMenu} onToggleSelect={() => handleToggleSelect(item.id)} onCommentClick={() => setModal({ type: 'comment', title: `Komentar: ${item.name}`, targetItem: item })} />))}</div></section> )}
-                {groupedItems.images.length > 0 && ( <section><div className="flex items-center gap-3 mb-4 mt-8"><h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2"><ImageIcon size={14}/> Images</h2><div className="h-px bg-slate-800 flex-1"></div></div><div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">{groupedItems.images.map(item => (<ImageItem key={item.id} item={item} hasComments={(comments[item.id]?.length || 0) > 0} selected={selectedIds.has(item.id)} onClick={handleItemClick} onDoubleClick={handleItemDoubleClick} onContextMenu={handleContextMenu} onToggleSelect={() => handleToggleSelect(item.id)} onCommentClick={() => setModal({ type: 'comment', title: `Komentar: ${item.name}`, targetItem: item })} />))}</div></section> )}
+                {groupedItems.folders.length > 0 && ( <section><div className="flex items-center gap-3 mb-4"><h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2"><Folder size={14}/> Folders</h2><div className="h-px bg-slate-800 flex-1"></div></div><div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">{groupedItems.folders.map(item => (<FolderItem key={item.id} item={item} hasComments={(comments[item.id]?.length || 0) > 0} isRecycleBin={item.id === recycleBinId} isSystem={item.id === systemFolderId || item.name === SYSTEM_FOLDER_NAME} selected={selectedIds.has(item.id)} isDropTarget={dropTargetId === item.id} onClick={handleItemClick} onDoubleClick={handleItemDoubleClick} onContextMenu={handleContextMenu} onToggleSelect={() => handleToggleSelect(item.id)} onCommentClick={async () => { await handleRefreshComments(); setModal({ type: 'comment', title: `Komentar: ${item.name}`, targetItem: item }); }} />))}</div></section> )}
+                {groupedItems.notes.length > 0 && ( <section><div className="flex items-center gap-3 mb-4 mt-8"><h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2"><FileText size={14}/> Notes</h2><div className="h-px bg-slate-800 flex-1"></div></div><div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">{groupedItems.notes.map(item => (<NoteItem key={item.id} item={item} hasComments={(comments[item.id]?.length || 0) > 0} selected={selectedIds.has(item.id)} onClick={handleItemClick} onDoubleClick={handleItemDoubleClick} onContextMenu={handleContextMenu} onToggleSelect={() => handleToggleSelect(item.id)} onCommentClick={async () => { await handleRefreshComments(); setModal({ type: 'comment', title: `Komentar: ${item.name}`, targetItem: item }); }} />))}</div></section> )}
+                {groupedItems.images.length > 0 && ( <section><div className="flex items-center gap-3 mb-4 mt-8"><h2 className="text-xs font-bold text-slate-400 uppercase tracking-widest flex items-center gap-2"><ImageIcon size={14}/> Images</h2><div className="h-px bg-slate-800 flex-1"></div></div><div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3">{groupedItems.images.map(item => (<ImageItem key={item.id} item={item} hasComments={(comments[item.id]?.length || 0) > 0} selected={selectedIds.has(item.id)} onClick={handleItemClick} onDoubleClick={handleItemDoubleClick} onContextMenu={handleContextMenu} onToggleSelect={() => handleToggleSelect(item.id)} onCommentClick={async () => { await handleRefreshComments(); setModal({ type: 'comment', title: `Komentar: ${item.name}`, targetItem: item }); }} />))}</div></section> )}
             </>
         )}
       </main>
@@ -1044,34 +1038,61 @@ const App = () => {
       {/* --- MODAL SYSTEM --- */}
       {modal && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm animate-in fade-in" onClick={() => { setModal(null); setReplyingTo(null); }} />
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm animate-in fade-in" onClick={() => { if (!isPostingComment) { setModal(null); setReplyingTo(null); } }} />
           
           <div className={`relative w-full ${modal.type === 'comment' ? 'max-w-2xl' : 'max-w-sm'} bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95`}>
             
             {/* COMMENT UI */}
             {modal.type === 'comment' ? (
-              <div className="flex flex-col h-[80vh] md:h-[600px] comment-area">
+              <div className="flex flex-col h-[80vh] md:h-[600px] comment-area relative">
+                {/* POSTING OVERLAY */}
+                {isPostingComment && (
+                  <div className="absolute inset-0 z-[100] bg-slate-950/60 backdrop-blur-sm flex flex-col items-center justify-center animate-in fade-in">
+                    <Loader2 size={40} className="animate-spin text-blue-500 mb-3" />
+                    <p className="text-white font-bold tracking-widest text-sm uppercase">Memposting Komentar...</p>
+                    <p className="text-slate-400 text-xs mt-1 italic">Tunggu hingga tersinkron ke cloud</p>
+                  </div>
+                )}
+
                 <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950">
-                  <h3 className="text-lg font-bold flex items-center gap-2"><MessageSquare className="text-blue-400" size={20}/> {modal.title}</h3>
-                  <button onClick={() => { setModal(null); setReplyingTo(null); }} className="p-2 hover:bg-slate-800 rounded-lg text-slate-400"><X size={20}/></button>
+                  <div className="flex items-center gap-3">
+                    <h3 className="text-lg font-bold flex items-center gap-2 truncate max-w-[200px] sm:max-w-md"><MessageSquare className="text-blue-400" size={20}/> {modal.title}</h3>
+                    <button 
+                      onClick={handleRefreshComments}
+                      disabled={isRefreshingComments || isPostingComment}
+                      className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-400 transition-colors disabled:opacity-30"
+                      title="Refresh Komentar"
+                    >
+                      <RefreshCw size={16} className={isRefreshingComments ? 'animate-spin' : ''}/>
+                    </button>
+                  </div>
+                  {!isPostingComment && (
+                    <button onClick={() => { setModal(null); setReplyingTo(null); }} className="p-2 hover:bg-slate-800 rounded-lg text-slate-400"><X size={20}/></button>
+                  )}
                 </div>
                 
                 {/* Comment List */}
                 <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-900/50">
-                  {modal.targetItem && (comments[modal.targetItem.id] || []).length === 0 ? (
+                  {isRefreshingComments ? (
+                    <div className="h-full flex flex-col items-center justify-center text-slate-500 opacity-50 italic">
+                      <Loader2 size={32} className="animate-spin mb-2"/>
+                      <p>Menghubungkan ke cloud...</p>
+                    </div>
+                  ) : modal.targetItem && (comments[modal.targetItem.id] || []).length === 0 ? (
                     <div className="h-full flex flex-col items-center justify-center text-slate-500 opacity-50 italic">
                       <MessageSquare size={48} className="mb-2"/>
                       <p>Belum ada komentar.</p>
                     </div>
                   ) : (
-                    modal.targetItem && comments[modal.targetItem.id]
+                    modal.targetItem && [...(comments[modal.targetItem.id] || [])]
+                      .sort((a,b) => b.timestamp - a.timestamp) // Newest first for main list
                       .filter(c => !c.parentId) // Main comments
                       .map(comment => (
                         <div key={comment.id} className="space-y-3">
                           {/* Main Comment Bubble */}
                           <div className="flex gap-3 group">
                             <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
-                              {comment.author[0].toUpperCase()}
+                              {comment.author[0]?.toUpperCase() || '?'}
                             </div>
                             <div className="flex-1">
                               <div className="bg-slate-800 p-3 rounded-2xl rounded-tl-none border border-slate-700 shadow-sm">
@@ -1083,6 +1104,7 @@ const App = () => {
                               </div>
                               <button 
                                 onClick={() => setReplyingTo(comment.id)}
+                                disabled={isPostingComment}
                                 className="text-[10px] font-bold text-slate-500 hover:text-blue-400 mt-1 flex items-center gap-1 ml-1"
                               >
                                 <Reply size={10}/> BALAS
@@ -1091,12 +1113,13 @@ const App = () => {
                           </div>
 
                           {/* Replies */}
-                          {comments[modal.targetItem!.id]
+                          {(comments[modal.targetItem!.id] || [])
                             .filter(r => r.parentId === comment.id)
+                            .sort((a,b) => a.timestamp - b.timestamp) // Replies in chronological order
                             .map(reply => (
                               <div key={reply.id} className="flex gap-3 ml-11">
                                 <div className="w-6 h-6 rounded-full bg-slate-700 flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0">
-                                  {reply.author[0].toUpperCase()}
+                                  {reply.author[0]?.toUpperCase() || '?'}
                                 </div>
                                 <div className="flex-1 bg-slate-800/40 p-2.5 rounded-xl rounded-tl-none border border-slate-700/50 shadow-sm">
                                   <div className="flex items-center justify-between mb-1">
@@ -1129,7 +1152,8 @@ const App = () => {
                         placeholder="Nama" 
                         value={commentName}
                         onChange={(e) => setCommentName(e.target.value)}
-                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-2 text-xs text-white focus:outline-none focus:border-blue-500"
+                        disabled={isPostingComment}
+                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-2 py-2 text-xs text-white focus:outline-none focus:border-blue-500 disabled:opacity-50"
                       />
                     </div>
                     <div className="relative flex-1">
@@ -1138,16 +1162,17 @@ const App = () => {
                         rows={1}
                         value={commentText}
                         onChange={(e) => setCommentText(e.target.value)}
+                        disabled={isPostingComment}
                         onKeyDown={(e) => { if(e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleAddComment(); } }}
-                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 resize-none h-9"
+                        className="w-full bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 resize-none h-9 disabled:opacity-50"
                       />
                     </div>
                     <button 
                       onClick={handleAddComment}
-                      disabled={!commentName.trim() || !commentText.trim()}
+                      disabled={!commentName.trim() || !commentText.trim() || isPostingComment}
                       className="p-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-30 text-white rounded-lg transition-colors"
                     >
-                      <Send size={18}/>
+                      {isPostingComment ? <Loader2 size={18} className="animate-spin"/> : <Send size={18}/>}
                     </button>
                   </div>
                 </div>
@@ -1254,4 +1279,3 @@ const SelectionFloatingMenu = ({ selectedIds, items, onClear, onSelectAll, onAct
 };
 
 export default App;
-    
