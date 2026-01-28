@@ -243,7 +243,7 @@ const App = () => {
           <div className="flex-1 overflow-hidden relative bg-slate-950">
              {win.appId === 'file-explorer' && <FileExplorer isSystemInitialized={true} dbFileId={systemState.drive.fileId} commentFileId={systemState.drive.commentFileId} systemFolderId={systemState.drive.systemFolderId} initialFolderMap={systemState.finalMap} initialComments={systemState.finalComments} />}
              {win.appId === 'settings' && <SettingsApp config={config!} onSave={updateConfig}/>}
-             {win.appId === 'store' && <AppStore installedApps={config!.installedApps} onInstall={a=>{updateConfig({...config!, installedApps: [...config!.installedApps, a]});}} onUninstall={id=>updateConfig({...config!, installedApps: config!.installedApps.filter(a=>a.id!==id)});}}/>}
+             {win.appId === 'store' && <AppStore installedApps={config!.installedApps} onInstall={a=>{updateConfig({...config!, installedApps: [...config!.installedApps, a]});}} onUninstall={id => { updateConfig({...config!, installedApps: config!.installedApps.filter(a=>a.id!==id)}); }} />}
              {(win.appData.type === 'webapp' || win.appId === 'browser') && <BrowserApp url={win.appData.url} />}
           </div>
         </div>
