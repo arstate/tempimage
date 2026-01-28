@@ -219,24 +219,16 @@ const App = () => {
     setTimeout(() => { setNotifications(prev => prev.filter(n => n.id !== id)); }, 3000);
   };
 
-  // --- PREFETCH NOTE CONTENTS ---
-  /**
-   * Mengambil konten catatan di latar belakang untuk mempercepat UX saat membuka catatan.
-   * Konten yang didapat akan diupdate ke local state items dan IndexedDB cache.
-   */
   const prefetchNoteContents = useCallback(async (folderId: string, notes: Item[]) => {
     for (const note of notes) {
       try {
         const content = await API.getFileContent(note.id);
         const updatedItem = { ...note, content };
         await DB.updateItemInCache(folderId, updatedItem);
-        // Pastikan kita masih di folder yang sama sebelum update state
         if (activeFolderIdRef.current === folderId) {
           setItems(prev => prev.map(i => i.id === note.id ? updatedItem : i));
         }
-      } catch (e) {
-        console.error("Gagal prefetch content catatan:", e);
-      }
+      } catch (e) {}
     }
   }, []);
 
@@ -363,7 +355,6 @@ const App = () => {
       const currentDrag = customDragItem;
       const targetId = dropTargetId;
 
-      // FIX BUG: Langsung hapus UI drag saat dilepas
       setCustomDragItem(null);
       setCustomDragPos(null);
       setDropTargetId(null);
@@ -380,11 +371,8 @@ const App = () => {
           } else {
               const idsToMove = selectedIds.size > 0 ? Array.from(selectedIds) : [currentDrag.id];
               const targetName = items.find(i => i.id === targetId)?.name || "Folder";
-              
-              // OPTIMISTIC: Status moving
               const backupItems = [...items];
               setItems(prev => prev.map(item => idsToMove.includes(item.id) ? { ...item, status: 'moving' } : item));
-              
               const notifId = addNotification(`Memindahkan ${idsToMove.length} item ke ${targetName}...`, 'loading');
               try {
                   await API.moveItems(idsToMove, targetId);
@@ -394,7 +382,7 @@ const App = () => {
                   await loadFolder(currentFolderId);
               } catch(err) {
                   updateNotification(notifId, 'Gagal pindah', 'error');
-                  setItems(backupItems); // Rollback
+                  setItems(backupItems); 
               } 
           }
       }
@@ -457,8 +445,15 @@ const App = () => {
 
   const handleContextMenu = (e: React.MouseEvent | React.PointerEvent, item?: Item) => {
     e.preventDefault();
-    if (item) { if (!selectedIds.has(item.id)) { setSelectedIds(new Set([item.id])); setLastSelectedId(item.id); } setContextMenu({ x: (e as any).pageX || (e as any).clientX, y: (e as any).pageY || (e as any).clientY, targetItem: item }); } 
-    else { setContextMenu({ x: (e as any).pageX || (e as any).clientX, y: (e as any).pageY || (e as any).clientY, targetItem: undefined }); }
+    const x = (e as any).pageX || (e as any).clientX;
+    const y = (e as any).pageY || (e as any).clientY;
+    
+    if (item) { 
+      if (!selectedIds.has(item.id)) { setSelectedIds(new Set([item.id])); setLastSelectedId(item.id); } 
+      setContextMenu({ x, y, targetItem: item }); 
+    } else { 
+      setContextMenu({ x, y, targetItem: undefined }); 
+    }
   };
 
   const downloadWithProgress = async (url: string, name: string, isImage: boolean) => {
@@ -546,7 +541,7 @@ const App = () => {
   };
 
   const executeAction = async (action: string) => {
-      if (!contextMenu && action !== 'paste' && selectedIds.size === 0 && action !== 'new_folder') return;
+      if (!contextMenu && action !== 'paste' && selectedIds.size === 0 && action !== 'new_folder' && action !== 'empty_bin' && action !== 'restore_all') return;
       const item = contextMenu?.targetItem;
       const ids = selectedIds.size > 0 ? Array.from(selectedIds) : (item ? [item.id] : []);
       setContextMenu(null);
@@ -559,25 +554,19 @@ const App = () => {
                       if (name) {
                           setModal(null);
                           const tempId = 'temp-' + Date.now();
-                          const optimisticFolder: Item = { 
-                            id: tempId, name: name, type: 'folder', lastUpdated: Date.now(), status: 'creating' 
-                          };
-                          
-                          // OPTIMISTIC: Munculkan langsung
+                          const optimisticFolder: Item = { id: tempId, name: name, type: 'folder', lastUpdated: Date.now(), status: 'creating' };
                           setItems(prev => [...prev, optimisticFolder].sort((a,b) => a.name.localeCompare(b.name)));
                           const notifId = addNotification('Membuat folder...', 'loading');
-                          
                           try {
                               const res = await API.createFolder(currentFolderId, name);
                               if (res.status === 'success' && res.data) {
                                   updateMap('add', [{ id: res.data.id, name: res.data.name, parentId: currentFolderId }]);
                                   updateNotification(notifId, 'Folder dibuat', 'success');
-                                  // Refresh untuk ganti tempId jadi realId
                                   await loadFolder(currentFolderId);
                               } else { throw new Error(res.message); }
                           } catch (e) { 
                               updateNotification(notifId, 'Gagal membuat folder', 'error');
-                              setItems(prev => prev.filter(i => i.id !== tempId)); // Rollback
+                              setItems(prev => prev.filter(i => i.id !== tempId)); 
                           }
                       }
                   }
@@ -594,11 +583,8 @@ const App = () => {
                             setModal(null);
                             const oldName = targetItem.name;
                             const optimisticItems = items.map(i => i.id === targetItem.id ? { ...i, name: newName } : i);
-                            
-                            // OPTIMISTIC: Ubah nama langsung
                             setItems(optimisticItems);
                             const notifId = addNotification('Mengganti nama...', 'loading');
-                            
                             try {
                                 await API.renameItem(targetItem.id, newName);
                                 if (targetItem.type === 'folder') updateMap('update', [{ id: targetItem.id, name: newName }]);
@@ -606,7 +592,7 @@ const App = () => {
                                 await loadFolder(currentFolderId);
                             } catch (e) { 
                                 updateNotification(notifId, 'Gagal ganti nama', 'error'); 
-                                setItems(prev => prev.map(i => i.id === targetItem.id ? { ...i, name: oldName } : i)); // Rollback
+                                setItems(prev => prev.map(i => i.id === targetItem.id ? { ...i, name: oldName } : i)); 
                             }
                         }
                     }
@@ -620,11 +606,8 @@ const App = () => {
                   onConfirm: async () => {
                       setModal(null);
                       const backupItems = [...items];
-                      
-                      // OPTIMISTIC: Beri overlay 'deleting'
                       setItems(prev => prev.map(item => ids.includes(item.id) ? { ...item, status: 'deleting' } : item));
                       const notifId = addNotification(`Menghapus ${ids.length} item...`, 'loading');
-                      
                       try {
                           const binId = await getOrCreateRecycleBin();
                           for (const id of ids) await DB.saveDeletedMeta(id, currentFolderId || "root");
@@ -635,7 +618,7 @@ const App = () => {
                           await loadFolder(currentFolderId);
                       } catch (e) { 
                           updateNotification(notifId, 'Gagal menghapus', 'error'); 
-                          setItems(backupItems); // Rollback
+                          setItems(backupItems); 
                       }
                   }
               });
@@ -648,7 +631,6 @@ const App = () => {
                       setModal(null);
                       const backupItems = [...items];
                       setItems(prev => prev.map(item => ids.includes(item.id) ? { ...item, status: 'deleting' } : item));
-                      
                       const notifId = addNotification(`Menghapus permanen ${ids.length} item...`, 'loading');
                       try {
                           await API.deleteItems(ids);
@@ -673,17 +655,15 @@ const App = () => {
                   onConfirm: async (targetId) => {
                       if (targetId !== undefined) {
                           setModal(null);
+                          const finalTargetId = targetId === "" ? "root" : targetId;
                           const targetName = targetId === "" ? "Home" : (systemMap[targetId]?.name || "Folder");
                           const backupItems = [...items];
-                          
-                          // OPTIMISTIC: Status moving
                           setItems(prev => prev.map(item => ids.includes(item.id) ? { ...item, status: 'moving' } : item));
                           const notifId = addNotification(`Memindahkan ke ${targetName}...`, 'loading');
-                          
                           try {
-                              await API.moveItems(ids, targetId);
+                              await API.moveItems(ids, finalTargetId);
                               const foldersMoved = backupItems.filter(i => ids.includes(i.id) && i.type === 'folder');
-                              if (foldersMoved.length > 0) updateMap('move', foldersMoved.map(f => ({ id: f.id, parentId: targetId })));
+                              if (foldersMoved.length > 0) updateMap('move', foldersMoved.map(f => ({ id: f.id, parentId: finalTargetId })));
                               updateNotification(notifId, 'Berhasil dipindahkan', 'success');
                               await loadFolder(currentFolderId);
                           } catch (e) { 
@@ -718,6 +698,60 @@ const App = () => {
                   updateNotification(notifRestore, 'Gagal restore', 'error'); 
                   setItems(backupRestore);
               }
+              break;
+          
+          case 'restore_all':
+              const notifRA = addNotification('Mengembalikan semua item...', 'loading');
+              try {
+                  let idsToRestore: string[] = [];
+                  if (currentFolderId === recycleBinId) idsToRestore = items.map(i => i.id);
+                  else {
+                      const binId = await getOrCreateRecycleBin();
+                      const res = await API.getFolderContents(binId);
+                      if (res.status === 'success' && Array.isArray(res.data)) idsToRestore = res.data.map((i: any) => i.id);
+                  }
+                  if (idsToRestore.length === 0) { updateNotification(notifRA, 'Recycle Bin sudah kosong', 'success'); return; }
+                  const restoreMap: Record<string, string[]> = {}; 
+                  for (const id of idsToRestore) {
+                      const op = await DB.getDeletedMeta(id);
+                      const target = op || "root";
+                      if (!restoreMap[target]) restoreMap[target] = [];
+                      restoreMap[target].push(id);
+                  }
+                  for (const [tf, iids] of Object.entries(restoreMap)) {
+                      await API.moveItems(iids, tf);
+                      const foldersRestored = items.filter(i => iids.includes(i.id) && i.type === 'folder');
+                      if (foldersRestored.length > 0) updateMap('move', foldersRestored.map(f => ({ id: f.id, parentId: tf })));
+                      for(const id of iids) await DB.removeDeletedMeta(id);
+                  }
+                  updateNotification(notifRA, 'Semua item dikembalikan', 'success');
+                  if (currentFolderId === recycleBinId) loadFolder(currentFolderId);
+              } catch(e) { updateNotification(notifRA, 'Gagal restore all', 'error'); }
+              break;
+
+          case 'empty_bin':
+              setModal({
+                  type: 'confirm', title: 'Kosongkan Recycle Bin?', message: 'Semua file di sini akan hilang selamanya.', confirmText: 'Kosongkan', isDanger: true,
+                  onConfirm: async () => {
+                      setModal(null);
+                      const notifId = addNotification('Mengosongkan Recycle Bin...', 'loading');
+                      try {
+                          let idsToDelete: string[] = [];
+                          if (currentFolderId === recycleBinId) idsToDelete = items.map(i => i.id);
+                          else {
+                               const binId = await getOrCreateRecycleBin();
+                               const res = await API.getFolderContents(binId);
+                               if (res.status === 'success' && Array.isArray(res.data)) idsToDelete = res.data.map((i: any) => i.id);
+                          }
+                          if (idsToDelete.length === 0) { updateNotification(notifId, 'Recycle Bin sudah kosong', 'success'); return; }
+                          await API.deleteItems(idsToDelete);
+                          if (idsToDelete.length > 0) updateMap('remove', idsToDelete.map(id => ({ id })));
+                          for(const id of idsToDelete) await DB.removeDeletedMeta(id);
+                          updateNotification(notifId, 'Recycle Bin bersih', 'success');
+                          if (currentFolderId === recycleBinId) loadFolder(currentFolderId);
+                      } catch(e) { updateNotification(notifId, 'Gagal', 'error'); }
+                  }
+              });
               break;
               
           case 'duplicate':
@@ -788,13 +822,13 @@ const App = () => {
                 {isSavingDB ? <><Loader2 size={14} className="animate-spin" /> <span className="hidden sm:inline">Syncing...</span></> : <><Cloud size={14} /> <span className="hidden sm:inline">Synced</span></>}
             </div>
             <div className="relative">
-                <button onClick={() => setIsNewDropdownOpen(!isNewDropdownOpen)} className={`px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold shadow-lg transition-all border border-transparent ${isNewDropdownOpen ? 'bg-slate-800 border-slate-700 text-white' : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-900/20'}`}><Plus size={18} /> <span className="hidden sm:inline">Baru</span></button>
+                <button onPointerDown={(e) => { e.stopPropagation(); setIsNewDropdownOpen(!isNewDropdownOpen); }} className={`px-4 py-2 rounded-lg flex items-center gap-2 text-sm font-semibold shadow-lg transition-all border border-transparent ${isNewDropdownOpen ? 'bg-slate-800 border-slate-700 text-white' : 'bg-blue-600 hover:bg-blue-500 text-white shadow-blue-900/20'}`}><Plus size={18} /> <span className="hidden sm:inline">Baru</span></button>
                 {isNewDropdownOpen && (
                     <div className="absolute right-0 top-full mt-2 w-56 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl z-50 p-1.5 animate-in fade-in zoom-in-95 duration-150 origin-top-right floating-ui" onPointerDown={(e) => e.stopPropagation()}>
-                        <button onClick={(e) => { e.stopPropagation(); executeAction('new_folder'); }} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 rounded-lg flex items-center gap-3 text-sm text-slate-200 transition-colors"><Folder size={18} className="text-blue-400"/> Folder Baru</button>
-                        <button onClick={(e) => { e.stopPropagation(); handleCreateNote(); }} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 rounded-lg flex items-center gap-3 text-sm text-slate-200 transition-colors"><FileText size={18} className="text-yellow-400"/> Catatan Baru</button>
+                        <button onPointerDown={(e) => { e.stopPropagation(); executeAction('new_folder'); }} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 rounded-lg flex items-center gap-3 text-sm text-slate-200 transition-colors"><Folder size={18} className="text-blue-400"/> Folder Baru</button>
+                        <button onPointerDown={(e) => { e.stopPropagation(); handleCreateNote(); }} className="w-full text-left px-3 py-2.5 hover:bg-slate-700 rounded-lg flex items-center gap-3 text-sm text-slate-200 transition-colors"><FileText size={18} className="text-yellow-400"/> Catatan Baru</button>
                         <div className="h-px bg-slate-700 my-1"></div>
-                        <label className="w-full text-left px-3 py-2.5 hover:bg-slate-700 rounded-lg flex items-center gap-3 text-sm text-slate-200 cursor-pointer transition-colors" onClick={(e) => e.stopPropagation()}>
+                        <label className="w-full text-left px-3 py-2.5 hover:bg-slate-700 rounded-lg flex items-center gap-3 text-sm text-slate-200 cursor-pointer transition-colors" onPointerDown={(e) => e.stopPropagation()}>
                             <Upload size={18} className="text-green-400"/> Upload File
                             <input type="file" multiple className="hidden" onClick={(e) => { (e.target as HTMLInputElement).value = ''; }} onChange={(e) => { setIsNewDropdownOpen(false); if(e.target.files) handleUploadFiles(Array.from(e.target.files)); }} />
                         </label>
@@ -806,7 +840,7 @@ const App = () => {
         {isSystemFolder && (<div className="px-3 py-1.5 bg-amber-500/10 border border-amber-500/30 rounded-lg flex items-center gap-2 text-amber-400 text-xs font-semibold"><Lock size={14}/> Read-Only</div>)}
       </header>
 
-      <main className="p-4 md:p-6 pb-20 space-y-8">
+      <main className="p-4 md:p-6 pb-20 space-y-8 min-h-[calc(100vh-4rem)]">
         {loading ? ( <div className="flex flex-col items-center justify-center py-20 gap-4 opacity-50"><Loader2 size={32} className="animate-spin text-blue-500"/><p className="text-sm">Memuat isi folder...</p></div> ) : items.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-20 text-slate-600 border-2 border-dashed border-slate-800 rounded-2xl">
                 {currentFolderId === recycleBinId ? <Trash2 size={64} className="mb-4 opacity-20" /> : isSystemFolder ? <ShieldAlert size={64} className="mb-4 opacity-20 text-amber-500"/> : <Folder size={64} className="mb-4 opacity-20" />}
@@ -855,7 +889,7 @@ interface ItemComponentProps {
 
 const ItemOverlay = ({ status }: { status?: string }) => { 
   if (!status || status === 'idle') return null; 
-  const label = status === 'creating' ? 'New Folder...' : 
+  const label = status === 'creating' ? 'Creating...' : 
                 status === 'moving' ? 'Moving...' : 
                 status === 'deleting' ? 'Deleting...' : 
                 status === 'restoring' ? 'Restoring...' : 'Loading...';
