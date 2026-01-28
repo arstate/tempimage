@@ -74,3 +74,22 @@ export interface SystemDB {
   map: FolderMap;
   lastSync: number;
 }
+
+// Added for App UI state to fix ModalState error
+export interface ModalState {
+  type: 'confirm' | 'input' | 'comment';
+  title: string;
+  message?: string;
+  confirmText?: string;
+  isDanger?: boolean;
+  inputValue?: string;
+  targetItem?: Item;
+  onConfirm?: (value?: any) => void;
+}
+
+// Added to replace built-in browser Notification type which caused conflict
+export interface AppNotification {
+  id: string;
+  message: string;
+  type: 'loading' | 'success' | 'error';
+}
