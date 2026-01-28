@@ -8,11 +8,12 @@ const DB_FILENAME_KEYWORD = "system_zombio_db.json";
 const COMMENT_DB_FILENAME = "COMENTDATABASE.json";
 const CONFIG_FILENAME = "system_config.json";
 const SYSTEM_FOLDER_NAME = "System";
+const APPS_ICON_FOLDER_NAME = "Apps Icon";
 
 export interface AppDefinition {
   id: string;
   name: string;
-  icon: string;
+  icon: string; // can be icon name or URL
   type: 'system' | 'webapp';
   url?: string;
 }
@@ -21,6 +22,7 @@ export interface SystemConfig {
   wallpaper: string;
   theme: 'dark' | 'light';
   installedApps: AppDefinition[];
+  youtubeApiKeys?: string[]; // Custom user keys
 }
 
 interface ApiResponse {
@@ -217,4 +219,17 @@ export const updateSystemDBFile = async (fileId: string, map: FolderMap): Promis
 export const updateCommentDBFile = async (fileId: string, comments: CommentDB): Promise<void> => {
   const content = JSON.stringify(comments);
   await saveNoteToDrive(COMMENT_DB_FILENAME, content, "", fileId); 
+};
+
+// --- ICON MANAGEMENT ---
+export const ensureAppIconFolder = async (systemFolderId: string): Promise<string> => {
+    const sysRes = await getFolderContents(systemFolderId);
+    if (sysRes.status !== 'success' || !Array.isArray(sysRes.data)) throw new Error("Cannot access System folder");
+    
+    const iconFolder = sysRes.data.find((i: any) => i.name === APPS_ICON_FOLDER_NAME && i.type === 'folder');
+    if (iconFolder) return iconFolder.id;
+    
+    const createRes = await createFolder(systemFolderId, APPS_ICON_FOLDER_NAME);
+    if (createRes.status === 'success' && createRes.data) return createRes.data.id;
+    throw new Error("Failed to create Apps Icon folder");
 };

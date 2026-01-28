@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { 
   Folder, FileText, Image as ImageIcon, MoreVertical, 
@@ -7,7 +8,8 @@ import {
   ShieldAlert, Cloud, CloudUpload, FileJson, RefreshCw,
   CheckCheck, MessageSquare, Reply, Send, User, Clock,
   Grid, Monitor, Globe, Settings, ShoppingBag, Minus, Square, Search, Wifi,
-  Maximize2, UploadCloud, MonitorCheck, ExternalLink, Minimize2, LayoutGrid
+  Maximize2, MonitorCheck, ExternalLink, Minimize2, LayoutGrid, Youtube, Play, Pause, SkipForward, Music,
+  UploadCloud
 } from 'lucide-react';
 import * as API from './services/api';
 import * as DB from './services/db';
@@ -18,8 +20,17 @@ import { DownloadProgress } from './components/DownloadProgress';
 import { UploadZone } from './components/UploadZone';
 import { ImageCard } from './components/ImageCard';
 
+// --- CONSTANTS ---
+const DEFAULT_YOUTUBE_KEYS = [
+  "AIzaSyAs8bePXF_yYJdgGKbFLTVLq06DTwngOQQ",
+  "AIzaSyCe5-HkDEUTmGwjBQ8TrL-sxs_SMLLTjVA",
+  "AIzaSyAKNAH4Tzd08pWYpVlwDx-ehXYbpfvsCqo",
+  "AIzaSyDkoRMEP5tvCnujASCkCsDXLhruyieAds4",
+  "AIzaSyC1V-c8uxlnyDI7ZqUjK5KoJb1wYeZcdg4"
+];
+
 // --- TYPES ---
-type ModalType = 'input' | 'confirm' | 'alert' | 'select' | 'password' | 'comment' | null;
+type ModalType = 'input' | 'confirm' | 'alert' | 'select' | 'password' | 'comment' | 'properties' | null;
 interface ModalState {
   type: ModalType;
   title: string;
@@ -29,7 +40,7 @@ interface ModalState {
   onConfirm?: (value?: string) => void;
   confirmText?: string;
   isDanger?: boolean;
-  targetItem?: Item;
+  targetItem?: Item | API.AppDefinition;
 }
 
 interface Notification {
@@ -48,6 +59,119 @@ const stripHtml = (html: string) => {
   const tmp = document.createElement("DIV");
   tmp.innerHTML = html;
   return tmp.textContent || tmp.innerText || "";
+};
+
+// --- YOUTUBE APP COMPONENT ---
+const YouTubeApp = ({ customKeys }: { customKeys?: string[] }) => {
+  const [searchQuery, setSearchQuery] = useState("");
+  const [videos, setVideos] = useState<any[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [currentVideoId, setCurrentVideoId] = useState<string | null>(null);
+  const [error, setError] = useState("");
+
+  const allKeys = useMemo(() => [...(customKeys || []), ...DEFAULT_YOUTUBE_KEYS], [customKeys]);
+
+  const searchYouTube = async (query: string) => {
+    setLoading(true);
+    setError("");
+    let success = false;
+
+    for (const key of allKeys) {
+      try {
+        const url = `https://www.googleapis.com/youtube/v3/search?part=snippet&maxResults=20&q=${encodeURIComponent(query)}&type=video&key=${key}`;
+        const res = await fetch(url);
+        
+        if (res.status === 403 || res.status === 429) {
+           console.warn(`Key ${key.substr(0,5)}... limit reached, rotating...`);
+           continue; 
+        }
+
+        const data = await res.json();
+        if (data.items) {
+          setVideos(data.items);
+          success = true;
+          break;
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    if (!success) {
+      setError("Semua API Key limit habis atau terjadi kesalahan jaringan.");
+    }
+    setLoading(false);
+  };
+
+  return (
+    <div className="h-full bg-[#0f0f0f] text-white flex flex-col">
+       {/* Header */}
+       <div className="p-4 bg-[#0f0f0f] border-b border-[#272727] flex items-center gap-4">
+          <div className="flex items-center gap-1 text-red-600 font-bold text-lg tracking-tighter">
+             <Youtube size={28} fill="currentColor" />
+             <span className="text-white">YouTube</span>
+          </div>
+          <div className="flex-1 max-w-2xl mx-auto flex gap-2">
+             <input 
+                className="flex-1 bg-[#121212] border border-[#303030] rounded-full px-4 py-2 text-sm focus:border-blue-500 outline-none" 
+                placeholder="Telusuri"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && searchYouTube(searchQuery)}
+             />
+             <button onClick={() => searchYouTube(searchQuery)} className="bg-[#222] hover:bg-[#303030] px-4 py-2 rounded-full border border-[#303030]">
+                <Search size={18} className="text-gray-400"/>
+             </button>
+          </div>
+       </div>
+
+       {/* Main Content */}
+       <div className="flex-1 overflow-hidden flex flex-col md:flex-row">
+          {/* Player (if active) */}
+          {currentVideoId && (
+             <div className="flex-1 bg-black flex items-center justify-center relative group">
+                <iframe 
+                   src={`https://www.youtube.com/embed/${currentVideoId}?autoplay=1`} 
+                   title="YouTube video player" 
+                   className="w-full h-full border-0" 
+                   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" 
+                   allowFullScreen
+                ></iframe>
+                <button onClick={() => setCurrentVideoId(null)} className="absolute top-4 left-4 bg-black/50 p-2 rounded-full hover:bg-red-600 text-white z-10 opacity-0 group-hover:opacity-100 transition-opacity">
+                   <ArrowLeft size={20}/>
+                </button>
+             </div>
+          )}
+
+          {/* Video Grid (Sidebar if playing, Full if not) */}
+          <div className={`${currentVideoId ? 'w-full md:w-80 border-l border-[#272727]' : 'w-full'} overflow-y-auto p-4 bg-[#0f0f0f]`}>
+             {loading ? (
+                <div className="flex justify-center py-10"><Loader2 className="animate-spin text-gray-500"/></div>
+             ) : error ? (
+                <div className="text-red-500 text-center py-10 text-sm">{error}</div>
+             ) : (
+                <div className={`grid gap-4 ${currentVideoId ? 'grid-cols-1' : 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4'}`}>
+                   {videos.map((vid: any) => (
+                      <div key={vid.id.videoId} onClick={() => setCurrentVideoId(vid.id.videoId)} className="cursor-pointer group">
+                         <div className="relative aspect-video rounded-xl overflow-hidden mb-2">
+                            <img src={vid.snippet.thumbnails.medium.url} className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200" />
+                         </div>
+                         <h3 className="font-bold text-sm line-clamp-2 text-white group-hover:text-blue-400">{vid.snippet.title}</h3>
+                         <p className="text-xs text-gray-400 mt-1">{vid.snippet.channelTitle}</p>
+                      </div>
+                   ))}
+                </div>
+             )}
+             {!loading && videos.length === 0 && !error && (
+                <div className="flex flex-col items-center justify-center h-full text-gray-600 opacity-50 mt-10">
+                   <Youtube size={64} />
+                   <p className="mt-2 text-sm">Cari video untuk mulai menonton</p>
+                </div>
+             )}
+          </div>
+       </div>
+    </div>
+  );
 };
 
 // --- GALLERY APP COMPONENT ---
@@ -99,30 +223,48 @@ const GalleryApp = ({ items, onUpload, onDelete, loading }: any) => {
 };
 
 // --- APP STORE COMPONENT ---
-const AppStoreApp = ({ config, setConfig, addNotification }: any) => {
+const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId }: any) => {
   const [appName, setAppName] = useState('');
   const [appUrl, setAppUrl] = useState('');
+  const [customIconFile, setCustomIconFile] = useState<File | null>(null);
   const [isInstalling, setIsInstalling] = useState(false);
+  const [useProxy, setUseProxy] = useState(false);
 
   const popularApps = [
     { id: 'gallery', name: 'Gallery', url: 'internal://gallery', icon: 'image' },
-    { id: 'youtube', name: 'YouTube', url: 'https://www.youtube.com/embed', icon: 'globe' },
-    { id: 'spotify', name: 'Spotify', url: 'https://open.spotify.com/embed', icon: 'globe' },
+    { id: 'youtube', name: 'YouTube', url: 'internal://youtube', icon: 'youtube' },
+    { id: 'spotify', name: 'Spotify', url: 'https://open.spotify.com/embed', icon: 'music' },
     { id: 'canva', name: 'Canva', url: 'https://www.canva.com', icon: 'globe' },
     { id: 'google-maps', name: 'Maps', url: 'https://www.google.com/maps/embed', icon: 'globe' }
   ];
 
   const handleInstall = async (app: any) => {
     if (!config) return;
-    if (config.installedApps.some((a: any) => a.url === app.url)) {
+    if (config.installedApps.some((a: any) => a.id === app.id)) {
       addNotification("Aplikasi sudah terpasang", "error");
       return;
     }
     
     setIsInstalling(true);
+    let finalIcon = app.icon;
+
+    // Handle Custom Icon Upload
+    if (app.type === 'webapp' && customIconFile && systemFolderId) {
+        try {
+            const notifId = addNotification("Mengupload ikon...", "loading");
+            const iconFolderId = await API.ensureAppIconFolder(systemFolderId);
+            const uploadRes = await API.uploadToDrive(customIconFile, iconFolderId);
+            finalIcon = uploadRes.thumbnail || uploadRes.url; 
+            addNotification("Ikon berhasil diupload", "success");
+        } catch (e) {
+            console.error("Icon upload failed", e);
+            addNotification("Gagal upload ikon, menggunakan default", "error");
+        }
+    }
+
     const updatedConfig = {
       ...config,
-      installedApps: [...config.installedApps, { ...app, type: app.url.startsWith('internal') ? 'system' : 'webapp' }]
+      installedApps: [...config.installedApps, { ...app, icon: finalIcon, type: app.url?.startsWith('internal') ? 'system' : 'webapp' }]
     };
     
     try {
@@ -133,13 +275,14 @@ const AppStoreApp = ({ config, setConfig, addNotification }: any) => {
       addNotification("Gagal menyimpan konfigurasi", "error");
     } finally {
       setIsInstalling(false);
+      setCustomIconFile(null);
     }
   };
 
   const handleUninstall = async (appId: string) => {
     if (!config) return;
     const app = config.installedApps.find((a: any) => a.id === appId);
-    if (app?.type === 'system' && app?.id === 'file-explorer') {
+    if ((app?.type === 'system' && app?.id === 'file-explorer') || app?.id === 'youtube') {
        addNotification("Aplikasi sistem tidak dapat dihapus", "error");
        return;
     }
@@ -163,7 +306,12 @@ const AppStoreApp = ({ config, setConfig, addNotification }: any) => {
         addNotification("Isi nama dan URL!", "error");
         return;
     }
-    const cleanUrl = appUrl.startsWith('http') || appUrl.startsWith('internal') ? appUrl : `https://${appUrl}`;
+    let cleanUrl = appUrl.startsWith('http') || appUrl.startsWith('internal') ? appUrl : `https://${appUrl}`;
+    
+    if (useProxy && !cleanUrl.startsWith('internal')) {
+        cleanUrl = `https://corsproxy.io/?${encodeURIComponent(cleanUrl)}`;
+    }
+
     const newApp = {
       id: 'custom-' + Date.now(),
       name: appName,
@@ -193,7 +341,7 @@ const AppStoreApp = ({ config, setConfig, addNotification }: any) => {
         <h2 className="text-lg font-bold flex items-center gap-2 text-blue-400">
            <Plus size={20} /> Install Web App Baru
         </h2>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 bg-slate-800/40 p-5 rounded-2xl border border-slate-700/50 backdrop-blur-md">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 bg-slate-800/40 p-5 rounded-2xl border border-slate-700/50 backdrop-blur-md">
           <div className="space-y-1">
              <label className="text-[10px] uppercase font-bold text-slate-500 ml-1">Nama Aplikasi</label>
              <input 
@@ -203,24 +351,45 @@ const AppStoreApp = ({ config, setConfig, addNotification }: any) => {
                 onChange={e => setAppName(e.target.value)}
               />
           </div>
-          <div className="space-y-1 md:col-span-2">
+          <div className="space-y-1 lg:col-span-2">
             <label className="text-[10px] uppercase font-bold text-slate-500 ml-1">URL Web (https://...)</label>
-            <div className="flex gap-2">
-              <input 
-                className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-sm focus:ring-2 ring-blue-500/20 focus:border-blue-500 outline-none transition-all" 
-                placeholder="Contoh: chat.openai.com" 
-                value={appUrl}
-                onChange={e => setAppUrl(e.target.value)}
-              />
+            <div className="flex flex-col gap-2">
+                <input 
+                    className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-sm focus:ring-2 ring-blue-500/20 focus:border-blue-500 outline-none transition-all" 
+                    placeholder="Contoh: chat.openai.com" 
+                    value={appUrl}
+                    onChange={e => setAppUrl(e.target.value)}
+                />
+                <div className="flex items-center gap-2">
+                    <input type="checkbox" id="bypassProxy" checked={useProxy} onChange={e => setUseProxy(e.target.checked)} className="rounded border-slate-700 bg-slate-900"/>
+                    <label htmlFor="bypassProxy" className="text-xs text-slate-400 cursor-pointer select-none">Bypass Blokir (Proxy)</label>
+                </div>
+            </div>
+          </div>
+          <div className="space-y-1">
+             <label className="text-[10px] uppercase font-bold text-slate-500 ml-1">Icon Custom (Optional)</label>
+             <div className="relative">
+                 <input 
+                    type="file" 
+                    accept="image/*"
+                    onChange={(e) => setCustomIconFile(e.target.files?.[0] || null)}
+                    className="absolute inset-0 opacity-0 cursor-pointer w-full z-10"
+                 />
+                 <div className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-sm flex items-center gap-2 text-slate-400">
+                     <ImageIcon size={16} />
+                     <span className="truncate">{customIconFile ? customIconFile.name : "Pilih gambar..."}</span>
+                 </div>
+             </div>
+          </div>
+          <div className="flex items-end">
               <button 
                 onClick={handleCustomInstall}
                 disabled={isInstalling || !appName || !appUrl}
-                className="px-6 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-xl font-bold transition-all active:scale-95 flex items-center gap-2"
+                className="w-full py-3 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-xl font-bold transition-all active:scale-95 flex items-center justify-center gap-2"
               >
                 {isInstalling ? <Loader2 size={16} className="animate-spin" /> : <UploadCloud size={16} />}
-                <span>Instal</span>
+                <span>Instal Aplikasi</span>
               </button>
-            </div>
           </div>
         </div>
       </section>
@@ -234,9 +403,12 @@ const AppStoreApp = ({ config, setConfig, addNotification }: any) => {
            {config?.installedApps.map((app: any) => (
              <div key={app.id} className="flex justify-between items-center p-4 bg-slate-800/40 border border-slate-700/50 rounded-xl group hover:bg-slate-800/60 transition-all">
                 <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 bg-slate-950 rounded-xl flex items-center justify-center text-blue-400 border border-slate-800">
-                    {app.icon === 'image' ? <ImageIcon size={24} className="text-pink-400" /> :
+                  <div className="w-12 h-12 bg-slate-950 rounded-xl flex items-center justify-center text-blue-400 border border-slate-800 overflow-hidden">
+                    {app.icon.startsWith('http') ? <img src={app.icon} className="w-full h-full object-cover"/> :
+                     app.icon === 'image' ? <ImageIcon size={24} className="text-pink-400" /> :
                      app.icon === 'folder' ? <Folder size={24} className="text-blue-400"/> :
+                     app.icon === 'youtube' ? <Youtube size={24} className="text-red-500"/> :
+                     app.icon === 'music' ? <Music size={24} className="text-green-500"/> :
                      app.icon === 'settings' ? <Settings size={24} className="text-slate-400"/> :
                      app.icon === 'shopping-bag' ? <ShoppingBag size={24} className="text-pink-400"/> :
                      <Globe size={24} />}
@@ -246,7 +418,7 @@ const AppStoreApp = ({ config, setConfig, addNotification }: any) => {
                     <div className="text-[10px] text-slate-500 font-mono">{app.type === 'system' ? 'System App' : app.url}</div>
                   </div>
                 </div>
-                {app.type === 'webapp' && (
+                {app.type === 'webapp' && app.id !== 'youtube' && (
                   <button 
                     onClick={() => handleUninstall(app.id)}
                     className="p-2 text-slate-500 hover:text-red-500 hover:bg-red-500/10 rounded-lg transition-all"
@@ -265,11 +437,14 @@ const AppStoreApp = ({ config, setConfig, addNotification }: any) => {
         <h2 className="text-lg font-bold text-slate-300">Rekomendasi Aplikasi</h2>
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
           {popularApps.map(app => {
-            const isInstalled = config?.installedApps?.some((a: any) => a.url === app.url);
+            const isInstalled = config?.installedApps?.some((a: any) => a.id === app.id);
             return (
               <div key={app.id} className="bg-slate-800/40 p-4 rounded-2xl border border-slate-700/50 flex flex-col items-center gap-4 group hover:bg-slate-800/60 transition-all">
                 <div className="w-16 h-16 bg-slate-950 rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform shadow-2xl relative">
-                  {app.icon === 'image' ? <ImageIcon size={32} className="text-pink-400" /> : <Globe size={32} className="text-blue-400" />}
+                   {app.icon === 'image' ? <ImageIcon size={32} className="text-pink-400" /> : 
+                    app.icon === 'youtube' ? <Youtube size={32} className="text-red-500" /> :
+                    app.icon === 'music' ? <Music size={32} className="text-green-500" /> :
+                    <Globe size={32} className="text-blue-400" />}
                   {isInstalled && <div className="absolute -top-1 -right-1 bg-green-500 rounded-full p-1"><CheckCircle size={10} className="text-white"/></div>}
                 </div>
                 <div className="text-center">
@@ -668,7 +843,7 @@ const App = () => {
   const [activeWindowId, setActiveWindowId] = useState<string | null>(null);
   const [startMenuOpen, setStartMenuOpen] = useState(false);
   const [clock, setClock] = useState(new Date());
-  const [globalContextMenu, setGlobalContextMenu] = useState<{x:number, y:number, targetItem?: Item, isRecycleBin?: boolean} | null>(null);
+  const [globalContextMenu, setGlobalContextMenu] = useState<{x:number, y:number, targetItem?: Item | API.AppDefinition, isRecycleBin?: boolean, type?: 'desktop' | 'item' | 'app'} | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   // EXPLORER STATE
@@ -728,6 +903,12 @@ const App = () => {
       try {
         setGlobalLoadingMessage("Loading System Configuration...");
         const osConfig = await API.getSystemConfig();
+        
+        // Ensure YouTube is present in installedApps
+        if (!osConfig.installedApps.some(app => app.id === 'youtube')) {
+            osConfig.installedApps.push({ id: 'youtube', name: 'YouTube', url: 'internal://youtube', icon: 'youtube', type: 'system' });
+        }
+        
         setConfig(osConfig);
 
         setGlobalLoadingMessage("Locating Cloud Storage...");
@@ -996,6 +1177,20 @@ const App = () => {
     catch (e) { addNotification("Failed", "error"); } finally { setIsPostingComment(false); }
   };
 
+  // --- PROPERTIES MODAL ---
+  const handlePropertiesSave = async (updatedKeys: string[]) => {
+     if(!config) return;
+     const updatedConfig = { ...config, youtubeApiKeys: updatedKeys };
+     try {
+        await API.saveSystemConfig(updatedConfig);
+        setConfig(updatedConfig);
+        addNotification("API Keys updated", "success");
+        setModal(null);
+     } catch(e) {
+        addNotification("Failed to save keys", "error");
+     }
+  };
+
   // --- PERFORMANCE OPTIMIZED WINDOW MANAGER ---
   const handleWindowAction = (instanceId: string, e: React.PointerEvent, actionType: 'move' | 'resize', corner?: string) => {
     if (e.button !== 0) return;
@@ -1094,23 +1289,38 @@ const App = () => {
   return (
     <div className="fixed inset-0 w-full h-[100dvh] overflow-hidden bg-slate-900 select-none font-sans touch-none" 
          style={{ backgroundImage: `url(${config?.wallpaper})`, backgroundSize: 'cover', backgroundPosition: 'center' }}
-         onPointerDown={() => setGlobalContextMenu(null)}>
+         onPointerDown={() => setGlobalContextMenu(null)}
+         onContextMenu={(e) => {
+             e.preventDefault();
+             setGlobalContextMenu({ x: e.clientX, y: e.clientY, type: 'desktop' });
+         }}
+    >
       
       {isInteracting && (
         <div className="fixed inset-0 z-[9999] cursor-move bg-transparent touch-none" />
       )}
 
       {/* DESKTOP ICONS */}
-      <div className="absolute top-0 left-0 bottom-12 w-full p-4 flex flex-col flex-wrap content-start gap-2 z-0" 
-           onPointerDown={() => { setStartMenuOpen(false); setActiveWindowId(null); }}>
+      <div className="absolute top-0 left-0 bottom-12 w-full p-4 flex flex-col flex-wrap content-start gap-2 z-0">
         {config?.installedApps.map(app => (
-          <div key={app.id} onDoubleClick={() => openApp(app)} className="w-24 flex flex-col items-center gap-1.5 p-2 rounded-lg hover:bg-white/10 cursor-default group transition-colors">
-            <div className="w-14 h-14 glass-light rounded-2xl flex items-center justify-center shadow-lg group-hover:scale-105 transition-transform text-white">
-              {app.icon === 'folder' ? <Folder size={32} className="text-blue-400 drop-shadow-lg"/> :
-               app.icon === 'settings' ? <Settings size={32} className="text-slate-300 drop-shadow-lg"/> :
-               app.icon === 'shopping-bag' ? <ShoppingBag size={32} className="text-pink-400 drop-shadow-lg"/> : 
-               app.icon === 'image' ? <ImageIcon size={32} className="text-pink-400 drop-shadow-lg" /> :
-               <Globe size={32} className="text-emerald-400 drop-shadow-lg"/>}
+          <div key={app.id} 
+               onDoubleClick={() => openApp(app)}
+               onPointerDown={() => { setStartMenuOpen(false); setActiveWindowId(null); }}
+               onContextMenu={(e) => {
+                 e.preventDefault();
+                 e.stopPropagation();
+                 setGlobalContextMenu({ x: e.clientX, y: e.clientY, targetItem: app as any, type: 'app' });
+               }}
+               className="w-24 flex flex-col items-center gap-1.5 p-2 rounded-lg hover:bg-white/10 cursor-default group transition-colors"
+          >
+            <div className="w-12 h-12 glass-light rounded-2xl flex items-center justify-center shadow-lg group-hover:scale-105 transition-transform text-white overflow-hidden">
+              {app.icon.startsWith('http') ? <img src={app.icon} className="w-full h-full object-cover"/> :
+               app.icon === 'folder' ? <Folder size={28} className="text-blue-400 drop-shadow-lg"/> :
+               app.icon === 'settings' ? <Settings size={28} className="text-slate-300 drop-shadow-lg"/> :
+               app.icon === 'shopping-bag' ? <ShoppingBag size={28} className="text-pink-400 drop-shadow-lg"/> : 
+               app.icon === 'image' ? <ImageIcon size={28} className="text-pink-400 drop-shadow-lg" /> :
+               app.icon === 'youtube' ? <Youtube size={28} className="text-red-500 drop-shadow-lg" /> :
+               <Globe size={28} className="text-emerald-400 drop-shadow-lg"/>}
             </div>
             <span className="text-[10px] text-white font-bold text-shadow text-center line-clamp-2 px-1">{app.name}</span>
           </div>
@@ -1132,6 +1342,7 @@ const App = () => {
                  {win.appId === 'file-explorer' ? <Folder size={14}/> : 
                   (win.appId === 'app-store' || win.appId === 'store') ? <ShoppingBag size={14}/> : 
                   win.appId === 'settings' ? <Settings size={14}/> : 
+                  win.appId === 'youtube' ? <Youtube size={14} className="text-red-500"/> :
                   win.appData.icon === 'image' ? <ImageIcon size={14}/> : <Globe size={14}/>}
                </div>
                <span className="text-[10px] font-bold text-slate-300 tracking-wide uppercase">{win.title}</span>
@@ -1152,7 +1363,7 @@ const App = () => {
                   triggerCloudSync, triggerCommentSync, handleRefreshComments, addNotification, removeNotification, updateNotification,
                   setModal, modal, setEditingNote, setViewingRawFile, setPreviewImage, handleUploadFiles, executeAction, loadFolder,
                   selectedIds, setSelectedIds, 
-                  onContextMenu: (e: any, item: any, isBin: boolean) => setGlobalContextMenu({ x: e.clientX, y: e.clientY, targetItem: item, isRecycleBin: isBin })
+                  onContextMenu: (e: any, item: any, isBin: boolean) => setGlobalContextMenu({ x: e.clientX, y: e.clientY, targetItem: item, isRecycleBin: isBin, type: 'item' })
               }} />
             )}
             {win.appData.url === 'internal://gallery' && (
@@ -1170,6 +1381,7 @@ const App = () => {
                 }}
               />
             )}
+            {win.appId === 'youtube' && <YouTubeApp customKeys={config?.youtubeApiKeys} />}
             {win.appId === 'settings' && <SettingsApp config={config!} onSave={async (c:any)=>{
                 try {
                    await API.saveSystemConfig(c);
@@ -1177,8 +1389,8 @@ const App = () => {
                    addNotification("Pengaturan disimpan", "success");
                 } catch(e) { addNotification("Gagal menyimpan", "error"); }
             }}/>}
-            {(win.appId === 'app-store' || win.appId === 'store') && <AppStoreApp config={config!} setConfig={setConfig} addNotification={addNotification}/>}
-            {(win.appData.type === 'webapp') && (
+            {(win.appId === 'app-store' || win.appId === 'store') && <AppStoreApp config={config!} setConfig={setConfig} addNotification={addNotification} systemFolderId={systemFolderId}/>}
+            {(win.appData.type === 'webapp') && win.appId !== 'youtube' && (
               <div className="h-full flex flex-col bg-white">
                 <div className="p-1 bg-slate-100 flex items-center justify-between gap-2 border-b">
                    <div className="flex items-center gap-2 flex-1 min-w-0">
@@ -1210,11 +1422,13 @@ const App = () => {
           <div className="grid grid-cols-4 sm:grid-cols-6 gap-6 flex-1 content-start overflow-y-auto pr-2 no-scrollbar">
              {config?.installedApps.map(app => (
                <button key={app.id} onClick={()=>openApp(app)} className="flex flex-col items-center gap-2 group">
-                 <div className="w-12 h-12 bg-white/5 hover:bg-white/10 rounded-2xl flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform">
-                    {app.icon === 'folder' ? <Folder size={24} className="text-blue-400"/> : 
+                 <div className="w-12 h-12 bg-white/5 hover:bg-white/10 rounded-2xl flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform overflow-hidden">
+                    {app.icon.startsWith('http') ? <img src={app.icon} className="w-full h-full object-cover"/> :
+                     app.icon === 'folder' ? <Folder size={24} className="text-blue-400"/> : 
                      app.icon === 'settings' ? <Settings size={24} className="text-slate-300"/> : 
                      app.icon === 'shopping-bag' ? <ShoppingBag size={24} className="text-pink-400"/> :
                      app.icon === 'image' ? <ImageIcon size={24} className="text-pink-400" /> :
+                     app.icon === 'youtube' ? <Youtube size={24} className="text-red-500"/> :
                      <Globe size={24} className="text-emerald-400"/>}
                  </div>
                  <span className="text-[10px] text-white font-medium truncate w-full text-center group-hover:text-blue-400">{app.name}</span>
@@ -1252,10 +1466,11 @@ const App = () => {
            {windows.map(win => (
              <button key={win.instanceId} onClick={() => { if (win.isMinimized) toggleMinimize(win.instanceId); setActiveWindowId(win.instanceId); }}
                      className={`p-2 rounded-xl hover:bg-white/10 transition-all relative group flex-shrink-0 ${activeWindowId === win.instanceId && !win.isMinimized ? 'bg-white/10' : 'opacity-60'}`}>
-                <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-white text-[10px] font-bold shadow-lg ${win.appId === 'file-explorer' ? 'bg-blue-600' : (win.appId === 'app-store' || win.appId === 'store') ? 'bg-pink-600' : win.appData.icon === 'image' ? 'bg-pink-500' : 'bg-slate-700'}`}>
+                <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-white text-[10px] font-bold shadow-lg ${win.appId === 'file-explorer' ? 'bg-blue-600' : (win.appId === 'app-store' || win.appId === 'store') ? 'bg-pink-600' : win.appId === 'youtube' ? 'bg-red-600' : win.appData.icon === 'image' ? 'bg-pink-500' : 'bg-slate-700'}`}>
                    {win.appId === 'file-explorer' ? <Folder size={14}/> : 
                     (win.appId === 'app-store' || win.appId === 'store') ? <ShoppingBag size={14}/> : 
                     win.appId === 'settings' ? <Settings size={14}/> : 
+                    win.appId === 'youtube' ? <Youtube size={14}/> :
                     win.appData.icon === 'image' ? <ImageIcon size={14} /> : win.title.charAt(0)}
                 </div>
                 {!win.isMinimized && activeWindowId === win.instanceId && <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-3 h-1 bg-blue-400 rounded-full"></div>}
@@ -1276,10 +1491,10 @@ const App = () => {
         <div className="fixed inset-0 z-[1000]" onClick={() => setGlobalContextMenu(null)} onContextMenu={(e) => { e.preventDefault(); setGlobalContextMenu(null); }}>
           <div className="absolute z-[1001] bg-slate-900 border border-slate-700 rounded-lg shadow-2xl py-1 min-w-[180px] animate-in zoom-in-95 duration-100 overflow-hidden" 
                style={{ top: globalContextMenu.y, left: globalContextMenu.x }} onClick={(e) => e.stopPropagation()}>
-            {globalContextMenu.targetItem ? (
+            {globalContextMenu.type === 'item' ? (
                 <>
                   <button onClick={() => { executeAction('comment'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><MessageSquare size={14}/> Comment</button>
-                  {globalContextMenu.targetItem.type === 'image' && (
+                  {(globalContextMenu.targetItem as Item).type === 'image' && (
                     <button onClick={() => { executeAction('download'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-emerald-400"><Download size={14}/> Download Original</button>
                   )}
                   <button onClick={() => { executeAction('rename'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><Edit size={14}/> Rename</button>
@@ -1287,11 +1502,18 @@ const App = () => {
                   <div className="h-px bg-slate-800 my-1"></div>
                   <button onClick={() => { executeAction('delete'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-500 text-xs flex items-center gap-2"><Trash2 size={14}/> Delete</button>
                 </>
+            ) : globalContextMenu.type === 'app' ? (
+                <>
+                   <button onClick={() => { openApp(globalContextMenu.targetItem as API.AppDefinition); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><ExternalLink size={14}/> Open</button>
+                   {globalContextMenu.targetItem?.id === 'youtube' && (
+                       <button onClick={() => { setModal({ type: 'properties', title: 'YouTube Properties', targetItem: globalContextMenu.targetItem as any }); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><Settings size={14}/> Properties</button>
+                   )}
+                </>
             ) : (
                 <>
-                  <button onClick={() => { executeAction('new_folder'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><Folder size={14}/> New Folder</button>
-                  <button onClick={() => { executeAction('native_upload'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-green-400"><Upload size={14}/> Upload Files</button>
                   <button onClick={() => { loadFolder(currentFolderId); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><RefreshCw size={14}/> Refresh</button>
+                  <div className="h-px bg-slate-800 my-1"></div>
+                  <button onClick={() => { setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-400">Cancel</button>
                 </>
             )}
           </div>
@@ -1307,7 +1529,7 @@ const App = () => {
       {modal && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => !isPostingComment && setModal(null)} />
-          <div className={`relative w-full ${modal.type === 'comment' ? 'max-w-2xl' : 'max-w-sm'} bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden`}>
+          <div className={`relative w-full ${modal.type === 'comment' || modal.type === 'properties' ? 'max-w-2xl' : 'max-w-sm'} bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden`}>
             {modal.type === 'comment' ? (
               <div className="flex flex-col h-[500px] max-h-[70vh]">
                 <div className="p-4 bg-slate-950 flex items-center justify-between"><h3 className="text-sm font-bold">{modal.title}</h3><button onClick={() => setModal(null)}><X size={18}/></button></div>
@@ -1328,6 +1550,58 @@ const App = () => {
                    <button onClick={handleAddComment} className="p-2 bg-blue-600 text-white rounded-lg"><Send size={16}/></button>
                 </div>
               </div>
+            ) : modal.type === 'properties' && modal.targetItem?.id === 'youtube' ? (
+                <div className="p-6">
+                   <h3 className="text-lg font-bold text-white mb-4">YouTube API Configuration</h3>
+                   <div className="space-y-4">
+                        <div className="bg-slate-800 p-4 rounded-xl border border-slate-700">
+                            <h4 className="text-xs text-slate-400 uppercase font-bold mb-2">Custom API Keys</h4>
+                            <div className="space-y-2 mb-3 max-h-40 overflow-y-auto">
+                                {(config?.youtubeApiKeys || []).map((key, idx) => (
+                                    <div key={idx} className="flex justify-between items-center bg-slate-900 p-2 rounded border border-slate-800">
+                                        <span className="text-xs font-mono text-slate-500">
+                                            {key.substring(0, 4)}...{key.substring(key.length-4)}
+                                        </span>
+                                        <button 
+                                            onClick={() => handlePropertiesSave((config?.youtubeApiKeys || []).filter((_, i) => i !== idx))}
+                                            className="text-red-500 hover:text-red-400"
+                                        >
+                                            <X size={14}/>
+                                        </button>
+                                    </div>
+                                ))}
+                                {(!config?.youtubeApiKeys || config.youtubeApiKeys.length === 0) && (
+                                    <p className="text-xs text-slate-600 italic">No custom keys added.</p>
+                                )}
+                            </div>
+                            <div className="flex gap-2">
+                                <input 
+                                    className="flex-1 bg-slate-900 border border-slate-700 rounded px-3 py-2 text-xs text-white" 
+                                    placeholder="Enter new API Key"
+                                    id="new-api-key-input"
+                                />
+                                <button 
+                                    onClick={() => {
+                                        const input = document.getElementById('new-api-key-input') as HTMLInputElement;
+                                        if(input.value) {
+                                            handlePropertiesSave([...(config?.youtubeApiKeys || []), input.value]);
+                                            input.value = "";
+                                        }
+                                    }}
+                                    className="px-3 bg-blue-600 rounded text-xs text-white font-bold"
+                                >
+                                    Add
+                                </button>
+                            </div>
+                        </div>
+                        <p className="text-[10px] text-slate-500">
+                            Keys are stored securely in your database. The system automatically rotates between default and custom keys if quotas are reached.
+                        </p>
+                        <div className="flex justify-end pt-2">
+                             <button onClick={() => setModal(null)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs font-bold text-white">Close</button>
+                        </div>
+                   </div>
+                </div>
             ) : (
               <div className="p-6">
                 <h3 className="text-lg font-bold text-white mb-2">{modal.title}</h3>
