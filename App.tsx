@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { 
   Folder, FileText, Image as ImageIcon, MoreVertical, 
@@ -1432,7 +1433,10 @@ const App = () => {
     <div className="fixed inset-0 w-full h-[100dvh] overflow-hidden bg-slate-900 select-none font-sans touch-none" 
          style={{ backgroundImage: `url(${config?.wallpaper})`, backgroundSize: 'cover', backgroundPosition: 'center' }}
          onPointerDown={() => setGlobalContextMenu(null)}
-         // Removed onContextMenu from root
+         onContextMenu={(e) => {
+             e.preventDefault();
+             setGlobalContextMenu({ x: e.clientX, y: e.clientY, type: 'desktop' });
+         }}
     >
       
       {isInteracting && (
@@ -1639,9 +1643,12 @@ const App = () => {
 
       {/* GLOBAL CONTEXT MENU */}
       {globalContextMenu && (
-        <div className="fixed inset-0 z-[1000]" onClick={() => setGlobalContextMenu(null)} onContextMenu={(e) => { e.preventDefault(); setGlobalContextMenu(null); }}>
-          <div className="absolute z-[1001] bg-slate-900 border border-slate-700 rounded-lg shadow-2xl py-1 min-w-[180px] animate-in zoom-in-95 duration-100 overflow-hidden" 
-               style={{ top: globalContextMenu.y, left: globalContextMenu.x }} onClick={(e) => e.stopPropagation()}>
+        <div 
+            className="absolute z-[1001] bg-slate-900 border border-slate-700 rounded-lg shadow-2xl py-1 min-w-[180px] animate-in zoom-in-95 duration-100 overflow-hidden" 
+            style={{ top: globalContextMenu.y, left: globalContextMenu.x }}
+            onPointerDown={(e) => e.stopPropagation()} 
+            onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
+        >
             {globalContextMenu.type === 'item' ? (
                 <>
                   <button onClick={() => { executeAction('comment'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><MessageSquare size={14}/> Comment</button>
@@ -1667,7 +1674,6 @@ const App = () => {
                   <button onClick={() => { setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-400">Cancel</button>
                 </>
             )}
-          </div>
         </div>
       )}
 
