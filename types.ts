@@ -19,11 +19,12 @@ export interface StoredNote {
   id: string;
   galleryId: string;
   title: string;
-  content: string; 
-  snippet?: string; 
+  content: string; // HTML content or URL to content
+  snippet?: string; // Short preview text from backend
   timestamp: number;
 }
 
+// New Generic Item for File Manager
 export interface Item {
   id: string;
   name: string;
@@ -32,18 +33,19 @@ export interface Item {
   thumbnail?: string;
   snippet?: string;
   lastUpdated: number;
-  content?: string; 
-  status?: 'idle' | 'deleting' | 'restoring' | 'uploading' | 'moving' | 'creating'; 
+  content?: string; // Cache content for notes locally
+  status?: 'idle' | 'deleting' | 'restoring' | 'uploading' | 'moving' | 'creating'; // UI State
 }
 
 export interface DownloadItem {
-  id: string;
+  id: string; // Item ID
   name: string;
   status: 'pending' | 'downloading' | 'completed' | 'error';
-  progress: number;
+  progress: number; // 0 - 100
   error?: string;
 }
 
+// System Database Types
 export interface FolderNode {
   id: string;
   name: string;
@@ -60,7 +62,7 @@ export interface Comment {
   author: string;
   text: string;
   timestamp: number;
-  parentId?: string; 
+  parentId?: string; // For replies
 }
 
 export interface CommentDB {
@@ -68,35 +70,7 @@ export interface CommentDB {
 }
 
 export interface SystemDB {
-  fileId: string | null;
+  fileId: string | null; // ID of the JSON file on Drive
   map: FolderMap;
   lastSync: number;
-}
-
-// --- CLOUD OS TYPES ---
-
-export interface AppDefinition {
-  id: string;
-  name: string;
-  icon: string; // lucide icon name or image url
-  type: 'system' | 'webapp';
-  url?: string; // For webapps
-}
-
-export interface SystemConfig {
-  wallpaper: string;
-  theme: 'dark' | 'light';
-  installedApps: AppDefinition[];
-}
-
-export interface WindowState {
-  instanceId: string;
-  appId: string;
-  title: string;
-  appData: AppDefinition;
-  isMinimized: boolean;
-  isMaximized: boolean;
-  position: { x: number; y: number };
-  size: { w: number; h: number };
-  zIndex: number;
 }

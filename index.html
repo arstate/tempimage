@@ -4,7 +4,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>cloud device</title>
+    <title>Cloud Device</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
@@ -12,54 +12,60 @@
             font-family: 'Inter', sans-serif;
             background-color: #000;
             color: #f8fafc;
-            margin: 0;
             overflow: hidden;
+            margin: 0;
+        }
+
+        .text-shadow {
+            text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+        }
+
+        /* Glassmorphism */
+        .glass {
+            background: rgba(15, 23, 42, 0.7);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .glass-light {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
         }
 
         /* --- CUSTOM SCROLLBAR THEME --- */
         ::-webkit-scrollbar {
-            width: 8px;
-            height: 8px;
+            width: 6px;
+            height: 6px;
         }
         ::-webkit-scrollbar-track {
-            background: rgba(15, 23, 42, 0.1);
+            background: transparent;
         }
         ::-webkit-scrollbar-thumb {
-            background: #475569;
+            background: rgba(255, 255, 255, 0.2);
             border-radius: 10px;
-            border: 2px solid transparent;
-            background-clip: padding-box;
         }
         ::-webkit-scrollbar-thumb:hover {
-            background: #64748b;
+            background: rgba(255, 255, 255, 0.3);
         }
         
-        .no-scrollbar::-webkit-scrollbar {
-            display: none;
-        }
-        .no-scrollbar {
-            -ms-overflow-style: none;
-            scrollbar-width: none;
+        * {
+            scrollbar-width: thin;
+            scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
         }
 
-        .text-shadow {
-            text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: scale(0.95); }
+            to { opacity: 1; transform: scale(1); }
         }
 
-        /* Windows 11 Blur Effect */
-        .glass {
-            background: rgba(30, 41, 59, 0.7) !important;
-            backdrop-filter: blur(20px) saturate(180%) !important;
-            -webkit-backdrop-filter: blur(20px) saturate(180%) !important;
-        }
-
-        @keyframes window-open {
-            from { opacity: 0; transform: scale(0.95) translateY(10px); }
-            to { opacity: 1; transform: scale(1) translateY(0); }
-        }
-
-        .window-animate {
-            animation: window-open 0.2s cubic-bezier(0, 0, 0.2, 1);
+        .animate-window-open {
+            animation: fadeIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
         }
     </style>
 <script type="importmap">

@@ -1,5 +1,8 @@
 {
-  "name": "tempimg",
-  "description": "A high-performance image gallery with folders, drag-and-drop, and persistent IndexedDB storage.",
-  "requestFramePermissions": []
+  "name": "Cloud Device",
+  "description": "A Windows 11-style Cloud OS with a persistent file system, window manager, and customizable web apps.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
 }

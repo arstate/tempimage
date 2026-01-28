@@ -1,12 +1,27 @@
 
-import { Item, FolderMap, CommentDB, SystemConfig } from '../types';
+import { Item, FolderMap, CommentDB } from '../types';
 
+// Updated GAS Endpoint
 const API_URL = "https://script.google.com/macros/s/AKfycbxppo1lC_7BdI7ToceKqNHRrcr3HljGHNphudbseZSsQbq01XASQ7RtRUEpkDh3RPtPUg/exec";
 
 const DB_FILENAME_KEYWORD = "system_zombio_db.json"; 
 const COMMENT_DB_FILENAME = "COMENTDATABASE.json";
 const CONFIG_FILENAME = "system_config.json";
 const SYSTEM_FOLDER_NAME = "System";
+
+export interface AppDefinition {
+  id: string;
+  name: string;
+  icon: string;
+  type: 'system' | 'webapp';
+  url?: string;
+}
+
+export interface SystemConfig {
+  wallpaper: string;
+  theme: 'dark' | 'light';
+  installedApps: AppDefinition[];
+}
 
 interface ApiResponse {
   status: 'success' | 'error';
@@ -32,11 +47,11 @@ export const callGoogleScript = async (payload: any): Promise<ApiResponse> => {
       return JSON.parse(textResult);
     } catch (e) {
       console.error("Non-JSON Response received:", textResult);
-      throw new Error("Server merespon dengan format yang salah.");
+      throw new Error("Server response format error.");
     }
   } catch (error) {
     console.error("Fetch Error:", error);
-    throw new Error(error instanceof Error ? error.message : "Gagal menghubungi server Google.");
+    throw new Error(error instanceof Error ? error.message : "Failed to connect to cloud server.");
   }
 };
 
@@ -49,17 +64,17 @@ export const fileToBase64 = (file: File | Blob): Promise<string> => {
   });
 };
 
-// --- SYSTEM CONFIG ACTIONS ---
+// --- SYSTEM OS CONFIG ---
 
 export const getSystemConfig = async (): Promise<SystemConfig> => {
   const res = await callGoogleScript({ action: "getSystemConfig" });
-  if (res.status === 'success') return res.data;
-  throw new Error(res.message || "Gagal memuat konfigurasi sistem.");
+  if (res.status === "success") return res.data;
+  throw new Error("Failed to load OS config");
 };
 
 export const saveSystemConfig = async (config: SystemConfig): Promise<void> => {
   const res = await callGoogleScript({ action: "saveSystemConfig", config });
-  if (res.status !== 'success') throw new Error(res.message);
+  if (res.status !== "success") throw new Error("Failed to save OS config");
 };
 
 // --- FILE MANAGER API ACTIONS ---
@@ -118,13 +133,12 @@ export const getFileContent = async (fileId: string): Promise<string> => {
   if (result.status === 'success') {
     return typeof result.data?.content === 'string' ? result.data.content : "";
   } else {
-    throw new Error(result.message || "Gagal mengambil konten.");
+    throw new Error(result.message || "Failed to fetch content.");
   }
 };
 
 export const uploadToDrive = async (file: File, folderId: string): Promise<any> => {
   const base64 = await fileToBase64(file);
-  
   const result = await callGoogleScript({
     action: "uploadImage",
     folderId: folderId, 
@@ -132,10 +146,7 @@ export const uploadToDrive = async (file: File, folderId: string): Promise<any> 
     mimeType: file.type || "image/jpeg",
     base64: base64
   });
-
-  if (result.status === 'error') {
-    throw new Error(result.message || "Upload gagal.");
-  }
+  if (result.status === 'error') throw new Error(result.message || "Upload failed.");
   return result.data;
 };
 
@@ -147,7 +158,6 @@ export const saveNoteToDrive = async (title: string, content: string, folderId: 
     content: content,
     fileId: fileId || null 
   });
-
   if (result.status === 'error') throw new Error(result.message);
   return result.data;
 };
@@ -173,7 +183,6 @@ export const locateSystemDB = async (): Promise<{ fileId: string | null, comment
       commentFileId: commentFile ? commentFile.id : null,
       systemFolderId: systemFolder.id 
     };
-
   } catch (e) {
     console.error("Error locating system DB:", e);
     return { fileId: null, commentFileId: null, systemFolderId: null };
@@ -183,7 +192,7 @@ export const locateSystemDB = async (): Promise<{ fileId: string | null, comment
 export const createSystemFolder = async (): Promise<string> => {
     const res = await createFolder("", SYSTEM_FOLDER_NAME);
     if (res.status === 'success' && res.data) return res.data.id;
-    throw new Error("Gagal membuat folder System");
+    throw new Error("Failed to create System folder");
 };
 
 export const createSystemDBFile = async (initialMap: FolderMap, folderId: string): Promise<string> => {
