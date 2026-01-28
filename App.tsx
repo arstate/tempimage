@@ -261,7 +261,7 @@ const App = () => {
              <div className="space-y-4">
                <div className="flex items-center justify-between px-2">
                   <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest">Pinned Apps</h3>
-                  <button className="text-[10px] bg-white/5 px-2 py-1 rounded hover:bg-white/10 text-white font-bold">All Apps ></button>
+                  <button className="text-[10px] bg-white/5 px-2 py-1 rounded hover:bg-white/10 text-white font-bold">All Apps &gt;</button>
                </div>
                <div className="grid grid-cols-6 gap-2">
                  {config!.installedApps.map(app => (
