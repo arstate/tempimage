@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { 
   Folder, FileText, Image as ImageIcon, MoreVertical, 
@@ -30,6 +29,9 @@ const DEFAULT_YOUTUBE_KEYS = [
   "AIzaSyC1V-c8uxlnyDI7ZqUjK5KoJb1wYeZcdg4"
 ];
 
+const GRID_SIZE_X = 100;
+const GRID_SIZE_Y = 120;
+
 // --- TYPES ---
 type ModalType = 'input' | 'confirm' | 'alert' | 'select' | 'password' | 'comment' | 'properties' | null;
 interface ModalState {
@@ -42,7 +44,7 @@ interface ModalState {
   confirmText?: string;
   isDanger?: boolean;
   targetItem?: Item | API.AppDefinition;
-  isLoading?: boolean; // For blocking interactions
+  isLoading?: boolean;
 }
 
 interface Notification {
@@ -210,7 +212,6 @@ const ImageItem = ({ item, hasComments, selected, onClick, onDoubleClick, onCont
 
 // --- YOUTUBE APP COMPONENT ---
 const YouTubeApp = ({ customKeys }: { customKeys?: string[] }) => {
-  // ... (Existing Implementation) ...
   const [searchQuery, setSearchQuery] = useState("");
   const [videos, setVideos] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
@@ -346,7 +347,6 @@ const GalleryApp = ({ items, onUpload, onDelete, loading }: any) => {
 
 // --- APP STORE COMPONENT ---
 const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId }: any) => {
-   // ... (Keep existing implementation) ...
    const [appName, setAppName] = useState('');
    const [appUrl, setAppUrl] = useState('');
    const [customIconFile, setCustomIconFile] = useState<File | null>(null);
@@ -659,7 +659,7 @@ const FileExplorerApp = ({
             {isNewDropdownOpen && (
               <div className="absolute right-3 top-12 w-48 bg-slate-800 border border-slate-700 rounded-lg shadow-2xl z-50 p-1 animate-in zoom-in-95 duration-150 origin-top-right">
                 <button onClick={() => { setIsNewDropdownOpen(false); executeAction('new_folder'); }} className="w-full text-left px-3 py-2 hover:bg-slate-700 rounded-lg flex items-center gap-2 text-xs"><Folder size={14} className="text-blue-400"/> New Folder</button>
-                <button onClick={() => { setIsNewDropdownOpen(false); openNotesApp(); }} className="w-full text-left px-3 py-2 hover:bg-slate-700 rounded-lg flex items-center gap-2 text-xs"><FileText size={14} className="text-yellow-400"/> New Note</button>
+                <button onClick={() => { setIsNewDropdownOpen(false); openNotesApp(undefined, true); }} className="w-full text-left px-3 py-2 hover:bg-slate-700 rounded-lg flex items-center gap-2 text-xs"><FileText size={14} className="text-yellow-400"/> New Note</button>
                 <button onClick={() => { setIsNewDropdownOpen(false); executeAction('native_upload'); }} className="w-full text-left px-3 py-2 hover:bg-slate-700 rounded-lg flex items-center gap-2 text-xs"><Upload size={14} className="text-green-400"/> Upload File</button>
               </div>
             )}
@@ -773,6 +773,9 @@ const App = () => {
   // Interaction State
   const [isInteracting, setIsInteracting] = useState(false);
   const [iconLayout, setIconLayout] = useState<{ [appId: string]: {x: number, y: number} }>({});
+  const [selectedDesktopIcon, setSelectedDesktopIcon] = useState<string | null>(null);
+  const desktopDragStart = useRef<{x: number, y: number} | null>(null);
+  const isDraggingDesktop = useRef(false);
 
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) { document.documentElement.requestFullscreen().catch(e => console.error(e)); } 
@@ -932,6 +935,30 @@ const App = () => {
     }
   };
 
+  const handleUploadFiles = async (files: File[]) => {
+    if (files.length === 0) return;
+    const newUploads: UploadItem[] = files.map(f => ({ id: Math.random().toString(), file: f, status: 'uploading', progress: 0 }));
+    setUploadQueue(prev => [...prev, ...newUploads]);
+    for (const up of newUploads) {
+      try { await API.uploadToDrive(up.file, currentFolderId); setUploadQueue(prev => prev.map(u => u.id === up.id ? {...u, status:'success', progress: 100} : u)); }
+      catch(e) { setUploadQueue(prev => prev.map(u => u.id === up.id ? {...u, status:'error'} : u)); }
+    }
+    await loadFolder(currentFolderId);
+  };
+
+  const handleAddComment = async () => {
+    if (!commentName.trim() || !commentText.trim() || !modal?.targetItem) return;
+    setIsPostingComment(true); 
+    const targetId = modal.targetItem.id;
+    const newComment: Comment = { id: Date.now().toString(), itemId: targetId, author: commentName, text: commentText, timestamp: Date.now() };
+    const next = { ...commentsRef.current }; 
+    if (!next[targetId]) next[targetId] = []; 
+    next[targetId] = [...next[targetId], newComment];
+    commentsRef.current = next; setComments(next);
+    try { await triggerCommentSync(); setCommentText(''); addNotification("Comment posted", "success"); } 
+    catch (e) { addNotification("Failed", "error"); } finally { setIsPostingComment(false); }
+  };
+
   const executeAction = async (action: string, specificIds?: string[], targetFolderId?: string) => {
     const ids = specificIds || Array.from(selectedIds);
     if (ids.length === 0 && action !== 'new_folder' && action !== 'native_upload') return;
@@ -1071,30 +1098,6 @@ const App = () => {
     }
   };
 
-  const handleUploadFiles = async (files: File[]) => {
-    if (files.length === 0) return;
-    const newUploads: UploadItem[] = files.map(f => ({ id: Math.random().toString(), file: f, status: 'uploading', progress: 0 }));
-    setUploadQueue(prev => [...prev, ...newUploads]);
-    for (const up of newUploads) {
-      try { await API.uploadToDrive(up.file, currentFolderId); setUploadQueue(prev => prev.map(u => u.id === up.id ? {...u, status:'success', progress: 100} : u)); }
-      catch(e) { setUploadQueue(prev => prev.map(u => u.id === up.id ? {...u, status:'error'} : u)); }
-    }
-    await loadFolder(currentFolderId);
-  };
-
-  const handleAddComment = async () => {
-    if (!commentName.trim() || !commentText.trim() || !modal?.targetItem) return;
-    setIsPostingComment(true); 
-    const targetId = modal.targetItem.id;
-    const newComment: Comment = { id: Date.now().toString(), itemId: targetId, author: commentName, text: commentText, timestamp: Date.now() };
-    const next = { ...commentsRef.current }; 
-    if (!next[targetId]) next[targetId] = []; 
-    next[targetId] = [...next[targetId], newComment];
-    commentsRef.current = next; setComments(next);
-    try { await triggerCommentSync(); setCommentText(''); addNotification("Comment posted", "success"); } 
-    catch (e) { addNotification("Failed", "error"); } finally { setIsPostingComment(false); }
-  };
-
   const handlePropertiesSave = async (updatedKeys: string[]) => {
      if(!config) return;
      const updatedConfig = { ...config, youtubeApiKeys: updatedKeys };
@@ -1104,46 +1107,95 @@ const App = () => {
 
   const handleDesktopIconDrag = (appId: string, e: React.PointerEvent) => {
      if (e.button !== 0) return;
-     setIsInteracting(true);
-     const startX = e.pageX; const startY = e.pageY;
-     const initial = iconLayout[appId] || { x: 0, y: 0 };
-     // If not set, calculate initial based on grid flow if possible, or just current DOM pos
-     // Simplified: We assume absolute positioning if layout exists, else standard flow
-     const iconEl = e.currentTarget as HTMLElement;
-     const rect = iconEl.getBoundingClientRect();
      
-     // If this is the first time dragging, we need to set absolute positions for ALL icons to prevent jumping
-     // For now, we just handle the individual icon visual drag
+     // Initiate potential drag
+     desktopDragStart.current = { x: e.pageX, y: e.pageY };
+     isDraggingDesktop.current = false;
+     setIsInteracting(true);
+
+     const iconEl = e.currentTarget as HTMLElement;
+     const initial = iconLayout[appId] || { x: 0, y: 0 };
+     
+     // Use initial layout position or current DOM position if undefined
+     let startLeft = initial.x;
+     let startTop = initial.y;
+
+     if (!startLeft && !startTop) {
+         const rect = iconEl.getBoundingClientRect();
+         startLeft = rect.left;
+         startTop = rect.top;
+     }
+     
+     // Set initial style for dragging
      iconEl.style.position = 'absolute';
      iconEl.style.zIndex = '50';
-     // If no initial layout, use current rect
-     const initX = initial.x || rect.left;
-     const initY = initial.y || rect.top;
-     
-     let curX = initX; let curY = initY;
+     iconEl.style.transition = 'none';
+
+     let curX = startLeft; 
+     let curY = startTop;
 
      const onMove = (mv: PointerEvent) => {
-         const dx = mv.pageX - startX; const dy = mv.pageY - startY;
-         curX = initX + dx; curY = initY + dy;
-         iconEl.style.left = `${curX}px`; iconEl.style.top = `${curY}px`;
+         const dx = mv.pageX - desktopDragStart.current!.x;
+         const dy = mv.pageY - desktopDragStart.current!.y;
+         
+         // Threshold for drag detection
+         if (!isDraggingDesktop.current && (Math.abs(dx) > 5 || Math.abs(dy) > 5)) {
+             isDraggingDesktop.current = true;
+         }
+
+         if (isDraggingDesktop.current) {
+             curX = startLeft + dx;
+             curY = startTop + dy;
+             iconEl.style.left = `${curX}px`;
+             iconEl.style.top = `${curY}px`;
+         }
      };
 
      const onUp = () => {
          setIsInteracting(false);
          iconEl.style.zIndex = '';
+         iconEl.style.transition = '';
+         
          window.removeEventListener('pointermove', onMove);
          window.removeEventListener('pointerup', onUp);
-         const newLayout = { ...iconLayout, [appId]: { x: curX, y: curY } };
-         setIconLayout(newLayout);
-         // Sync to cloud
-         if (config) {
-             const updatedConfig = { ...config, desktopLayout: newLayout };
-             setConfig(updatedConfig);
-             API.saveSystemConfig(updatedConfig).catch(() => console.error("Failed to save layout"));
+
+         if (isDraggingDesktop.current) {
+             // Snap to Grid Logic
+             const snappedX = Math.round(curX / GRID_SIZE_X) * GRID_SIZE_X + 20; // + margin offset
+             const snappedY = Math.round(curY / GRID_SIZE_Y) * GRID_SIZE_Y + 20;
+
+             const newLayout = { ...iconLayout, [appId]: { x: snappedX, y: snappedY } };
+             setIconLayout(newLayout);
+             
+             // Sync to cloud
+             if (config) {
+                 const updatedConfig = { ...config, desktopLayout: newLayout };
+                 setConfig(updatedConfig);
+                 API.saveSystemConfig(updatedConfig).catch(() => console.error("Failed to save layout"));
+             }
+         } else {
+             // It was a click, reset position if moved slightly
+             if (initial.x) {
+                iconEl.style.left = `${initial.x}px`;
+                iconEl.style.top = `${initial.y}px`;
+             } else {
+                iconEl.style.position = ''; // Reset to flow if it was flow
+             }
          }
+         
+         desktopDragStart.current = null;
+         isDraggingDesktop.current = false;
      };
+
      window.addEventListener('pointermove', onMove);
      window.addEventListener('pointerup', onUp);
+  };
+
+  const handleDesktopIconClick = (appId: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+      if (!isDraggingDesktop.current) {
+          setSelectedDesktopIcon(appId);
+      }
   };
   
   const handleRefreshDesktop = async () => {
@@ -1205,39 +1257,48 @@ const App = () => {
     setStartMenuOpen(false);
     if (!app) { addNotification("App not ready", "error"); return; }
     
-    // Handle Recycle Bin Special Case
+    // Always create a NEW window instance
+    // Recycle Bin is special case (it's a folder view)
     if (app.id === 'recycle-bin') {
         const explorer = config?.installedApps.find(a => a.id === 'file-explorer');
         if (explorer) {
-            // Check if Recycle Bin window exists
-            const existingBin = windows.find(w => w.appId === 'file-explorer' && w.args?.folderId === recycleBinId);
-            if (existingBin) {
-                setWindows(prev => prev.map(w => w.instanceId === existingBin.instanceId ? {...w, isMinimized: false} : w));
-                setActiveWindowId(existingBin.instanceId);
-            } else {
-                if(!recycleBinId) { addNotification("Recycle bin not initialized yet", "error"); return; }
-                // Open new explorer window pointed at bin
-                const newWindow = {
-                  instanceId: Date.now().toString(), appId: 'file-explorer', title: 'Recycle Bin', appData: explorer, args: { folderId: recycleBinId }, isMinimized: false, isMaximized: false,
-                  position: { x: 100, y: 100 }, size: { w: 800, h: 500 }
-                };
-                setWindows([...windows, newWindow]); setActiveWindowId(newWindow.instanceId);
-            }
+             const newWindow = {
+                  instanceId: Date.now().toString(), 
+                  appId: 'file-explorer', 
+                  title: 'Recycle Bin', 
+                  appData: explorer, 
+                  args: { folderId: recycleBinId }, 
+                  isMinimized: false, 
+                  isMaximized: false,
+                  position: { x: 100 + (windows.length * 20), y: 100 + (windows.length * 20) }, 
+                  size: { w: 800, h: 500 }
+             };
+             setWindows([...windows, newWindow]); 
+             setActiveWindowId(newWindow.instanceId);
         }
         return;
     }
 
-    const existing = windows.find(w => w.appId === app.id);
-    if (existing) { 
-      if (app.id === 'notes' && args) { setWindows(prev => prev.map(w => w.instanceId === existing.instanceId ? { ...w, isMinimized: false, args: args } : w)); } 
-      else { setWindows(prev => prev.map(w => w.instanceId === existing.instanceId ? {...w, isMinimized: false} : w)); }
-      setActiveWindowId(existing.instanceId); return; 
-    }
     const newWindow = {
-      instanceId: Date.now().toString(), appId: app.id, title: app.name, appData: app, args: args, isMinimized: false, isMaximized: false,
-      position: { x: 100 + (windows.length * 30), y: 50 + (windows.length * 30) }, size: { w: 900, h: 600 }
+      instanceId: Date.now().toString() + Math.random(), 
+      appId: app.id, 
+      title: app.name, 
+      appData: app, 
+      args: args, 
+      isMinimized: false, 
+      isMaximized: false,
+      position: { x: 100 + (windows.length * 30), y: 50 + (windows.length * 30) }, 
+      size: { w: 900, h: 600 }
     };
-    setWindows([...windows, newWindow]); setActiveWindowId(newWindow.instanceId);
+    setWindows([...windows, newWindow]); 
+    setActiveWindowId(newWindow.instanceId);
+  };
+
+  const openNotesApp = (fileId?: string, isNew?: boolean) => {
+    const notesApp = config?.installedApps.find(a => a.id === 'notes');
+    if (notesApp) {
+        openApp(notesApp, { fileId, isNew, folderId: currentFolderId });
+    }
   };
   
   const closeWindow = (instanceId: string) => setWindows(prev => prev.filter(w => w.instanceId !== instanceId));
@@ -1254,7 +1315,7 @@ const App = () => {
   return (
     <div className="fixed inset-0 w-full h-[100dvh] overflow-hidden bg-slate-900 select-none font-sans touch-none" 
          style={{ backgroundImage: `url(${config?.wallpaper})`, backgroundSize: 'cover', backgroundPosition: 'center' }}
-         onPointerDown={() => setGlobalContextMenu(null)}
+         onPointerDown={() => { setGlobalContextMenu(null); setSelectedDesktopIcon(null); }}
          onContextMenu={(e) => {
              e.preventDefault();
              setGlobalContextMenu({ x: e.clientX, y: e.clientY, type: 'desktop' });
@@ -1266,22 +1327,32 @@ const App = () => {
       <div className="absolute top-0 left-0 bottom-12 w-full p-4 z-0">
         {config?.installedApps.map((app, index) => {
             const pos = iconLayout[app.id];
-            const style = pos ? { position: 'absolute' as const, left: pos.x, top: pos.y } : { position: 'absolute' as const, left: 20, top: 20 + (index * 110) };
+            // Calculate grid position if no layout exists
+            const defaultX = 20 + (Math.floor(index / 6) * GRID_SIZE_X);
+            const defaultY = 20 + ((index % 6) * GRID_SIZE_Y);
             
+            const style = pos 
+                ? { position: 'absolute' as const, left: pos.x, top: pos.y } 
+                : { position: 'absolute' as const, left: defaultX, top: defaultY };
+            
+            const isSelected = selectedDesktopIcon === app.id;
+
             return (
               <div key={app.id} 
                    style={style}
-                   onDoubleClick={() => openApp(app)}
+                   onDoubleClick={(e) => { e.stopPropagation(); openApp(app); }}
                    onPointerDown={(e) => { 
                      e.stopPropagation(); 
                      setStartMenuOpen(false); setActiveWindowId(null);
                      if (e.button === 0) { setGlobalContextMenu(null); handleDesktopIconDrag(app.id, e); }
                    }}
+                   onClick={(e) => handleDesktopIconClick(app.id, e)}
                    onContextMenu={(e) => {
                      e.preventDefault(); e.stopPropagation();
+                     setSelectedDesktopIcon(app.id);
                      setGlobalContextMenu({ x: e.clientX, y: e.clientY, targetItem: app as any, type: 'app' });
                    }}
-                   className="w-24 flex flex-col items-center gap-1.5 p-2 rounded-lg hover:bg-white/10 cursor-default group transition-colors select-none"
+                   className={`w-24 flex flex-col items-center gap-1.5 p-2 rounded-lg cursor-default group transition-colors select-none ${isSelected ? 'bg-white/20 ring-1 ring-white/30' : 'hover:bg-white/10'}`}
               >
                 <div className="w-12 h-12 glass-light rounded-2xl flex items-center justify-center shadow-lg group-hover:scale-105 transition-transform text-white overflow-hidden pointer-events-none">
                   {app.icon.startsWith('http') ? <img src={app.icon} className="w-full h-full object-cover"/> :
@@ -1344,19 +1415,25 @@ const App = () => {
                       if (item) { setGlobalContextMenu({ x: e.clientX, y: e.clientY, targetItem: item, isRecycleBin: isBin, type: 'item' }); } 
                       else { setGlobalContextMenu({ x: e.clientX, y: e.clientY, type: 'folder-background', isRecycleBin: (win.args?.folderId === recycleBinId || currentFolderId === recycleBinId) }); }
                   },
-                  openNotesApp: (fileId?: string) => openApp(config?.installedApps.find(a => a.id === 'notes')!, { fileId })
+                  openNotesApp: (fileId?: string, isNew?: boolean) => {
+                      // Pass current folder ID so new notes are saved there by default
+                      const targetFolder = win.args?.folderId !== undefined ? win.args.folderId : currentFolderId;
+                      openApp(config?.installedApps.find(a => a.id === 'notes')!, { fileId, isNew, folderId: targetFolder })
+                  }
               }} />
             )}
             {win.appId === 'notes' && (
               <NotesApp 
                 initialFileId={win.args?.fileId}
-                currentFolderId={currentFolderId} 
+                isNewNote={win.args?.isNew}
+                initialFolderId={win.args?.folderId}
+                currentFolderId={currentFolderId} // Global fallback, but prefer initialFolderId
                 filesInFolder={items} 
                 systemMap={systemMap}
                 onClose={() => closeWindow(win.instanceId)}
-                onRefresh={() => loadFolder(currentFolderId)}
+                onRefresh={() => loadFolder(win.args?.folderId || currentFolderId)}
                 onSaveToCloud={async (id: string, title: string, content: string, targetFolderId?: string) => {
-                   await API.saveNoteToDrive(title, content, targetFolderId || currentFolderId, id.startsWith('new-') ? undefined : id);
+                   await API.saveNoteToDrive(title, content, targetFolderId || win.args?.folderId || currentFolderId, id.startsWith('new-') ? undefined : id);
                 }}
               />
             )}
@@ -1524,6 +1601,7 @@ const App = () => {
                 ) : (
                    <>
                      <button onClick={() => { executeAction('new_folder'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><Folder size={14}/> New Folder</button>
+                     <button onClick={() => { openNotesApp(undefined, true); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><FileText size={14}/> New Note</button>
                      <button onClick={() => { executeAction('native_upload'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-green-400"><Upload size={14}/> Upload File</button>
                      <div className="h-px bg-slate-800 my-1"></div>
                      <button onClick={() => { loadFolder(currentFolderId); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><RefreshCw size={14}/> Refresh</button>

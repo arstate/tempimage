@@ -10,6 +10,8 @@ import { Item, FolderMap } from '../types';
 
 interface NotesAppProps {
   initialFileId?: string;
+  isNewNote?: boolean;
+  initialFolderId?: string;
   currentFolderId: string;
   filesInFolder: Item[];
   systemMap: FolderMap;
@@ -18,8 +20,26 @@ interface NotesAppProps {
   onSaveToCloud: (id: string, title: string, content: string, targetFolderId?: string) => Promise<void>;
 }
 
+// Local history helper
+const getRecentNotes = (): {id: string, name: string, lastUpdated: number}[] => {
+    try {
+        const stored = localStorage.getItem('zombio_notes_recent');
+        return stored ? JSON.parse(stored) : [];
+    } catch(e) { return []; }
+};
+
+const saveToRecent = (id: string, name: string) => {
+    const recent = getRecentNotes();
+    const existingIdx = recent.findIndex(r => r.id === id);
+    if (existingIdx >= 0) recent.splice(existingIdx, 1);
+    recent.unshift({ id, name, lastUpdated: Date.now() });
+    localStorage.setItem('zombio_notes_recent', JSON.stringify(recent.slice(0, 15)));
+};
+
 export const NotesApp: React.FC<NotesAppProps> = ({ 
   initialFileId, 
+  isNewNote,
+  initialFolderId,
   currentFolderId, 
   filesInFolder,
   systemMap,
@@ -35,6 +55,7 @@ export const NotesApp: React.FC<NotesAppProps> = ({
   const [isDirty, setIsDirty] = useState(false);
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [showExitPrompt, setShowExitPrompt] = useState(false);
+  const [recentNotes, setRecentNotes] = useState<{id: string, name: string}[]>([]);
   
   // Picker State
   const [pickerCurrentFolderId, setPickerCurrentFolderId] = useState<string>('root');
@@ -47,49 +68,61 @@ export const NotesApp: React.FC<NotesAppProps> = ({
   const editorRef = useRef<HTMLTextAreaElement>(null);
   const initialContentRef = useRef('');
 
-  // Filter only text/note files for the sidebar
-  const notesList = filesInFolder.filter(i => i.type === 'note');
+  useEffect(() => {
+     setRecentNotes(getRecentNotes());
+  }, []);
+
+  // Use passed filesInFolder if valid, else fallback to local recents
+  const displayNotes = filesInFolder.length > 0 ? filesInFolder.filter(i => i.type === 'note') : recentNotes.map(r => ({...r, type: 'note', snippet: 'Recent'} as Item));
+
+  // --- INITIALIZE NEW NOTE OR LOAD ---
+  useEffect(() => {
+      if (isNewNote) {
+          handleNewNote(true);
+      }
+  }, [isNewNote]);
 
   // --- LOAD NOTE ---
   useEffect(() => {
     const loadNote = async () => {
       if (!activeNoteId) {
-        // Create new blank state or reset
-        if (activeNoteId === null) {
-            setTitle('');
-            setContent('');
-            initialContentRef.current = '';
-            setIsDirty(false);
+        if (activeNoteId === null && !isNewNote) {
+             // Reset if explicit null and not creating new
+            // setTitle('');
+            // setContent('');
+            // initialContentRef.current = '';
+            // setIsDirty(false);
         }
         return;
       }
 
-      const noteItem = notesList.find(n => n.id === activeNoteId);
-      if (noteItem) {
-        setTitle(noteItem.name.replace('.txt', ''));
-        setIsLoading(true);
-        try {
-          // Check if content is pre-loaded in item (optimization) or fetch
-          let loadedContent = noteItem.content || "";
+      const noteItem = displayNotes.find(n => n.id === activeNoteId);
+      const recentItem = recentNotes.find(n => n.id === activeNoteId);
+
+      // If it's a temp ID for new note, skip fetching
+      if (activeNoteId.startsWith('new-')) return;
+
+      setIsLoading(true);
+      try {
+          const name = noteItem ? noteItem.name : recentItem ? recentItem.name : "Untitled";
+          setTitle(name.replace('.txt', ''));
+          
+          let loadedContent = (noteItem as any)?.content || "";
           if (!loadedContent) {
              loadedContent = await API.getFileContent(activeNoteId);
           }
           setContent(loadedContent);
           initialContentRef.current = loadedContent;
           setIsDirty(false);
-        } catch (e) {
+          
+          // Add to recents when opened
+          saveToRecent(activeNoteId, name);
+          setRecentNotes(getRecentNotes());
+      } catch (e) {
           console.error("Failed to open note", e);
           setContent("Error loading content.");
-        } finally {
+      } finally {
           setIsLoading(false);
-        }
-      } else {
-          // If we passed an ID but it's not in the list (maybe new file), reset
-          if (activeNoteId.startsWith('new-')) {
-             setTitle('');
-             setContent('');
-             setIsDirty(false);
-          }
       }
     };
 
@@ -116,14 +149,11 @@ export const NotesApp: React.FC<NotesAppProps> = ({
     document.body.appendChild(element);
     element.click();
     document.body.removeChild(element);
-    
-    // Local save doesn't clear dirty state relative to cloud, 
-    // but usually user considers it "saved". 
-    // We'll keep isDirty true for cloud sync purposes unless logic changes.
   };
 
   const openSaveModal = () => {
-    setPickerCurrentFolderId(currentFolderId || 'root');
+    // PREFER INITIAL FOLDER ID (passed from Explorer context)
+    setPickerCurrentFolderId(initialFolderId || currentFolderId || 'root');
     setPickerHistory([]);
     setShowSaveModal(true);
   }
@@ -131,8 +161,9 @@ export const NotesApp: React.FC<NotesAppProps> = ({
   const handleCloudSaveAction = async () => {
     setIsLoading(true);
     try {
+      const idToSave = activeNoteId && !activeNoteId.startsWith('new-') ? activeNoteId : `new-${Date.now()}`;
       await onSaveToCloud(
-        activeNoteId || `new-${Date.now()}`, 
+        idToSave, 
         title || 'Untitled Note', 
         content,
         pickerCurrentFolderId
@@ -140,10 +171,12 @@ export const NotesApp: React.FC<NotesAppProps> = ({
       initialContentRef.current = content;
       setIsDirty(false);
       setShowSaveModal(false);
-      onRefresh(); // Refresh file list
       
-      // If it was a new note, we might want to stay on it or update ID, 
-      // but onRefresh will reload list. Ideally we switch activeNoteId to the new ID.
+      // Update Recents
+      saveToRecent(idToSave, title || 'Untitled Note');
+      setRecentNotes(getRecentNotes());
+      
+      onRefresh(); // Refresh file list in parent
     } catch (e) {
       alert("Gagal menyimpan ke cloud");
     } finally {
@@ -151,11 +184,12 @@ export const NotesApp: React.FC<NotesAppProps> = ({
     }
   };
 
-  const handleNewNote = () => {
-    if (isDirty) {
+  const handleNewNote = (force: boolean = false) => {
+    if (!force && isDirty) {
       if(!confirm("Buang perubahan yang belum disimpan?")) return;
     }
-    setActiveNoteId(null);
+    // Set a temporary ID so UI renders the editor
+    setActiveNoteId(`new-${Date.now()}`);
     setTitle('');
     setContent('');
     setIsDirty(false);
@@ -166,23 +200,13 @@ export const NotesApp: React.FC<NotesAppProps> = ({
     if (isDirty) {
       setShowExitPrompt(true);
     } else {
-      if (activeNoteId) {
-          setActiveNoteId(null); // Close current note, go back to history/sidebar
-          setSidebarOpen(true);
-      } else {
-          onClose(); // Close the window
-      }
+        onClose(); // Close the window directly now
     }
   };
   
   const confirmExitWithoutSaving = () => {
       setShowExitPrompt(false);
-      if (activeNoteId) {
-          setActiveNoteId(null);
-          setSidebarOpen(true);
-      } else {
-          onClose();
-      }
+      onClose();
   };
 
   // --- PICKER NAVIGATION HELPERS ---
@@ -221,14 +245,16 @@ export const NotesApp: React.FC<NotesAppProps> = ({
     <div className="flex h-full bg-[#1e1e1e] text-[#d4d4d4] font-sans overflow-hidden relative">
       
       {/* --- SIDEBAR (History / List) --- */}
-      <div className={`${sidebarOpen || !activeNoteId ? 'w-full sm:w-64' : 'w-0 hidden sm:block sm:w-0'} bg-[#252526] border-r border-[#333] flex-shrink-0 transition-all duration-300 flex flex-col z-10`}>
+      <div className={`${sidebarOpen ? 'w-full sm:w-64' : 'w-0 hidden sm:block sm:w-0'} bg-[#252526] border-r border-[#333] flex-shrink-0 transition-all duration-300 flex flex-col z-10`}>
         <div className="p-4 border-b border-[#333] flex items-center justify-between">
            <h2 className="font-bold text-sm text-yellow-500 flex items-center gap-2">
              <Folder size={16} /> 
-             <span className="truncate max-w-[120px]">{systemMap[currentFolderId]?.name || "Folder"}</span>
+             <span className="truncate max-w-[120px]">
+                {filesInFolder.length > 0 ? (systemMap[currentFolderId]?.name || "Folder") : "Recent"}
+             </span>
            </h2>
            <div className="flex items-center gap-2">
-               <button onClick={handleNewNote} className="p-1 hover:bg-[#333] rounded text-yellow-500" title="New Note">
+               <button onClick={() => handleNewNote(false)} className="p-1 hover:bg-[#333] rounded text-yellow-500" title="New Note">
                  <Plus size={18} />
                </button>
                {/* Close Window Button (only visible if sidebar is taking full width or explicit) */}
@@ -239,10 +265,10 @@ export const NotesApp: React.FC<NotesAppProps> = ({
         </div>
         
         <div className="flex-1 overflow-y-auto">
-          {notesList.length === 0 && (
+          {displayNotes.length === 0 && (
             <div className="p-4 text-xs text-gray-500 text-center">Tidak ada catatan</div>
           )}
-          {notesList.map(note => (
+          {displayNotes.map(note => (
             <div 
               key={note.id}
               onClick={() => {
@@ -257,7 +283,7 @@ export const NotesApp: React.FC<NotesAppProps> = ({
                 {note.name.replace('.txt','')}
               </h3>
               <div className="flex items-center gap-2 mt-1">
-                <span className="text-[10px] text-gray-500">{new Date(note.lastUpdated).toLocaleDateString()}</span>
+                <span className="text-[10px] text-gray-500">{note.lastUpdated ? new Date(note.lastUpdated).toLocaleDateString() : ''}</span>
                 <span className="text-[10px] text-gray-600 truncate flex-1">{note.snippet || "No preview"}</span>
               </div>
             </div>
@@ -338,6 +364,9 @@ export const NotesApp: React.FC<NotesAppProps> = ({
             <div className="flex-1 flex items-center justify-center text-gray-600 flex-col gap-2">
                 <FileText size={48} className="opacity-20"/>
                 <span className="text-sm">Tidak ada catatan yang dipilih</span>
+                <button onClick={() => handleNewNote(false)} className="px-4 py-2 bg-yellow-600/20 text-yellow-500 rounded-lg text-sm font-bold hover:bg-yellow-600/30 transition-colors">
+                    + Buat Catatan Baru
+                </button>
             </div>
         )}
       </div>
