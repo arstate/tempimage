@@ -8,7 +8,7 @@ import {
   ShieldAlert, Cloud, CloudUpload, FileJson, RefreshCw,
   CheckCheck, MessageSquare, Reply, Send, User, Clock,
   Grid, Monitor, Globe, Settings, ShoppingBag, Minus, Square, Search, Wifi,
-  Maximize2
+  Maximize2, UploadCloud
 } from 'lucide-react';
 import * as API from './services/api';
 import * as DB from './services/db';
@@ -82,20 +82,49 @@ const FileExplorerApp = ({
   const [customDragPos, setCustomDragPos] = useState<{x:number, y:number} | null>(null);
   const [dropTargetId, setDropTargetId] = useState<string | null>(null);
   const [isDragSelecting, setIsDragSelecting] = useState(false);
+  const [isExternalDragging, setIsExternalDragging] = useState(false);
+  
   const containerRef = useRef<HTMLDivElement>(null);
   const dragStartPos = useRef<{x:number, y:number} | null>(null);
   const isPaintingRef = useRef<boolean>(false); 
   const longPressTimerRef = useRef<any>(null);
 
+  // EXTERNAL DRAG AND DROP HANDLERS
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer.types.includes('Files')) {
+      setIsExternalDragging(true);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsExternalDragging(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsExternalDragging(false);
+    
+    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+      handleUploadFiles(Array.from(e.dataTransfer.files));
+    }
+  };
+
   const handlePointerDown = (e: React.PointerEvent) => {
+     // Don't start selection if clicking UI elements
      if ((e.target as HTMLElement).closest('button, .item-handle, .floating-ui, select, input, .comment-area')) return;
+     
      const target = e.target as HTMLElement;
      const checkbox = target.closest('.selection-checkbox');
      const itemRow = target.closest('[data-item-id]');
      
+     // Button 2 is right click, we don't start dragging/selecting with it
      if (e.button === 2) return;
 
-     // Calculate coordinates relative to the explorer container (important for window mode)
      const rect = containerRef.current?.getBoundingClientRect();
      const localX = e.clientX - (rect?.left || 0);
      const localY = e.clientY - (rect?.top || 0);
@@ -119,7 +148,8 @@ const FileExplorerApp = ({
              if (clickedItem) {
                  longPressTimerRef.current = setTimeout(() => {
                      if (clickedItem.id === systemFolderId || currentFolderId === systemFolderId) return;
-                     setCustomDragItem(clickedItem); setCustomDragPos({ x: e.clientX, y: e.clientY });
+                     setCustomDragItem(clickedItem); 
+                     setCustomDragPos({ x: e.clientX, y: e.clientY });
                      if (!selectedIds.has(clickedItem.id)) setSelectedIds(new Set([clickedItem.id]));
                      if (navigator.vibrate) navigator.vibrate(50);
                  }, 500); 
@@ -281,6 +311,7 @@ const FileExplorerApp = ({
         setSelectedIds(new Set([item.id])); 
         setLastSelectedId(item.id); 
     }
+    // Pass coordinates to the onContextMenu prop from App
     onContextMenu(e, item, currentFolderId === recycleBinId);
   };
 
@@ -294,10 +325,18 @@ const FileExplorerApp = ({
   return (
     <div ref={containerRef} className="h-full flex flex-col bg-slate-900 overflow-hidden relative" 
          onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp}
+         onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}
          onContextMenu={(e) => localHandleContextMenu(e)}>
       
       {selectionBox && (<div className="absolute z-[150] bg-blue-500/20 border border-blue-400 pointer-events-none" style={{ left: selectionBox.x, top: selectionBox.y, width: selectionBox.width, height: selectionBox.height }} />)}
       
+      {isExternalDragging && (
+        <div className="absolute inset-0 z-[160] bg-blue-600/20 backdrop-blur-[2px] border-2 border-dashed border-blue-500 m-4 rounded-2xl flex flex-col items-center justify-center pointer-events-none animate-in fade-in zoom-in-95">
+           <UploadCloud size={48} className="text-blue-500 mb-2 animate-bounce"/>
+           <span className="text-lg font-bold text-blue-500 uppercase tracking-widest">Drop files to upload</span>
+        </div>
+      )}
+
       {/* Explorer Header */}
       <div className="flex items-center justify-between p-3 bg-slate-950/50 border-b border-slate-800">
         <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
@@ -311,7 +350,7 @@ const FileExplorerApp = ({
               <div className="absolute right-3 top-12 w-48 bg-slate-800 border border-slate-700 rounded-lg shadow-2xl z-50 p-1 animate-in zoom-in-95 duration-150 origin-top-right">
                 <button onClick={() => { setIsNewDropdownOpen(false); executeAction('new_folder'); }} className="w-full text-left px-3 py-2 hover:bg-slate-700 rounded-lg flex items-center gap-2 text-xs"><Folder size={14} className="text-blue-400"/> New Folder</button>
                 <button onClick={() => { setIsNewDropdownOpen(false); setEditingNote({ id: 'temp-'+Date.now(), galleryId: currentFolderId, title: 'Untitled Note', content: '', timestamp: Date.now() }); }} className="w-full text-left px-3 py-2 hover:bg-slate-700 rounded-lg flex items-center gap-2 text-xs"><FileText size={14} className="text-yellow-400"/> New Note</button>
-                <label className="w-full text-left px-3 py-2 hover:bg-slate-700 rounded-lg flex items-center gap-2 text-xs cursor-pointer"><Upload size={14} className="text-green-400"/> Upload File<input type="file" multiple className="hidden" onChange={(e) => { if(e.target.files) handleUploadFiles(Array.from(e.target.files)); setIsNewDropdownOpen(false); }} /></label>
+                <button onClick={() => { setIsNewDropdownOpen(false); executeAction('native_upload'); }} className="w-full text-left px-3 py-2 hover:bg-slate-700 rounded-lg flex items-center gap-2 text-xs"><Upload size={14} className="text-green-400"/> Upload File</button>
               </div>
             )}
           </div>
@@ -382,56 +421,6 @@ const SettingsApp = ({ config, onSave }: any) => {
   );
 };
 
-// --- APP STORE COMPONENT ---
-const AppStore = ({ installedApps, onInstall, onUninstall }: any) => {
-  const [newApp, setNewApp] = useState({ name: "", url: "", icon: "globe" });
-  const handleInstall = () => {
-    if(!newApp.name || !newApp.url) return alert("Please enter Name and URL!");
-    const appData: API.AppDefinition = {
-      id: "app-" + Date.now(),
-      name: newApp.name,
-      url: newApp.url.startsWith('http') ? newApp.url : 'https://' + newApp.url,
-      icon: "globe",
-      type: "webapp"
-    };
-    onInstall(appData);
-    setNewApp({ name: "", url: "", icon: "globe" });
-  };
-  return (
-    <div className="h-full bg-slate-50 text-slate-800 p-6 flex flex-col gap-6 overflow-auto">
-      <h2 className="text-2xl font-bold flex items-center gap-3 text-slate-900"><ShoppingBag size={28} className="text-pink-600"/> App Store</h2>
-      <div className="bg-white p-5 rounded-2xl shadow-sm border border-slate-200">
-        <h3 className="text-sm font-bold text-slate-900 mb-4">Install New Web App</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
-           <input placeholder="App Name (e.g. YouTube)" className="p-3 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-blue-500" value={newApp.name} onChange={e=>setNewApp({...newApp, name: e.target.value})} />
-           <input placeholder="Web URL (e.g. youtube.com)" className="p-3 border border-slate-200 rounded-xl text-sm focus:outline-none focus:border-blue-500" value={newApp.url} onChange={e=>setNewApp({...newApp, url: e.target.value})} />
-        </div>
-        <button onClick={handleInstall} className="w-full py-3 bg-green-600 hover:bg-green-500 text-white font-bold rounded-xl shadow-lg transition-all active:scale-95">Install App</button>
-      </div>
-      
-      <div className="space-y-3">
-        <h3 className="text-xs font-bold text-slate-500 uppercase tracking-widest px-1">Installed Apps</h3>
-        {installedApps.map((app: any) => (
-          <div key={app.id} className="flex justify-between items-center p-3 bg-white border border-slate-200 rounded-xl hover:shadow-md transition-shadow">
-            <div className="flex items-center gap-4">
-              <div className="w-10 h-10 bg-slate-100 rounded-lg flex items-center justify-center text-blue-600 shadow-inner">
-                {app.icon === 'folder' ? <Folder size={20}/> : app.icon === 'settings' ? <Settings size={20}/> : app.icon === 'shopping-bag' ? <ShoppingBag size={20}/> : <Globe size={20}/>}
-              </div>
-              <div>
-                <div className="font-bold text-slate-900 text-sm">{app.name}</div>
-                <div className="text-[10px] text-slate-400 font-mono">{app.type.toUpperCase()}</div>
-              </div>
-            </div>
-            {app.type === 'webapp' && (
-              <button onClick={() => onUninstall(app.id)} className="p-2 text-red-500 hover:bg-red-50 rounded-lg transition-colors"><Trash2 size={18}/></button>
-            )}
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-};
-
 // --- MAIN OS SHELL APP ---
 const App = () => {
   const [config, setConfig] = useState<API.SystemConfig | null>(null);
@@ -472,9 +461,8 @@ const App = () => {
   const [commentText, setCommentText] = useState('');
   const [isPostingComment, setIsPostingComment] = useState(false);
 
-  // Performance Optimization: Direct DOM Refs
+  // Direct DOM Refs for performance
   const isInteractingRef = useRef(false);
-  const activeWindowRef = useRef<HTMLDivElement | null>(null);
 
   // --- OS BOOT ---
   useEffect(() => {
@@ -625,7 +613,7 @@ const App = () => {
             const item = itemsToDownload.find(i => i.id === dItem.id);
             if (!item || !item.url) throw new Error("URL missing");
 
-            // Use wsrv.nl proxy to bypass CORS and get original quality (high quality download)
+            // Use high-quality proxy for original download
             const proxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(item.url)}`;
             const response = await fetch(proxyUrl);
             if (!response.ok) throw new Error("Fetch failed");
@@ -670,6 +658,16 @@ const App = () => {
           catch(e) { updateNotification(notif, 'Failed', 'error'); }
         }});
         break;
+      case 'native_upload': {
+          const input = document.createElement('input');
+          input.type = 'file';
+          input.multiple = true;
+          input.onchange = (e: any) => {
+            if (e.target.files) handleUploadFiles(Array.from(e.target.files));
+          };
+          input.click();
+          break;
+      }
       case 'rename':
         const target = items.find(i => i.id === ids[0]);
         if(!target) return;
@@ -709,8 +707,13 @@ const App = () => {
     const newUploads: UploadItem[] = files.map(f => ({ id: Math.random().toString(), file: f, status: 'uploading', progress: 0 }));
     setUploadQueue(prev => [...prev, ...newUploads]);
     for (const up of newUploads) {
-      try { await API.uploadToDrive(up.file, currentFolderId); setUploadQueue(prev => prev.map(u => u.id === up.id ? {...u, status:'success', progress: 100} : u)); }
-      catch(e) { setUploadQueue(prev => prev.map(u => u.id === up.id ? {...u, status:'error'} : u)); }
+      try { 
+        await API.uploadToDrive(up.file, currentFolderId); 
+        setUploadQueue(prev => prev.map(u => u.id === up.id ? {...u, status:'success', progress: 100} : u)); 
+      }
+      catch(e) { 
+        setUploadQueue(prev => prev.map(u => u.id === up.id ? {...u, status:'error'} : u)); 
+      }
     }
     await loadFolder(currentFolderId);
   };
@@ -755,7 +758,6 @@ const App = () => {
     const initialPos = { ...win.position };
     const initialSize = { ...win.size };
 
-    // Direct DOM element for high-perf updates
     const winEl = document.getElementById(`window-${instanceId}`);
     if (!winEl) return;
 
@@ -794,7 +796,6 @@ const App = () => {
         window.removeEventListener('pointermove', onPointerMove);
         window.removeEventListener('pointerup', onPointerUp);
         
-        // Sync final values back to React state ONCE
         setWindows(prev => prev.map(w => w.instanceId === instanceId ? {
             ...w, 
             position: { x: currentX, y: currentY },
@@ -837,7 +838,6 @@ const App = () => {
          style={{ backgroundImage: `url(${config?.wallpaper})`, backgroundSize: 'cover', backgroundPosition: 'center' }}
          onPointerDown={() => setGlobalContextMenu(null)}>
       
-      {/* Interaction Shield (Prevents pointer capture by iframes during drag) */}
       {isInteractingRef.current && <div className="fixed inset-0 z-[9999] cursor-move" />}
 
       {/* DESKTOP ICONS */}
@@ -951,23 +951,24 @@ const App = () => {
       {/* GLOBAL CONTEXT MENU */}
       {globalContextMenu && (
         <div className="fixed inset-0 z-[1000]" onClick={() => setGlobalContextMenu(null)} onContextMenu={(e) => { e.preventDefault(); setGlobalContextMenu(null); }}>
-          <div className="absolute z-[1001] bg-slate-800 border border-slate-700 rounded-lg shadow-2xl py-1 min-w-[160px] animate-in zoom-in-95 duration-100" 
+          <div className="absolute z-[1001] bg-slate-900 border border-slate-700 rounded-lg shadow-2xl py-1 min-w-[180px] animate-in zoom-in-95 duration-100 overflow-hidden" 
                style={{ top: globalContextMenu.y, left: globalContextMenu.x }} onClick={(e) => e.stopPropagation()}>
             {globalContextMenu.targetItem ? (
                 <>
-                  <button onClick={() => { executeAction('comment'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-700 text-xs flex items-center gap-2 text-slate-200"><MessageSquare size={14}/> Comment</button>
+                  <button onClick={() => { executeAction('comment'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><MessageSquare size={14}/> Comment</button>
                   {globalContextMenu.targetItem.type === 'image' && (
-                    <button onClick={() => { executeAction('download'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-700 text-xs flex items-center gap-2 text-emerald-400"><Download size={14}/> Download Original</button>
+                    <button onClick={() => { executeAction('download'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-emerald-400"><Download size={14}/> Download Original</button>
                   )}
-                  <button onClick={() => { executeAction('rename'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-700 text-xs flex items-center gap-2 text-slate-200"><Edit size={14}/> Rename</button>
-                  <button onClick={() => { executeAction('move'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-700 text-xs flex items-center gap-2 text-slate-200"><Move size={14}/> Move</button>
-                  <div className="h-px bg-slate-700 my-1"></div>
+                  <button onClick={() => { executeAction('rename'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><Edit size={14}/> Rename</button>
+                  <button onClick={() => { executeAction('move'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><Move size={14}/> Move</button>
+                  <div className="h-px bg-slate-800 my-1"></div>
                   <button onClick={() => { executeAction('delete'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-500 text-xs flex items-center gap-2"><Trash2 size={14}/> Delete</button>
                 </>
             ) : (
                 <>
-                  <button onClick={() => { executeAction('new_folder'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-700 text-xs flex items-center gap-2 text-slate-200"><Folder size={14}/> New Folder</button>
-                  <button onClick={() => { loadFolder(currentFolderId); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-700 text-xs flex items-center gap-2 text-slate-200"><RefreshCw size={14}/> Refresh</button>
+                  <button onClick={() => { executeAction('new_folder'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><Folder size={14}/> New Folder</button>
+                  <button onClick={() => { executeAction('native_upload'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-green-400"><Upload size={14}/> Upload Files</button>
+                  <button onClick={() => { loadFolder(currentFolderId); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><RefreshCw size={14}/> Refresh</button>
                 </>
             )}
           </div>
