@@ -1,6 +1,7 @@
 
 import { Item, FolderMap, CommentDB } from '../types';
 
+// URL Final Baru (File Manager Backend)
 const API_URL = "https://script.google.com/macros/s/AKfycbw-khPTpmPiuUhTzo-vqtkHZTqJ3MLqZtP-btpHLbnBVyJ13Z6k5glBBpMWomP8p6BIog/exec";
 
 const DB_FILENAME_KEYWORD = "system_zombio_db"; 
@@ -20,52 +21,122 @@ export const callGoogleScript = async (payload: any): Promise<ApiResponse> => {
   try {
     const response = await fetch(API_URL, {
       method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      headers: {
+        "Content-Type": "text/plain;charset=utf-8",
+      },
       body: JSON.stringify(payload),
     });
+
     const textResult = await response.text();
-    try { return JSON.parse(textResult); } catch (e) { throw new Error("Server response format error."); }
+    
+    try {
+      return JSON.parse(textResult);
+    } catch (e) {
+      console.error("Non-JSON Response received:", textResult);
+      throw new Error("Server merespon dengan format yang salah.");
+    }
+
   } catch (error) {
-    throw new Error(error instanceof Error ? error.message : "Gagal menghubungi server.");
+    console.error("Fetch Error:", error);
+    throw new Error(error instanceof Error ? error.message : "Gagal menghubungi server Google.");
   }
 };
 
+export const fileToBase64 = (file: File | Blob): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.readAsDataURL(file);
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = error => reject(error);
+  });
+};
+
+// --- FILE MANAGER API ACTIONS ---
+
 export const getFolderContents = async (folderId: string = ""): Promise<ApiResponse> => {
-  return callGoogleScript({ action: "getFolderContents", folderId });
+  return callGoogleScript({
+    action: "getFolderContents",
+    folderId: folderId
+  });
 };
 
 export const createFolder = async (parentId: string, name: string): Promise<ApiResponse> => {
-  return callGoogleScript({ action: "createFolder", parentId, name });
+  return callGoogleScript({
+    action: "createFolder",
+    parentId: parentId,
+    name: name
+  });
 };
 
 export const renameItem = async (itemId: string, newName: string): Promise<ApiResponse> => {
-  return callGoogleScript({ action: "renameItem", itemId, newName });
+  return callGoogleScript({
+    action: "renameItem",
+    itemId: itemId,
+    newName: newName
+  });
 };
 
 export const deleteItems = async (itemIds: string[]): Promise<ApiResponse> => {
-  return callGoogleScript({ action: "deleteItems", itemIds });
+  return callGoogleScript({
+    action: "deleteItems",
+    itemIds: itemIds
+  });
 };
 
 export const moveItems = async (itemIds: string[], targetFolderId: string): Promise<ApiResponse> => {
-  return callGoogleScript({ action: "moveItems", itemIds, targetFolderId });
+  return callGoogleScript({
+    action: "moveItems",
+    itemIds: itemIds,
+    targetFolderId: targetFolderId
+  });
+};
+
+export const duplicateItems = async (itemIds: string[]): Promise<ApiResponse> => {
+  return callGoogleScript({
+    action: "duplicateItems",
+    itemIds: itemIds
+  });
 };
 
 export const getFileContent = async (fileId: string): Promise<string> => {
-  const result = await callGoogleScript({ action: "getFileContent", fileId });
-  return result.status === 'success' ? (result.data?.content || "") : "";
+  const result = await callGoogleScript({
+    action: "getFileContent",
+    fileId: fileId
+  });
+
+  if (result.status === 'success') {
+    return typeof result.data?.content === 'string' ? result.data.content : "";
+  } else {
+    throw new Error(result.message || "Gagal mengambil konten.");
+  }
 };
 
 export const uploadToDrive = async (file: File, folderId: string): Promise<any> => {
-  const reader = new FileReader();
-  const base64 = await new Promise<string>((res) => {
-    reader.onload = () => res(reader.result as string);
-    reader.readAsDataURL(file);
+  const base64 = await fileToBase64(file);
+  
+  const result = await callGoogleScript({
+    action: "uploadImage",
+    folderId: folderId, 
+    fileName: file.name,
+    mimeType: file.type || "image/jpeg",
+    base64: base64
   });
-  return callGoogleScript({ action: "uploadImage", folderId, fileName: file.name, mimeType: file.type || "image/jpeg", base64 });
+
+  if (result.status === 'error') {
+    throw new Error(result.message || "Upload gagal.");
+  }
+  return result.data;
 };
 
 export const saveNoteToDrive = async (title: string, content: string, folderId: string, fileId?: string): Promise<any> => {
-  const result = await callGoogleScript({ action: "saveNote", folderId, title, content, fileId: fileId || null });
+  const result = await callGoogleScript({
+    action: "saveNote", 
+    folderId: folderId,
+    title: title,
+    content: content,
+    fileId: fileId || null 
+  });
+
   if (result.status === 'error') throw new Error(result.message);
   return result.data;
 };
@@ -91,7 +162,11 @@ export const locateSystemDB = async (): Promise<{ fileId: string | null, comment
       commentFileId: commentFile ? commentFile.id : null,
       systemFolderId: systemFolder.id 
     };
-  } catch (e) { return { fileId: null, commentFileId: null, systemFolderId: null }; }
+
+  } catch (e) {
+    console.error("Error locating system DB:", e);
+    return { fileId: null, commentFileId: null, systemFolderId: null };
+  }
 };
 
 export const createSystemFolder = async (): Promise<string> => {
@@ -101,19 +176,25 @@ export const createSystemFolder = async (): Promise<string> => {
 };
 
 export const createSystemDBFile = async (initialMap: FolderMap, folderId: string): Promise<string> => {
-  const res = await saveNoteToDrive(DB_FILENAME_KEYWORD, JSON.stringify(initialMap), folderId); 
-  return res.id;
+  const content = JSON.stringify(initialMap);
+  const res = await saveNoteToDrive(DB_FILENAME_KEYWORD, content, folderId); 
+  if (res && res.id) return res.id;
+  throw new Error("Failed to create system DB file");
 };
 
 export const createCommentDBFile = async (initialComments: CommentDB, folderId: string): Promise<string> => {
-  const res = await saveNoteToDrive(COMMENT_DB_FILENAME, JSON.stringify(initialComments), folderId); 
-  return res.id;
+  const content = JSON.stringify(initialComments);
+  const res = await saveNoteToDrive(COMMENT_DB_FILENAME, content, folderId); 
+  if (res && res.id) return res.id;
+  throw new Error("Failed to create comment DB file");
 };
 
 export const updateSystemDBFile = async (fileId: string, map: FolderMap): Promise<void> => {
-  await saveNoteToDrive(DB_FILENAME_KEYWORD, JSON.stringify(map), "", fileId); 
+  const content = JSON.stringify(map);
+  await saveNoteToDrive(DB_FILENAME_KEYWORD, content, "", fileId); 
 };
 
 export const updateCommentDBFile = async (fileId: string, comments: CommentDB): Promise<void> => {
-  await saveNoteToDrive(COMMENT_DB_FILENAME, JSON.stringify(comments), "", fileId); 
+  const content = JSON.stringify(comments);
+  await saveNoteToDrive(COMMENT_DB_FILENAME, content, "", fileId); 
 };
