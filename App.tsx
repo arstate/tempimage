@@ -265,7 +265,7 @@ const AppStoreApp = ({ config, setConfig, addNotification }: any) => {
         <h2 className="text-lg font-bold text-slate-300">Rekomendasi Aplikasi</h2>
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
           {popularApps.map(app => {
-            const isInstalled = config?.installedApps.some((a: any) => a.url === app.url);
+            const isInstalled = config?.installedApps?.some((a: any) => a.url === app.url);
             return (
               <div key={app.id} className="bg-slate-800/40 p-4 rounded-2xl border border-slate-700/50 flex flex-col items-center gap-4 group hover:bg-slate-800/60 transition-all">
                 <div className="w-16 h-16 bg-slate-950 rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform shadow-2xl relative">
@@ -493,7 +493,6 @@ const FileExplorerApp = ({
             const newSet = new Set(selectedIds); rangeIds.forEach(itemId => newSet.add(itemId)); setSelectedIds(newSet);
         }
     } else if (e.ctrlKey || e.metaKey) { 
-        // Fix for "Cannot find name 'id'" - changed 'id' to 'item.id'
         setSelectedIds((prev: Set<string>) => { const next = new Set(prev); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; });
         setLastSelectedId(item.id);
     } 
@@ -1086,14 +1085,14 @@ const App = () => {
   const toggleMinimize = (instanceId: string) => setWindows(prev => prev.map(w => w.instanceId === instanceId ? {...w, isMinimized: !w.isMinimized} : w));
 
   if (isGlobalLoading) return (
-    <div className="h-screen w-screen bg-slate-950 flex flex-col items-center justify-center gap-6">
+    <div className="fixed inset-0 bg-slate-950 flex flex-col items-center justify-center gap-6 z-[9999]">
       <div className="relative w-16 h-16"><Loader2 className="animate-spin text-blue-500 absolute w-full h-full"/><Database size={32} className="absolute inset-0 m-auto text-blue-400 opacity-50"/></div>
       <p className="text-white font-bold tracking-widest uppercase text-xs animate-pulse">{globalLoadingMessage}</p>
     </div>
   );
 
   return (
-    <div className="h-screen w-screen overflow-hidden relative bg-slate-900 select-none font-sans" 
+    <div className="fixed inset-0 w-full h-[100dvh] overflow-hidden bg-slate-900 select-none font-sans touch-none" 
          style={{ backgroundImage: `url(${config?.wallpaper})`, backgroundSize: 'cover', backgroundPosition: 'center' }}
          onPointerDown={() => setGlobalContextMenu(null)}>
       
@@ -1121,7 +1120,7 @@ const App = () => {
       {/* WINDOWS */}
       {windows.map(win => (
         <div key={win.instanceId} id={`window-${win.instanceId}`}
-             className={`absolute flex flex-col glass rounded-xl shadow-2xl overflow-hidden transition-none animate-window-open ${win.isMaximized ? 'inset-0 !top-0 !left-0 !w-full !h-[calc(100vh-64px)] rounded-none' : ''} ${activeWindowId === win.instanceId ? 'z-40 ring-1 ring-white/20 shadow-[0_30px_60px_rgba(0,0,0,0.5)]' : 'z-10'} ${win.isMinimized ? 'hidden' : ''}`}
+             className={`absolute flex flex-col glass rounded-xl shadow-2xl overflow-hidden transition-none animate-window-open ${win.isMaximized ? 'inset-0 !top-0 !left-0 !w-full !h-[calc(100%-48px)] rounded-none' : ''} ${activeWindowId === win.instanceId ? 'z-40 ring-1 ring-white/20 shadow-[0_30px_60px_rgba(0,0,0,0.5)]' : 'z-10'} ${win.isMinimized ? 'hidden' : ''}`}
              style={!win.isMaximized ? { top: win.position.y, left: win.position.x, width: win.size.w, height: win.size.h } : {}}
              onPointerDown={() => setActiveWindowId(win.instanceId)}>
           
@@ -1131,7 +1130,7 @@ const App = () => {
             <div className="flex items-center gap-2 pointer-events-none">
                <div className="w-4 h-4 flex items-center justify-center text-white">
                  {win.appId === 'file-explorer' ? <Folder size={14}/> : 
-                  win.appId === 'app-store' ? <ShoppingBag size={14}/> : 
+                  (win.appId === 'app-store' || win.appId === 'store') ? <ShoppingBag size={14}/> : 
                   win.appId === 'settings' ? <Settings size={14}/> : 
                   win.appData.icon === 'image' ? <ImageIcon size={14}/> : <Globe size={14}/>}
                </div>
@@ -1178,7 +1177,7 @@ const App = () => {
                    addNotification("Pengaturan disimpan", "success");
                 } catch(e) { addNotification("Gagal menyimpan", "error"); }
             }}/>}
-            {win.appId === 'app-store' && <AppStoreApp config={config!} setConfig={setConfig} addNotification={addNotification}/>}
+            {(win.appId === 'app-store' || win.appId === 'store') && <AppStoreApp config={config!} setConfig={setConfig} addNotification={addNotification}/>}
             {(win.appData.type === 'webapp') && (
               <div className="h-full flex flex-col bg-white">
                 <div className="p-1 bg-slate-100 flex items-center justify-between gap-2 border-b">
@@ -1207,7 +1206,7 @@ const App = () => {
 
       {/* START MENU */}
       {startMenuOpen && (
-        <div className="absolute bottom-20 left-1/2 -translate-x-1/2 w-[600px] max-w-[95vw] h-[550px] glass rounded-3xl shadow-[0_32px_64px_rgba(0,0,0,0.5)] z-[60] p-8 flex flex-col animate-in slide-in-from-bottom-5 duration-200">
+        <div className="absolute bottom-16 left-1/2 -translate-x-1/2 w-[600px] max-w-[95vw] h-[550px] max-h-[80vh] glass rounded-3xl shadow-[0_32px_64px_rgba(0,0,0,0.5)] z-[60] p-8 flex flex-col animate-in slide-in-from-bottom-5 duration-200">
           <div className="grid grid-cols-4 sm:grid-cols-6 gap-6 flex-1 content-start overflow-y-auto pr-2 no-scrollbar">
              {config?.installedApps.map(app => (
                <button key={app.id} onClick={()=>openApp(app)} className="flex flex-col items-center gap-2 group">
@@ -1235,9 +1234,9 @@ const App = () => {
       )}
 
       {/* TASKBAR */}
-      <div className="absolute bottom-0 w-full h-16 sm:h-12 glass border-t border-white/5 flex items-center justify-between px-4 z-[70]"
+      <div className="absolute bottom-0 w-full h-12 glass border-t border-white/5 flex items-center justify-between px-4 z-[70]"
            style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
-        <div className="w-24 flex items-center gap-2">
+        <div className="w-24 flex items-center gap-2 hidden sm:flex">
             <button 
                 onClick={toggleFullscreen}
                 className="p-2 rounded-xl hover:bg-white/10 transition-all text-white/50 hover:text-white"
@@ -1247,15 +1246,15 @@ const App = () => {
             </button>
         </div> 
 
-        <div className="flex items-center gap-1.5">
-           <button onClick={() => setStartMenuOpen(!startMenuOpen)} className={`p-2.5 rounded-xl hover:bg-white/10 transition-all ${startMenuOpen ? 'bg-white/10 scale-90' : ''}`}><Grid size={24} className="text-blue-400"/></button>
-           <div className="w-px h-6 bg-white/5 mx-2"></div>
+        <div className="flex items-center gap-1.5 mx-auto sm:mx-0 overflow-x-auto no-scrollbar max-w-full">
+           <button onClick={() => setStartMenuOpen(!startMenuOpen)} className={`p-2.5 rounded-xl hover:bg-white/10 transition-all flex-shrink-0 ${startMenuOpen ? 'bg-white/10 scale-90' : ''}`}><Grid size={24} className="text-blue-400"/></button>
+           <div className="w-px h-6 bg-white/5 mx-2 flex-shrink-0"></div>
            {windows.map(win => (
              <button key={win.instanceId} onClick={() => { if (win.isMinimized) toggleMinimize(win.instanceId); setActiveWindowId(win.instanceId); }}
-                     className={`p-2 rounded-xl hover:bg-white/10 transition-all relative group ${activeWindowId === win.instanceId && !win.isMinimized ? 'bg-white/10' : 'opacity-60'}`}>
-                <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-white text-[10px] font-bold shadow-lg ${win.appId === 'file-explorer' ? 'bg-blue-600' : win.appId === 'app-store' ? 'bg-pink-600' : win.appData.icon === 'image' ? 'bg-pink-500' : 'bg-slate-700'}`}>
+                     className={`p-2 rounded-xl hover:bg-white/10 transition-all relative group flex-shrink-0 ${activeWindowId === win.instanceId && !win.isMinimized ? 'bg-white/10' : 'opacity-60'}`}>
+                <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-white text-[10px] font-bold shadow-lg ${win.appId === 'file-explorer' ? 'bg-blue-600' : (win.appId === 'app-store' || win.appId === 'store') ? 'bg-pink-600' : win.appData.icon === 'image' ? 'bg-pink-500' : 'bg-slate-700'}`}>
                    {win.appId === 'file-explorer' ? <Folder size={14}/> : 
-                    win.appId === 'app-store' ? <ShoppingBag size={14}/> : 
+                    (win.appId === 'app-store' || win.appId === 'store') ? <ShoppingBag size={14}/> : 
                     win.appId === 'settings' ? <Settings size={14}/> : 
                     win.appData.icon === 'image' ? <ImageIcon size={14} /> : win.title.charAt(0)}
                 </div>
@@ -1264,7 +1263,7 @@ const App = () => {
            ))}
         </div>
 
-        <div className="flex items-center gap-3 text-white w-24 justify-end">
+        <div className="flex items-center gap-3 text-white w-24 justify-end hidden sm:flex">
              <div className="flex flex-col items-end leading-none font-bold">
                <span className="text-[10px]">{clock.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
                <span className="text-[8px] text-slate-400">{clock.toLocaleDateString([], {day:'2-digit', month:'2-digit'})}</span>
