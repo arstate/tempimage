@@ -75,32 +75,33 @@ export const NotesApp: React.FC<NotesAppProps> = ({
   // Use passed filesInFolder if valid, else fallback to local recents
   const displayNotes = filesInFolder.length > 0 ? filesInFolder.filter(i => i.type === 'note') : recentNotes.map(r => ({...r, type: 'note', snippet: 'Recent'} as Item));
 
-  // --- INITIALIZE NEW NOTE OR LOAD ---
+  // --- HANDLE PROPS CHANGE (Single Instance Logic) ---
   useEffect(() => {
+      // When props change (e.g. user double clicks a file in explorer while notes is open)
+      if (initialFileId) {
+          if (isDirty && activeNoteId !== initialFileId) {
+              if (confirm("Ada perubahan belum disimpan. Buka file baru?")) {
+                  setActiveNoteId(initialFileId);
+              }
+          } else {
+              setActiveNoteId(initialFileId);
+          }
+      }
       if (isNewNote) {
           handleNewNote(true);
       }
-  }, [isNewNote]);
+  }, [initialFileId, isNewNote]);
 
   // --- LOAD NOTE ---
   useEffect(() => {
     const loadNote = async () => {
-      if (!activeNoteId) {
-        if (activeNoteId === null && !isNewNote) {
-             // Reset if explicit null and not creating new
-            // setTitle('');
-            // setContent('');
-            // initialContentRef.current = '';
-            // setIsDirty(false);
-        }
-        return;
-      }
-
-      const noteItem = displayNotes.find(n => n.id === activeNoteId);
-      const recentItem = recentNotes.find(n => n.id === activeNoteId);
+      if (!activeNoteId) return;
 
       // If it's a temp ID for new note, skip fetching
       if (activeNoteId.startsWith('new-')) return;
+
+      const noteItem = displayNotes.find(n => n.id === activeNoteId);
+      const recentItem = recentNotes.find(n => n.id === activeNoteId);
 
       setIsLoading(true);
       try {
@@ -152,8 +153,11 @@ export const NotesApp: React.FC<NotesAppProps> = ({
   };
 
   const openSaveModal = () => {
-    // PREFER INITIAL FOLDER ID (passed from Explorer context)
-    setPickerCurrentFolderId(initialFolderId || currentFolderId || 'root');
+    // PREFER INITIAL FOLDER ID, BUT HANDLE 'ROOT' STRING LOGIC
+    let target = initialFolderId || currentFolderId;
+    if (target === '' || target === 'root') target = 'root';
+    
+    setPickerCurrentFolderId(target);
     setPickerHistory([]);
     setShowSaveModal(true);
   }
@@ -162,11 +166,15 @@ export const NotesApp: React.FC<NotesAppProps> = ({
     setIsLoading(true);
     try {
       const idToSave = activeNoteId && !activeNoteId.startsWith('new-') ? activeNoteId : `new-${Date.now()}`;
+      
+      // Fix: If picker is at 'root', send empty string to API for home folder
+      const finalFolderId = pickerCurrentFolderId === 'root' ? '' : pickerCurrentFolderId;
+
       await onSaveToCloud(
         idToSave, 
         title || 'Untitled Note', 
         content,
-        pickerCurrentFolderId
+        finalFolderId
       );
       initialContentRef.current = content;
       setIsDirty(false);
@@ -211,8 +219,10 @@ export const NotesApp: React.FC<NotesAppProps> = ({
 
   // --- PICKER NAVIGATION HELPERS ---
   const getPickerSubfolders = () => {
+    // If picker is at root, we show top level folders from systemMap that have parentId ""
+    const pid = pickerCurrentFolderId === 'root' ? "" : pickerCurrentFolderId;
     return Object.values(systemMap).filter(f => 
-      f.parentId === pickerCurrentFolderId && 
+      f.parentId === pid && 
       f.name !== 'System' && 
       f.name !== 'Recycle Bin'
     );
@@ -224,11 +234,13 @@ export const NotesApp: React.FC<NotesAppProps> = ({
   };
 
   const handlePickerUp = () => {
+    if (pickerCurrentFolderId === 'root') return;
+
     const current = systemMap[pickerCurrentFolderId];
     if (current && current.parentId && current.parentId !== "") {
        setPickerHistory(prev => [...prev, pickerCurrentFolderId]);
        setPickerCurrentFolderId(current.parentId);
-    } else if (pickerCurrentFolderId !== 'root') {
+    } else {
        setPickerHistory(prev => [...prev, pickerCurrentFolderId]);
        setPickerCurrentFolderId('root');
     }
@@ -245,8 +257,8 @@ export const NotesApp: React.FC<NotesAppProps> = ({
     <div className="flex h-full bg-[#1e1e1e] text-[#d4d4d4] font-sans overflow-hidden relative">
       
       {/* --- SIDEBAR (History / List) --- */}
-      <div className={`${sidebarOpen ? 'w-full sm:w-64' : 'w-0 hidden sm:block sm:w-0'} bg-[#252526] border-r border-[#333] flex-shrink-0 transition-all duration-300 flex flex-col z-10`}>
-        <div className="p-4 border-b border-[#333] flex items-center justify-between">
+      <div className={`${sidebarOpen ? 'w-full sm:w-64 border-r' : 'w-0 overflow-hidden'} bg-[#252526] border-[#333] flex-shrink-0 transition-all duration-300 flex flex-col z-10`}>
+        <div className="p-4 border-b border-[#333] flex items-center justify-between min-w-[200px]">
            <h2 className="font-bold text-sm text-yellow-500 flex items-center gap-2">
              <Folder size={16} /> 
              <span className="truncate max-w-[120px]">
@@ -264,7 +276,7 @@ export const NotesApp: React.FC<NotesAppProps> = ({
            </div>
         </div>
         
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 overflow-y-auto min-w-[200px]">
           {displayNotes.length === 0 && (
             <div className="p-4 text-xs text-gray-500 text-center">Tidak ada catatan</div>
           )}
@@ -292,13 +304,13 @@ export const NotesApp: React.FC<NotesAppProps> = ({
       </div>
 
       {/* --- MAIN EDITOR --- */}
-      <div className={`${activeNoteId ? 'flex-1' : 'hidden sm:flex sm:flex-1'} flex flex-col h-full bg-[#1e1e1e] relative`}>
+      <div className={`${activeNoteId ? 'flex-1' : 'hidden sm:flex sm:flex-1'} flex flex-col h-full bg-[#1e1e1e] relative min-w-0`}>
         
         {/* Toolbar */}
         <div className="h-12 border-b border-[#333] flex items-center justify-between px-4 bg-[#1e1e1e]">
            <div className="flex items-center gap-2">
              <button onClick={() => setSidebarOpen(!sidebarOpen)} className="p-1.5 hover:bg-[#333] rounded text-yellow-500">
-               <ChevronLeft size={20} className={`transition-transform ${!sidebarOpen ? 'rotate-180' : ''}`} />
+               <ChevronLeft size={20} className={`transition-transform duration-300 ${!sidebarOpen ? 'rotate-180' : ''}`} />
              </button>
              {isDirty && <span className="text-xs text-yellow-500 font-medium px-2 py-0.5 bg-yellow-500/10 rounded-full">Belum Disimpan</span>}
            </div>
@@ -408,7 +420,7 @@ export const NotesApp: React.FC<NotesAppProps> = ({
                   <div className="flex gap-1">
                      <span className="text-gray-500">System</span>
                      <span className="text-gray-500">/</span>
-                     <span className="font-medium text-white">{systemMap[pickerCurrentFolderId]?.name || "Home"}</span>
+                     <span className="font-medium text-white">{pickerCurrentFolderId === 'root' ? 'Home' : systemMap[pickerCurrentFolderId]?.name || "Folder"}</span>
                   </div>
                </div>
 

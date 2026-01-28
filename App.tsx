@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { 
   Folder, FileText, Image as ImageIcon, MoreVertical, 
@@ -57,13 +58,6 @@ const RECYCLE_BIN_NAME = "Recycle Bin";
 const SYSTEM_FOLDER_NAME = "System";
 const SYSTEM_PASSWORD = "1509";
 const DB_FILENAME_BASE = "system_zombio_db.json"; 
-
-const stripHtml = (html: string) => {
-  if (!html) return "";
-  const tmp = document.createElement("DIV");
-  tmp.innerHTML = html;
-  return tmp.textContent || tmp.innerText || "";
-};
 
 // --- FILE SYSTEM ITEM COMPONENTS ---
 
@@ -741,6 +735,7 @@ const App = () => {
 
   // EXPLORER STATE
   const [currentFolderId, setCurrentFolderId] = useState<string>(""); 
+  const currentFolderIdRef = useRef<string>(""); // Ref to track current folder accurately during async ops
   const [folderHistory, setFolderHistory] = useState<{id:string, name:string}[]>([]);
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(false); 
@@ -840,14 +835,40 @@ const App = () => {
   useEffect(() => { const timer = setInterval(() => setClock(new Date()), 1000); return () => clearInterval(timer); }, []);
 
   // --- SHARED EXPLORER ACTIONS ---
+  // Fix Explorer Bug: Ensure we are only updating state if the folder hasn't changed during fetch
+  const handleSetCurrentFolderId = (id: string) => {
+      setCurrentFolderId(id);
+      currentFolderIdRef.current = id;
+  };
+
   const loadFolder = useCallback(async (folderId: string = "") => {
+    // If the requested folder is not the one currently tracked, we might be lagging, but usually we want to respect the call
+    // However, when multiple rapid clicks happen, we need to ensure the final result matches the final intent
+    
+    // Clear items immediately to show loading state for the NEW folder
+    setItems([]); 
+    setLoading(true);
+    
     const cacheKey = folderId || "root";
     const cached = await DB.getCachedFolder(cacheKey);
-    if (cached) setItems(cached); else { setItems([]); setLoading(true); }
+    
+    // Race condition check: If folder changed while DB fetch happened
+    if (folderId !== currentFolderIdRef.current && isSystemInitialized) {
+        // This check is a bit tricky because loadFolder might be called alongside setCurrentFolderId
+        // But assuming consistent usage...
+    }
+
+    if (cached) setItems(cached); 
     
     setSelectedIds(new Set());
     try {
       const res = await API.getFolderContents(folderId);
+      
+      // CRITICAL FIX: Only update state if we are still looking at the requested folder
+      if (currentFolderIdRef.current !== folderId) {
+          return;
+      }
+
       if (res.status === 'success') {
         const freshItems: Item[] = (Array.isArray(res.data) ? res.data : []);
         freshItems.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
@@ -864,10 +885,18 @@ const App = () => {
             systemMapRef.current = nextMap; setSystemMap(nextMap); triggerCloudSync();
         }
       }
-    } catch (e) { console.error(e); } finally { setLoading(false); }
-  }, [systemMap]);
+    } catch (e) { console.error(e); } finally { 
+        if (currentFolderIdRef.current === folderId) setLoading(false); 
+    }
+  }, [systemMap, isSystemInitialized]);
 
-  useEffect(() => { if (isSystemInitialized) loadFolder(currentFolderId); }, [currentFolderId, isSystemInitialized]);
+  useEffect(() => { 
+      if (isSystemInitialized) {
+          // Ensure ref matches state on init/change
+          currentFolderIdRef.current = currentFolderId;
+          loadFolder(currentFolderId); 
+      }
+  }, [currentFolderId, isSystemInitialized]);
 
   const triggerCloudSync = useCallback(() => {
     if (!dbFileId) return;
@@ -1108,39 +1137,44 @@ const App = () => {
   const handleDesktopIconDrag = (appId: string, e: React.PointerEvent) => {
      if (e.button !== 0) return;
      
-     // Initiate potential drag
-     desktopDragStart.current = { x: e.pageX, y: e.pageY };
-     isDraggingDesktop.current = false;
-     setIsInteracting(true);
-
      const iconEl = e.currentTarget as HTMLElement;
-     const initial = iconLayout[appId] || { x: 0, y: 0 };
+     const startX = e.pageX;
+     const startY = e.pageY;
      
-     // Use initial layout position or current DOM position if undefined
+     // Get initial positions
+     const initial = iconLayout[appId] || { x: 0, y: 0 };
      let startLeft = initial.x;
      let startTop = initial.y;
 
+     // If not in layout (grid flow), get current computed position
      if (!startLeft && !startTop) {
          const rect = iconEl.getBoundingClientRect();
          startLeft = rect.left;
          startTop = rect.top;
      }
-     
-     // Set initial style for dragging
-     iconEl.style.position = 'absolute';
-     iconEl.style.zIndex = '50';
-     iconEl.style.transition = 'none';
+
+     isDraggingDesktop.current = false;
+     desktopDragStart.current = { x: startX, y: startY };
 
      let curX = startLeft; 
      let curY = startTop;
 
      const onMove = (mv: PointerEvent) => {
-         const dx = mv.pageX - desktopDragStart.current!.x;
-         const dy = mv.pageY - desktopDragStart.current!.y;
+         const dx = mv.pageX - startX;
+         const dy = mv.pageY - startY;
          
-         // Threshold for drag detection
+         // Threshold for drag detection (prevent accidental moves on click)
          if (!isDraggingDesktop.current && (Math.abs(dx) > 5 || Math.abs(dy) > 5)) {
              isDraggingDesktop.current = true;
+             setIsInteracting(true); // Overlay to block iframes
+             
+             // Promote to absolute on first move
+             iconEl.style.position = 'absolute';
+             iconEl.style.zIndex = '50';
+             iconEl.style.transition = 'none';
+             // Compensate for grid flow position by setting explicit left/top now
+             iconEl.style.left = `${startLeft}px`;
+             iconEl.style.top = `${startTop}px`;
          }
 
          if (isDraggingDesktop.current) {
@@ -1152,17 +1186,19 @@ const App = () => {
      };
 
      const onUp = () => {
-         setIsInteracting(false);
-         iconEl.style.zIndex = '';
-         iconEl.style.transition = '';
-         
          window.removeEventListener('pointermove', onMove);
          window.removeEventListener('pointerup', onUp);
+         setIsInteracting(false);
 
          if (isDraggingDesktop.current) {
              // Snap to Grid Logic
              const snappedX = Math.round(curX / GRID_SIZE_X) * GRID_SIZE_X + 20; // + margin offset
              const snappedY = Math.round(curY / GRID_SIZE_Y) * GRID_SIZE_Y + 20;
+
+             iconEl.style.zIndex = '';
+             iconEl.style.transition = '';
+             iconEl.style.left = `${snappedX}px`;
+             iconEl.style.top = `${snappedY}px`;
 
              const newLayout = { ...iconLayout, [appId]: { x: snappedX, y: snappedY } };
              setIconLayout(newLayout);
@@ -1174,13 +1210,12 @@ const App = () => {
                  API.saveSystemConfig(updatedConfig).catch(() => console.error("Failed to save layout"));
              }
          } else {
-             // It was a click, reset position if moved slightly
-             if (initial.x) {
-                iconEl.style.left = `${initial.x}px`;
-                iconEl.style.top = `${initial.y}px`;
-             } else {
-                iconEl.style.position = ''; // Reset to flow if it was flow
-             }
+             // Clean up style if it was just a click
+             iconEl.style.position = '';
+             iconEl.style.zIndex = '';
+             iconEl.style.transition = '';
+             iconEl.style.left = '';
+             iconEl.style.top = '';
          }
          
          desktopDragStart.current = null;
@@ -1193,9 +1228,9 @@ const App = () => {
 
   const handleDesktopIconClick = (appId: string, e: React.MouseEvent) => {
       e.stopPropagation();
-      if (!isDraggingDesktop.current) {
-          setSelectedDesktopIcon(appId);
-      }
+      // If we dragged, don't register as click
+      if (isDraggingDesktop.current) return;
+      setSelectedDesktopIcon(appId);
   };
   
   const handleRefreshDesktop = async () => {
@@ -1257,7 +1292,22 @@ const App = () => {
     setStartMenuOpen(false);
     if (!app) { addNotification("App not ready", "error"); return; }
     
-    // Always create a NEW window instance
+    // Notes App Single Instance Logic
+    if (app.id === 'notes') {
+        const existingNoteWindow = windows.find(w => w.appId === 'notes');
+        if (existingNoteWindow) {
+            // If window exists, bring to front and update args if provided
+            setWindows(prev => prev.map(w => {
+                if (w.instanceId === existingNoteWindow.instanceId) {
+                    return { ...w, isMinimized: false, args: args || w.args };
+                }
+                return w;
+            }));
+            setActiveWindowId(existingNoteWindow.instanceId);
+            return;
+        }
+    }
+
     // Recycle Bin is special case (it's a folder view)
     if (app.id === 'recycle-bin') {
         const explorer = config?.installedApps.find(a => a.id === 'file-explorer');
@@ -1297,7 +1347,8 @@ const App = () => {
   const openNotesApp = (fileId?: string, isNew?: boolean) => {
     const notesApp = config?.installedApps.find(a => a.id === 'notes');
     if (notesApp) {
-        openApp(notesApp, { fileId, isNew, folderId: currentFolderId });
+        // Pass the fileId and currentFolderId (for context where to save new files)
+        openApp(notesApp, { fileId, isNew, folderId: currentFolderIdRef.current });
     }
   };
   
@@ -1323,52 +1374,59 @@ const App = () => {
     >
       {isInteracting && <div className="fixed inset-0 z-[9999] cursor-move bg-transparent touch-none" />}
 
-      {/* DESKTOP ICONS */}
+      {/* DESKTOP ICONS GRID CONTAINER */}
       <div className="absolute top-0 left-0 bottom-12 w-full p-4 z-0">
-        {config?.installedApps.map((app, index) => {
-            const pos = iconLayout[app.id];
-            // Calculate grid position if no layout exists
-            const defaultX = 20 + (Math.floor(index / 6) * GRID_SIZE_X);
-            const defaultY = 20 + ((index % 6) * GRID_SIZE_Y);
-            
-            const style = pos 
-                ? { position: 'absolute' as const, left: pos.x, top: pos.y } 
-                : { position: 'absolute' as const, left: defaultX, top: defaultY };
-            
-            const isSelected = selectedDesktopIcon === app.id;
+        {/* We use a grid for responsive layout, but allow absolute override for custom positions */}
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(100px,1fr))] grid-rows-[repeat(auto-fill,minmax(120px,1fr))] h-full gap-2 pointer-events-none">
+            {config?.installedApps.map((app) => {
+                const pos = iconLayout[app.id];
+                // If it has a position, it's absolute (removed from grid flow effectively via absolute positioning)
+                // If no position, it flows in the grid
+                const style: React.CSSProperties = pos 
+                    ? { position: 'absolute', left: pos.x, top: pos.y, pointerEvents: 'auto' } 
+                    : { position: 'relative', pointerEvents: 'auto' };
+                
+                const isSelected = selectedDesktopIcon === app.id;
 
-            return (
-              <div key={app.id} 
-                   style={style}
-                   onDoubleClick={(e) => { e.stopPropagation(); openApp(app); }}
-                   onPointerDown={(e) => { 
-                     e.stopPropagation(); 
-                     setStartMenuOpen(false); setActiveWindowId(null);
-                     if (e.button === 0) { setGlobalContextMenu(null); handleDesktopIconDrag(app.id, e); }
-                   }}
-                   onClick={(e) => handleDesktopIconClick(app.id, e)}
-                   onContextMenu={(e) => {
-                     e.preventDefault(); e.stopPropagation();
-                     setSelectedDesktopIcon(app.id);
-                     setGlobalContextMenu({ x: e.clientX, y: e.clientY, targetItem: app as any, type: 'app' });
-                   }}
-                   className={`w-24 flex flex-col items-center gap-1.5 p-2 rounded-lg cursor-default group transition-colors select-none ${isSelected ? 'bg-white/20 ring-1 ring-white/30' : 'hover:bg-white/10'}`}
-              >
-                <div className="w-12 h-12 glass-light rounded-2xl flex items-center justify-center shadow-lg group-hover:scale-105 transition-transform text-white overflow-hidden pointer-events-none">
-                  {app.icon.startsWith('http') ? <img src={app.icon} className="w-full h-full object-cover"/> :
-                   app.icon === 'folder' ? <Folder size={28} className="text-blue-400 drop-shadow-lg"/> :
-                   app.icon === 'settings' ? <Settings size={28} className="text-slate-300 drop-shadow-lg"/> :
-                   app.icon === 'shopping-bag' ? <ShoppingBag size={28} className="text-pink-400 drop-shadow-lg"/> : 
-                   app.icon === 'image' ? <ImageIcon size={28} className="text-pink-400 drop-shadow-lg" /> :
-                   app.icon === 'youtube' ? <Youtube size={28} className="text-red-500 drop-shadow-lg" /> :
-                   app.icon === 'file-text' ? <FileText size={28} className="text-yellow-500 drop-shadow-lg"/> :
-                   app.icon === 'trash' ? <Trash2 size={28} className="text-red-400 drop-shadow-lg"/> :
-                   <Globe size={28} className="text-emerald-400 drop-shadow-lg"/>}
+                return (
+                <div key={app.id} 
+                    style={style}
+                    onDoubleClick={(e) => { 
+                        e.stopPropagation(); 
+                        openApp(app); 
+                    }}
+                    onPointerDown={(e) => { 
+                        e.stopPropagation(); 
+                        setStartMenuOpen(false); setActiveWindowId(null);
+                        if (e.button === 0) { 
+                            setGlobalContextMenu(null); 
+                            handleDesktopIconDrag(app.id, e); 
+                        }
+                    }}
+                    onClick={(e) => handleDesktopIconClick(app.id, e)}
+                    onContextMenu={(e) => {
+                        e.preventDefault(); e.stopPropagation();
+                        setSelectedDesktopIcon(app.id);
+                        setGlobalContextMenu({ x: e.clientX, y: e.clientY, targetItem: app as any, type: 'app' });
+                    }}
+                    className={`w-24 flex flex-col items-center gap-1.5 p-2 rounded-lg cursor-default group transition-colors select-none ${isSelected ? 'bg-white/20 ring-1 ring-white/30' : 'hover:bg-white/10'}`}
+                >
+                    <div className="w-12 h-12 glass-light rounded-2xl flex items-center justify-center shadow-lg group-hover:scale-105 transition-transform text-white overflow-hidden pointer-events-none">
+                    {app.icon.startsWith('http') ? <img src={app.icon} className="w-full h-full object-cover"/> :
+                    app.icon === 'folder' ? <Folder size={28} className="text-blue-400 drop-shadow-lg"/> :
+                    app.icon === 'settings' ? <Settings size={28} className="text-slate-300 drop-shadow-lg"/> :
+                    app.icon === 'shopping-bag' ? <ShoppingBag size={28} className="text-pink-400 drop-shadow-lg"/> : 
+                    app.icon === 'image' ? <ImageIcon size={28} className="text-pink-400 drop-shadow-lg" /> :
+                    app.icon === 'youtube' ? <Youtube size={28} className="text-red-500 drop-shadow-lg" /> :
+                    app.icon === 'file-text' ? <FileText size={28} className="text-yellow-500 drop-shadow-lg"/> :
+                    app.icon === 'trash' ? <Trash2 size={28} className="text-red-400 drop-shadow-lg"/> :
+                    <Globe size={28} className="text-emerald-400 drop-shadow-lg"/>}
+                    </div>
+                    <span className="text-[10px] text-white font-bold text-shadow text-center line-clamp-2 px-1 pointer-events-none">{app.name}</span>
                 </div>
-                <span className="text-[10px] text-white font-bold text-shadow text-center line-clamp-2 px-1 pointer-events-none">{app.name}</span>
-              </div>
-            );
-        })}
+                );
+            })}
+        </div>
       </div>
 
       {/* WINDOWS */}
@@ -1403,7 +1461,7 @@ const App = () => {
             {win.appId === 'file-explorer' && (
               <FileExplorerApp {...{
                   currentFolderId: win.args?.folderId !== undefined ? win.args.folderId : currentFolderId, 
-                  setCurrentFolderId: (id: string) => { if(win.args?.folderId !== undefined) { /* Should update args or local state logic if multiple explorer windows supported properly */ setCurrentFolderId(id); } else setCurrentFolderId(id); }, 
+                  setCurrentFolderId: (id: string) => { if(win.args?.folderId !== undefined) { handleSetCurrentFolderId(id); } else handleSetCurrentFolderId(id); }, 
                   folderHistory, setFolderHistory, items, setItems, loading, setLoading,
                   systemMap, setSystemMap, dbFileId, setDbFileId, comments, setComments, recycleBinId, setRecycleBinId,
                   systemFolderId, setSystemFolderId, isSavingDB, setIsSavingDB, isSavingComments, setIsSavingComments,
@@ -1418,7 +1476,7 @@ const App = () => {
                   openNotesApp: (fileId?: string, isNew?: boolean) => {
                       // Pass current folder ID so new notes are saved there by default
                       const targetFolder = win.args?.folderId !== undefined ? win.args.folderId : currentFolderId;
-                      openApp(config?.installedApps.find(a => a.id === 'notes')!, { fileId, isNew, folderId: targetFolder })
+                      openNotesApp(fileId, isNew);
                   }
               }} />
             )}
@@ -1427,7 +1485,7 @@ const App = () => {
                 initialFileId={win.args?.fileId}
                 isNewNote={win.args?.isNew}
                 initialFolderId={win.args?.folderId}
-                currentFolderId={currentFolderId} // Global fallback, but prefer initialFolderId
+                currentFolderId={currentFolderId} // Global fallback
                 filesInFolder={items} 
                 systemMap={systemMap}
                 onClose={() => closeWindow(win.instanceId)}
