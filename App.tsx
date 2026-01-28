@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { 
   Folder, FileText, Image as ImageIcon, MoreVertical, 
@@ -19,6 +18,7 @@ import { UploadProgress, UploadItem } from './components/UploadProgress';
 import { DownloadProgress } from './components/DownloadProgress';
 import { UploadZone } from './components/UploadZone';
 import { ImageCard } from './components/ImageCard';
+import { NotesApp } from './components/NotesApp';
 
 // --- CONSTANTS ---
 const DEFAULT_YOUTUBE_KEYS = [
@@ -374,6 +374,7 @@ const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId }: any
   const [useProxy, setUseProxy] = useState(false);
 
   const popularApps = [
+    { id: 'notes', name: 'Notes', url: 'internal://notes', icon: 'file-text' },
     { id: 'gallery', name: 'Gallery', url: 'internal://gallery', icon: 'image' },
     { id: 'youtube', name: 'YouTube', url: 'internal://youtube', icon: 'youtube' },
     { id: 'spotify', name: 'Spotify', url: 'https://open.spotify.com/embed', icon: 'music' },
@@ -425,7 +426,7 @@ const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId }: any
   const handleUninstall = async (appId: string) => {
     if (!config) return;
     const app = config.installedApps.find((a: any) => a.id === appId);
-    if ((app?.type === 'system' && app?.id === 'file-explorer') || app?.id === 'youtube') {
+    if ((app?.type === 'system' && (app?.id === 'file-explorer' || app?.id === 'notes')) || app?.id === 'youtube') {
        addNotification("Aplikasi sistem tidak dapat dihapus", "error");
        return;
     }
@@ -554,6 +555,7 @@ const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId }: any
                      app.icon === 'music' ? <Music size={24} className="text-green-500"/> :
                      app.icon === 'settings' ? <Settings size={24} className="text-slate-400"/> :
                      app.icon === 'shopping-bag' ? <ShoppingBag size={24} className="text-pink-400"/> :
+                     app.icon === 'file-text' ? <FileText size={24} className="text-yellow-500"/> :
                      <Globe size={24} />}
                   </div>
                   <div>
@@ -587,6 +589,7 @@ const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId }: any
                    {app.icon === 'image' ? <ImageIcon size={32} className="text-pink-400" /> : 
                     app.icon === 'youtube' ? <Youtube size={32} className="text-red-500" /> :
                     app.icon === 'music' ? <Music size={32} className="text-green-500" /> :
+                    app.icon === 'file-text' ? <FileText size={32} className="text-yellow-500"/> :
                     <Globe size={32} className="text-blue-400" />}
                   {isInstalled && <div className="absolute -top-1 -right-1 bg-green-500 rounded-full p-1"><CheckCircle size={10} className="text-white"/></div>}
                 </div>
@@ -634,7 +637,8 @@ const FileExplorerApp = ({
     executeAction,
     loadFolder,
     selectedIds, setSelectedIds,
-    onContextMenu 
+    onContextMenu,
+    openNotesApp // New prop
 }: any) => {
   const [lastSelectedId, setLastSelectedId] = useState<string | null>(null);
   const [isNewDropdownOpen, setIsNewDropdownOpen] = useState(false);
@@ -650,6 +654,7 @@ const FileExplorerApp = ({
   const isPaintingRef = useRef<boolean>(false); 
   const longPressTimerRef = useRef<any>(null);
 
+  // ... (Drag & Drop Handlers - Unchanged) ...
   // EXTERNAL DRAG AND DROP HANDLERS
   const handleDragOver = (e: React.DragEvent) => {
     e.preventDefault();
@@ -817,6 +822,7 @@ const FileExplorerApp = ({
     else { setSelectedIds(new Set([item.id])); setLastSelectedId(item.id); }
   };
 
+  // --- MODIFIED DOUBLE CLICK FOR NOTES ---
   const handleItemDoubleClick = async (e: React.MouseEvent, item: Item) => {
     e.stopPropagation();
     if (item.type === 'folder') {
@@ -846,23 +852,18 @@ const FileExplorerApp = ({
                 setViewingRawFile({ title: item.name, content: content || "" }); removeNotification(notifId);
             } catch(e) { updateNotification(notifId, 'Failed to open DB', 'error'); }
         } else { 
-            setItems((prev: Item[]) => prev.map(i => i.id === item.id ? { ...i, status: 'creating' } : i));
-            await handleOpenNote(item); 
-            setItems((prev: Item[]) => prev.map(i => i.id === item.id ? { ...i, status: 'idle' } : i));
+            // OPEN NOTES APP WINDOW INSTEAD OF OVERLAY
+            openNotesApp(item.id);
         }
     } else if (item.type === 'image') { setPreviewImage(item.url || null); }
   };
 
   const handleOpenNote = async (item: Item) => { 
-    const notifId = addNotification("Opening note...", "loading"); 
-    try { 
-        let content = item.content; 
-        if (!content) content = await API.getFileContent(item.id); 
-        setEditingNote({ id: item.id, galleryId: currentFolderId, title: item.name.replace('.txt', ''), content: content || "", timestamp: item.lastUpdated }); 
-        removeNotification(notifId);
-    } catch(e) { updateNotification(notifId, 'Failed to open', 'error'); } 
+    // This is now legacy/fallback or used if we want to open a quick preview.
+    // For now we use the windowed app.
   };
 
+  // ... (Rest of File Explorer Code - Unchanged) ...
   const localHandleContextMenu = (e: React.MouseEvent | React.PointerEvent, item?: Item) => {
     e.preventDefault(); 
     e.stopPropagation();
@@ -907,7 +908,7 @@ const FileExplorerApp = ({
             {isNewDropdownOpen && (
               <div className="absolute right-3 top-12 w-48 bg-slate-800 border border-slate-700 rounded-lg shadow-2xl z-50 p-1 animate-in zoom-in-95 duration-150 origin-top-right">
                 <button onClick={() => { setIsNewDropdownOpen(false); executeAction('new_folder'); }} className="w-full text-left px-3 py-2 hover:bg-slate-700 rounded-lg flex items-center gap-2 text-xs"><Folder size={14} className="text-blue-400"/> New Folder</button>
-                <button onClick={() => { setIsNewDropdownOpen(false); setEditingNote({ id: 'temp-'+Date.now(), galleryId: currentFolderId, title: 'Untitled Note', content: '', timestamp: Date.now() }); }} className="w-full text-left px-3 py-2 hover:bg-slate-700 rounded-lg flex items-center gap-2 text-xs"><FileText size={14} className="text-yellow-400"/> New Note</button>
+                <button onClick={() => { setIsNewDropdownOpen(false); openNotesApp(); }} className="w-full text-left px-3 py-2 hover:bg-slate-700 rounded-lg flex items-center gap-2 text-xs"><FileText size={14} className="text-yellow-400"/> New Note</button>
                 <button onClick={() => { setIsNewDropdownOpen(false); executeAction('native_upload'); }} className="w-full text-left px-3 py-2 hover:bg-slate-700 rounded-lg flex items-center gap-2 text-xs"><Upload size={14} className="text-green-400"/> Upload File</button>
               </div>
             )}
@@ -1047,9 +1048,15 @@ const App = () => {
         setGlobalLoadingMessage("Loading System Configuration...");
         const osConfig = await API.getSystemConfig();
         
-        // Ensure YouTube is present in installedApps
+        // Ensure YouTube and Notes are present in installedApps
+        let configUpdated = false;
         if (!osConfig.installedApps.some(app => app.id === 'youtube')) {
             osConfig.installedApps.push({ id: 'youtube', name: 'YouTube', url: 'internal://youtube', icon: 'youtube', type: 'system' });
+            configUpdated = true;
+        }
+        if (!osConfig.installedApps.some(app => app.id === 'notes')) {
+            osConfig.installedApps.push({ id: 'notes', name: 'Notes', url: 'internal://notes', icon: 'file-text', type: 'system' });
+            configUpdated = true;
         }
         
         setConfig(osConfig);
@@ -1403,16 +1410,21 @@ const App = () => {
     window.addEventListener('pointerup', onPointerUp);
   };
 
-  const openApp = (app: API.AppDefinition) => {
+  const openApp = (app: API.AppDefinition, args: any = null) => {
     setStartMenuOpen(false);
     const existing = windows.find(w => w.appId === app.id);
     if (existing) { 
-      setWindows(prev => prev.map(w => w.instanceId === existing.instanceId ? {...w, isMinimized: false} : w));
+      // If opening Notes with a new file, update the existing window's args
+      if (app.id === 'notes' && args) {
+         setWindows(prev => prev.map(w => w.instanceId === existing.instanceId ? { ...w, isMinimized: false, args: args } : w));
+      } else {
+         setWindows(prev => prev.map(w => w.instanceId === existing.instanceId ? {...w, isMinimized: false} : w));
+      }
       setActiveWindowId(existing.instanceId); 
       return; 
     }
     const newWindow = {
-      instanceId: Date.now().toString(), appId: app.id, title: app.name, appData: app, isMinimized: false, isMaximized: false,
+      instanceId: Date.now().toString(), appId: app.id, title: app.name, appData: app, args: args, isMinimized: false, isMaximized: false,
       position: { x: 100 + (windows.length * 30), y: 50 + (windows.length * 30) }, size: { w: 900, h: 600 }
     };
     setWindows([...windows, newWindow]); setActiveWindowId(newWindow.instanceId);
@@ -1475,6 +1487,7 @@ const App = () => {
                app.icon === 'shopping-bag' ? <ShoppingBag size={28} className="text-pink-400 drop-shadow-lg"/> : 
                app.icon === 'image' ? <ImageIcon size={28} className="text-pink-400 drop-shadow-lg" /> :
                app.icon === 'youtube' ? <Youtube size={28} className="text-red-500 drop-shadow-lg" /> :
+               app.icon === 'file-text' ? <FileText size={28} className="text-yellow-500 drop-shadow-lg"/> :
                <Globe size={28} className="text-emerald-400 drop-shadow-lg"/>}
             </div>
             <span className="text-[10px] text-white font-bold text-shadow text-center line-clamp-2 px-1">{app.name}</span>
@@ -1498,6 +1511,7 @@ const App = () => {
                   (win.appId === 'app-store' || win.appId === 'store') ? <ShoppingBag size={14}/> : 
                   win.appId === 'settings' ? <Settings size={14}/> : 
                   win.appId === 'youtube' ? <Youtube size={14}/> :
+                  win.appId === 'notes' ? <FileText size={14}/> :
                   win.appData.icon === 'image' ? <ImageIcon size={14}/> : <Globe size={14}/>}
                </div>
                <span className="text-[10px] font-bold text-slate-300 tracking-wide uppercase">{win.title}</span>
@@ -1518,8 +1532,22 @@ const App = () => {
                   triggerCloudSync, triggerCommentSync, handleRefreshComments, addNotification, removeNotification, updateNotification,
                   setModal, modal, setEditingNote, setViewingRawFile, setPreviewImage, handleUploadFiles, executeAction, loadFolder,
                   selectedIds, setSelectedIds, 
-                  onContextMenu: (e: any, item: any, isBin: boolean) => setGlobalContextMenu({ x: e.clientX, y: e.clientY, targetItem: item, isRecycleBin: isBin, type: 'item' })
+                  onContextMenu: (e: any, item: any, isBin: boolean) => setGlobalContextMenu({ x: e.clientX, y: e.clientY, targetItem: item, isRecycleBin: isBin, type: 'item' }),
+                  openNotesApp: (fileId?: string) => openApp(config?.installedApps.find(a => a.id === 'notes')!, { fileId })
               }} />
+            )}
+            {win.appId === 'notes' && (
+              <NotesApp 
+                initialFileId={win.args?.fileId}
+                currentFolderId={currentFolderId} // Pass current folder from Explorer state context
+                filesInFolder={items} // Pass items list for the sidebar
+                systemMap={systemMap}
+                onClose={() => closeWindow(win.instanceId)}
+                onRefresh={() => loadFolder(currentFolderId)}
+                onSaveToCloud={async (id: string, title: string, content: string, targetFolderId?: string) => {
+                   await API.saveNoteToDrive(title, content, targetFolderId || currentFolderId, id.startsWith('new-') ? undefined : id);
+                }}
+              />
             )}
             {win.appData.url === 'internal://gallery' && (
               <GalleryApp 
@@ -1584,6 +1612,7 @@ const App = () => {
                      app.icon === 'shopping-bag' ? <ShoppingBag size={24} className="text-pink-400"/> :
                      app.icon === 'image' ? <ImageIcon size={24} className="text-pink-400" /> :
                      app.icon === 'youtube' ? <Youtube size={24} className="text-red-500"/> :
+                     app.icon === 'file-text' ? <FileText size={24} className="text-yellow-500"/> :
                      <Globe size={24} className="text-emerald-400"/>}
                  </div>
                  <span className="text-[10px] text-white font-medium truncate w-full text-center group-hover:text-blue-400">{app.name}</span>
@@ -1621,11 +1650,12 @@ const App = () => {
            {windows.map(win => (
              <button key={win.instanceId} onClick={() => { if (win.isMinimized) toggleMinimize(win.instanceId); setActiveWindowId(win.instanceId); }}
                      className={`p-2 rounded-xl hover:bg-white/10 transition-all relative group flex-shrink-0 ${activeWindowId === win.instanceId && !win.isMinimized ? 'bg-white/10' : 'opacity-60'}`}>
-                <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-white text-[10px] font-bold shadow-lg ${win.appId === 'file-explorer' ? 'bg-blue-600' : (win.appId === 'app-store' || win.appId === 'store') ? 'bg-pink-600' : win.appId === 'youtube' ? 'bg-red-600' : win.appData.icon === 'image' ? 'bg-pink-500' : 'bg-slate-700'}`}>
+                <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-white text-[10px] font-bold shadow-lg ${win.appId === 'file-explorer' ? 'bg-blue-600' : (win.appId === 'app-store' || win.appId === 'store') ? 'bg-pink-600' : win.appId === 'youtube' ? 'bg-red-600' : win.appId === 'notes' ? 'bg-yellow-600' : win.appData.icon === 'image' ? 'bg-pink-500' : 'bg-slate-700'}`}>
                    {win.appId === 'file-explorer' ? <Folder size={14}/> : 
                     (win.appId === 'app-store' || win.appId === 'store') ? <ShoppingBag size={14}/> : 
                     win.appId === 'settings' ? <Settings size={14}/> : 
                     win.appId === 'youtube' ? <Youtube size={14}/> :
+                    win.appId === 'notes' ? <FileText size={14}/> :
                     win.appData.icon === 'image' ? <ImageIcon size={14} /> : win.title.charAt(0)}
                 </div>
                 {!win.isMinimized && activeWindowId === win.instanceId && <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-3 h-1 bg-blue-400 rounded-full"></div>}
@@ -1681,6 +1711,7 @@ const App = () => {
       <UploadProgress uploads={uploadQueue} onClose={() => setUploadQueue([])} onRemove={(id) => setUploadQueue(prev => prev.filter(u => u.id !== id))} />
       <DownloadProgress downloads={downloadQueue} onClose={() => setDownloadQueue([])} onClearCompleted={() => setDownloadQueue(prev => prev.filter(d => d.status !== 'completed'))} />
       {previewImage && (<div className="fixed inset-0 z-[150] bg-black/95 flex items-center justify-center p-4" onClick={() => setPreviewImage(null)}><button onClick={() => setPreviewImage(null)} className="absolute top-4 right-4 text-white"><X size={32}/></button><img src={previewImage} className="max-w-full max-h-full object-contain" referrerPolicy="no-referrer" /></div>)}
+      {/* Deprecated Overlay TextEditor - logic handled by NotesApp now, but left for safety if called elsewhere */}
       {editingNote && <TextEditor note={editingNote} onSave={handleSaveNote} onClose={() => setEditingNote(null)} />}
       
       {modal && (
