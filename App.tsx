@@ -8,7 +8,9 @@ import {
   ShieldAlert, Cloud, CloudUpload, FileJson, RefreshCw,
   CheckCheck, MessageSquare, Reply, Send, User, Clock,
   Grid, Monitor, Globe, Settings, ShoppingBag, Minus, Square, Search, Wifi,
-  Maximize2, UploadCloud
+  Maximize2, UploadCloud, MonitorCheck, ExternalLink,
+  // Added missing Minimize2 import from lucide-react
+  Minimize2
 } from 'lucide-react';
 import * as API from './services/api';
 import * as DB from './services/db';
@@ -49,6 +51,119 @@ const stripHtml = (html: string) => {
   return tmp.textContent || tmp.innerText || "";
 };
 
+// --- APP STORE COMPONENT ---
+const AppStoreApp = ({ config, setConfig, addNotification }: any) => {
+  const [appName, setAppName] = useState('');
+  const [appUrl, setAppUrl] = useState('');
+  const [isInstalling, setIsInstalling] = useState(false);
+
+  const popularApps = [
+    { id: 'youtube', name: 'YouTube', url: 'https://www.youtube.com/embed', icon: 'globe' },
+    { id: 'spotify', name: 'Spotify', url: 'https://open.spotify.com/embed', icon: 'globe' },
+    { id: 'canvas', name: 'Canvas', url: 'https://www.canva.com', icon: 'globe' },
+    { id: 'maps', name: 'Google Maps', url: 'https://www.google.com/maps/embed', icon: 'globe' },
+  ];
+
+  const handleInstall = async (app: any) => {
+    if (config.installedApps.some((a: any) => a.id === app.id)) {
+      addNotification("Aplikasi sudah terpasal", "error");
+      return;
+    }
+    
+    setIsInstalling(true);
+    const updatedConfig = {
+      ...config,
+      installedApps: [...config.installedApps, { ...app, type: 'webapp' }]
+    };
+    
+    try {
+      await API.saveSystemConfig(updatedConfig);
+      setConfig(updatedConfig);
+      addNotification(`${app.name} berhasil diinstal`, "success");
+    } catch (e) {
+      addNotification("Gagal menginstal", "error");
+    } finally {
+      setIsInstalling(false);
+    }
+  };
+
+  const handleCustomInstall = () => {
+    if (!appName || !appUrl) return;
+    const newApp = {
+      id: 'custom-' + Date.now(),
+      name: appName,
+      url: appUrl.startsWith('http') ? appUrl : `https://${appUrl}`,
+      icon: 'globe',
+      type: 'webapp'
+    };
+    handleInstall(newApp);
+    setAppName('');
+    setAppUrl('');
+  };
+
+  return (
+    <div className="h-full bg-slate-900 text-white p-6 overflow-y-auto space-y-8">
+      <div className="flex items-center gap-4 border-b border-slate-800 pb-6">
+        <ShoppingBag size={48} className="text-pink-500" />
+        <div>
+          <h1 className="text-3xl font-bold">App Store</h1>
+          <p className="text-slate-400 text-sm">Instal Web App favorit Anda ke Desktop</p>
+        </div>
+      </div>
+
+      <section className="space-y-4">
+        <h2 className="text-lg font-bold flex items-center gap-2"><Plus size={20} className="text-blue-400" /> Tambah Kustom App</h2>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-800/50 p-4 rounded-2xl border border-slate-700">
+          <input 
+            className="bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-sm focus:border-blue-500 outline-none transition-all" 
+            placeholder="Nama Aplikasi (misal: ChatGPT)" 
+            value={appName}
+            onChange={e => setAppName(e.target.value)}
+          />
+          <div className="flex gap-2">
+            <input 
+              className="flex-1 bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-sm focus:border-blue-500 outline-none transition-all" 
+              placeholder="URL (misal: chat.openai.com)" 
+              value={appUrl}
+              onChange={e => setAppUrl(e.target.value)}
+            />
+            <button 
+              onClick={handleCustomInstall}
+              disabled={isInstalling || !appName || !appUrl}
+              className="px-6 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-xl font-bold transition-all active:scale-95"
+            >
+              Instal
+            </button>
+          </div>
+        </div>
+      </section>
+
+      <section className="space-y-4">
+        <h2 className="text-lg font-bold">Aplikasi Populer</h2>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          {popularApps.map(app => (
+            <div key={app.id} className="bg-slate-800 p-4 rounded-2xl border border-slate-700 flex flex-col items-center gap-4 group">
+              <div className="w-16 h-16 bg-slate-950 rounded-2xl flex items-center justify-center group-hover:scale-110 transition-transform shadow-lg">
+                <Globe size={32} className="text-blue-400" />
+              </div>
+              <div className="text-center">
+                <p className="font-bold text-sm">{app.name}</p>
+                <p className="text-[10px] text-slate-500">Web Application</p>
+              </div>
+              <button 
+                onClick={() => handleInstall(app)}
+                className="w-full py-2 bg-slate-700 hover:bg-blue-600 rounded-lg text-xs font-bold transition-colors"
+              >
+                {config.installedApps.some((a: any) => a.id === app.id) ? 'Terinstal' : 'Dapatkan'}
+              </button>
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+};
+
 // --- FILE EXPLORER APP COMPONENT ---
 const FileExplorerApp = ({ 
     currentFolderId, setCurrentFolderId,
@@ -67,7 +182,6 @@ const FileExplorerApp = ({
     addNotification, removeNotification, updateNotification,
     setModal, modal,
     setEditingNote,
-    setViewingRawFile,
     setViewingRawFile,
     setPreviewImage,
     handleUploadFiles,
@@ -117,6 +231,7 @@ const FileExplorerApp = ({
 
   const handlePointerDown = (e: React.PointerEvent) => {
      if ((e.target as HTMLElement).closest('button, .item-handle, .floating-ui, select, input, .comment-area')) return;
+     
      const target = e.target as HTMLElement;
      const checkbox = target.closest('.selection-checkbox');
      const itemRow = target.closest('[data-item-id]');
@@ -146,7 +261,8 @@ const FileExplorerApp = ({
              if (clickedItem) {
                  longPressTimerRef.current = setTimeout(() => {
                      if (clickedItem.id === systemFolderId || currentFolderId === systemFolderId) return;
-                     setCustomDragItem(clickedItem); setCustomDragPos({ x: e.clientX, y: e.clientY });
+                     setCustomDragItem(clickedItem); 
+                     setCustomDragPos({ x: e.clientX, y: e.clientY });
                      if (!selectedIds.has(clickedItem.id)) setSelectedIds(new Set([clickedItem.id]));
                      if (navigator.vibrate) navigator.vibrate(50);
                  }, 500); 
@@ -249,7 +365,6 @@ const FileExplorerApp = ({
             const newSet = new Set(selectedIds); rangeIds.forEach(itemId => newSet.add(itemId)); setSelectedIds(newSet);
         }
     } else if (e.ctrlKey || e.metaKey) { 
-        // Fix: Changed 'id' to 'item.id' as 'id' was not defined in this scope
         setSelectedIds((prev: Set<string>) => { const next = new Set(prev); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; });
         setLastSelectedId(item.id);
     } 
@@ -320,7 +435,7 @@ const FileExplorerApp = ({
   const isSystemFolder = currentFolderId === systemFolderId;
 
   return (
-    <div ref={containerRef} className="h-full flex flex-col bg-slate-900 overflow-hidden relative" 
+    <div ref={containerRef} className="h-full flex flex-col bg-slate-900 overflow-hidden relative touch-none" 
          onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp}
          onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}
          onContextMenu={(e) => localHandleContextMenu(e)}>
@@ -387,37 +502,6 @@ const FileExplorerApp = ({
   );
 };
 
-// --- SETTINGS APP COMPONENT ---
-const SettingsApp = ({ config, onSave }: any) => {
-  const [localConfig, setLocalConfig] = useState(config);
-  return (
-    <div className="h-full bg-slate-50 text-slate-800 p-6 flex flex-col gap-6 overflow-auto">
-      <h2 className="text-2xl font-bold flex items-center gap-3 text-slate-900"><Settings size={28} className="text-blue-600"/> Settings</h2>
-      <div className="space-y-6 max-w-lg">
-        <section className="bg-white p-4 rounded-xl shadow-sm border">
-          <h3 className="text-sm font-bold uppercase tracking-wider text-slate-500 mb-3">Appearance</h3>
-          <div className="space-y-4">
-            <div>
-              <label className="block text-xs font-bold text-slate-600 mb-1">Wallpaper URL</label>
-              <input 
-                className="w-full p-2 border border-slate-200 rounded-lg text-sm bg-slate-50 focus:outline-none focus:border-blue-500" 
-                value={localConfig.wallpaper} 
-                onChange={(e) => setLocalConfig({...localConfig, wallpaper: e.target.value})}
-              />
-            </div>
-          </div>
-        </section>
-        <button 
-          onClick={() => onSave(localConfig)}
-          className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl shadow-lg transition-all active:scale-95"
-        >
-          Save Changes
-        </button>
-      </div>
-    </div>
-  );
-};
-
 // --- MAIN OS SHELL APP ---
 const App = () => {
   const [config, setConfig] = useState<API.SystemConfig | null>(null);
@@ -426,6 +510,7 @@ const App = () => {
   const [startMenuOpen, setStartMenuOpen] = useState(false);
   const [clock, setClock] = useState(new Date());
   const [globalContextMenu, setGlobalContextMenu] = useState<{x:number, y:number, targetItem?: Item, isRecycleBin?: boolean} | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   // EXPLORER STATE
   const [currentFolderId, setCurrentFolderId] = useState<string>(""); 
@@ -458,8 +543,23 @@ const App = () => {
   const [commentText, setCommentText] = useState('');
   const [isPostingComment, setIsPostingComment] = useState(false);
 
-  // State untuk melacak interaksi drag secara responsif (terutama mobile)
-  const [isInteracting, setIsInteracting] = useState(false);
+  // Dragging State
+  const [isDragging, setIsDragging] = useState(false);
+
+  // --- FULLSCREEN LOGIC ---
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().then(() => setIsFullscreen(true)).catch(e => console.error(e));
+    } else {
+      document.exitFullscreen().then(() => setIsFullscreen(false)).catch(e => console.error(e));
+    }
+  };
+
+  useEffect(() => {
+    const handleFsChange = () => setIsFullscreen(!!document.fullscreenElement);
+    document.addEventListener('fullscreenchange', handleFsChange);
+    return () => document.removeEventListener('fullscreenchange', handleFsChange);
+  }, []);
 
   // --- OS BOOT ---
   useEffect(() => {
@@ -703,8 +803,13 @@ const App = () => {
     const newUploads: UploadItem[] = files.map(f => ({ id: Math.random().toString(), file: f, status: 'uploading', progress: 0 }));
     setUploadQueue(prev => [...prev, ...newUploads]);
     for (const up of newUploads) {
-      try { await API.uploadToDrive(up.file, currentFolderId); setUploadQueue(prev => prev.map(u => u.id === up.id ? {...u, status:'success', progress: 100} : u)); }
-      catch(e) { setUploadQueue(prev => prev.map(u => u.id === up.id ? {...u, status:'error'} : u)); }
+      try { 
+        await API.uploadToDrive(up.file, currentFolderId); 
+        setUploadQueue(prev => prev.map(u => u.id === up.id ? {...u, status:'success', progress: 100} : u)); 
+      }
+      catch(e) { 
+        setUploadQueue(prev => prev.map(u => u.id === up.id ? {...u, status:'error'} : u)); 
+      }
     }
     await loadFolder(currentFolderId);
   };
@@ -742,7 +847,7 @@ const App = () => {
     if (!win || win.isMaximized) return;
 
     setActiveWindowId(instanceId);
-    setIsInteracting(true); // Memunculkan overlay transparan untuk menangkap gerak (crucial for mobile touch)
+    setIsDragging(true);
 
     const startX = e.pageX;
     const startY = e.pageY;
@@ -752,7 +857,7 @@ const App = () => {
     const winEl = document.getElementById(`window-${instanceId}`);
     if (!winEl) return;
 
-    // Aktifkan akselerasi hardware selama interaksi
+    // GPU Acceleration hints
     winEl.style.willChange = actionType === 'move' ? 'left, top' : 'width, height, left, top';
     winEl.style.transform = 'translateZ(0)';
 
@@ -762,35 +867,35 @@ const App = () => {
     let currentH = initialSize.h;
 
     const onPointerMove = (moveEvent: PointerEvent) => {
-        // Gunakan requestAnimationFrame untuk sinkronisasi render browser
+        // Use requestAnimationFrame for smooth 60fps tracking
         requestAnimationFrame(() => {
-          const dx = moveEvent.pageX - startX;
-          const dy = moveEvent.pageY - startY;
+            const dx = moveEvent.pageX - startX;
+            const dy = moveEvent.pageY - startY;
 
-          if (actionType === 'move') {
-              currentX = initialPos.x + dx;
-              currentY = initialPos.y + dy;
-              winEl.style.left = `${currentX}px`;
-              winEl.style.top = `${currentY}px`;
-          } else if (actionType === 'resize') {
-              if (corner?.includes('right')) currentW = Math.max(300, initialSize.w + dx);
-              if (corner?.includes('bottom')) currentH = Math.max(200, initialSize.h + dy);
-              if (corner?.includes('left')) {
-                  const deltaW = initialSize.w - dx;
-                  if (deltaW >= 300) { currentW = deltaW; currentX = initialPos.x + dx; winEl.style.left = `${currentX}px`; }
-              }
-              if (corner?.includes('top')) {
-                  const deltaH = initialSize.h - dy;
-                  if (deltaH >= 200) { currentH = deltaH; currentY = initialPos.y + dy; winEl.style.top = `${currentY}px`; }
-              }
-              winEl.style.width = `${currentW}px`;
-              winEl.style.height = `${currentH}px`;
-          }
+            if (actionType === 'move') {
+                currentX = initialPos.x + dx;
+                currentY = initialPos.y + dy;
+                winEl.style.left = `${currentX}px`;
+                winEl.style.top = `${currentY}px`;
+            } else if (actionType === 'resize') {
+                if (corner?.includes('right')) currentW = Math.max(300, initialSize.w + dx);
+                if (corner?.includes('bottom')) currentH = Math.max(200, initialSize.h + dy);
+                if (corner?.includes('left')) {
+                    const deltaW = initialSize.w - dx;
+                    if (deltaW >= 300) { currentW = deltaW; currentX = initialPos.x + dx; winEl.style.left = `${currentX}px`; }
+                }
+                if (corner?.includes('top')) {
+                    const deltaH = initialSize.h - dy;
+                    if (deltaH >= 200) { currentH = deltaH; currentY = initialPos.y + dy; winEl.style.top = `${currentY}px`; }
+                }
+                winEl.style.width = `${currentW}px`;
+                winEl.style.height = `${currentH}px`;
+            }
         });
     };
 
     const onPointerUp = () => {
-        setIsInteracting(false);
+        setIsDragging(false);
         winEl.style.willChange = 'auto';
         window.removeEventListener('pointermove', onPointerMove);
         window.removeEventListener('pointerup', onPointerUp);
@@ -837,10 +942,8 @@ const App = () => {
          style={{ backgroundImage: `url(${config?.wallpaper})`, backgroundSize: 'cover', backgroundPosition: 'center' }}
          onPointerDown={() => setGlobalContextMenu(null)}>
       
-      {/* Overlay penangkap gerak saat drag sedang berlangsung agar tetap responsif di mobile */}
-      {isInteracting && (
-        <div className="fixed inset-0 z-[9999] cursor-move bg-transparent touch-none" />
-      )}
+      {/* Global Drag Overlay */}
+      {isDragging && <div className="fixed inset-0 z-[9999] cursor-move bg-transparent touch-none" />}
 
       {/* DESKTOP ICONS */}
       <div className="absolute top-0 left-0 bottom-12 w-full p-4 flex flex-col flex-wrap content-start gap-2 z-0" 
@@ -891,11 +994,26 @@ const App = () => {
                   onContextMenu: (e: any, item: any, isBin: boolean) => setGlobalContextMenu({ x: e.clientX, y: e.clientY, targetItem: item, isRecycleBin: isBin })
               }} />
             )}
-            {win.appId === 'settings' && <SettingsApp config={config!} onSave={(c:any)=>setConfig(c)}/>}
+            {win.appId === 'settings' && <SettingsApp config={config!} onSave={async (c:any)=>{
+              try {
+                await API.saveSystemConfig(c);
+                setConfig(c);
+                addNotification("Pengaturan disimpan", "success");
+              } catch(e) {
+                addNotification("Gagal menyimpan", "error");
+              }
+            }}/>}
+            {win.appId === 'app-store' && <AppStoreApp config={config} setConfig={setConfig} addNotification={addNotification} />}
             {(win.appData.type === 'webapp') && (
               <div className="h-full flex flex-col bg-white">
-                <div className="p-1 bg-slate-100 flex items-center gap-2 border-b"><Globe size={12} className="text-slate-400 ml-2"/><input className="flex-1 bg-white px-3 py-1 rounded-lg border-none text-[10px] outline-none" defaultValue={win.appData.url} readOnly /></div>
-                <iframe src={win.appData.url} className="flex-1 w-full border-none" sandbox="allow-scripts allow-same-origin allow-forms allow-popups" />
+                <div className="p-1 bg-slate-100 flex items-center justify-between gap-2 border-b">
+                  <div className="flex items-center gap-2 px-3 py-1 flex-1">
+                    <Globe size={12} className="text-slate-400 flex-shrink-0"/>
+                    <input className="flex-1 bg-white px-3 py-0.5 rounded-lg border-none text-[10px] outline-none text-slate-800" value={win.appData.url} readOnly />
+                  </div>
+                  <button onClick={() => window.open(win.appData.url, '_blank')} className="p-1.5 hover:bg-slate-200 text-slate-500 rounded-lg"><ExternalLink size={14}/></button>
+                </div>
+                <iframe src={win.appData.url} className="flex-1 w-full border-none" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation" />
               </div>
             )}
           </div>
@@ -915,34 +1033,55 @@ const App = () => {
       {/* START MENU */}
       {startMenuOpen && (
         <div className="absolute bottom-14 left-1/2 -translate-x-1/2 w-[600px] max-w-[95vw] h-[550px] glass rounded-3xl shadow-[0_32px_64px_rgba(0,0,0,0.5)] z-[60] p-8 flex flex-col animate-in slide-in-from-bottom-5 duration-200">
-          <div className="grid grid-cols-6 gap-6 flex-1 content-start">
+          <div className="grid grid-cols-4 sm:grid-cols-6 gap-6 flex-1 content-start">
              {config?.installedApps.map(app => (
                <button key={app.id} onClick={()=>openApp(app)} className="flex flex-col items-center gap-2 group">
                  <div className="w-12 h-12 bg-white/5 hover:bg-white/10 rounded-2xl flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform">
-                    {app.icon === 'folder' ? <Folder size={24} className="text-blue-400"/> : app.icon === 'settings' ? <Settings size={24}/> : <Globe size={24} className="text-emerald-400"/>}
+                    {app.icon === 'folder' ? <Folder size={24} className="text-blue-400"/> : 
+                     app.icon === 'settings' ? <Settings size={24} className="text-slate-300"/> : 
+                     app.icon === 'shopping-bag' ? <ShoppingBag size={24} className="text-pink-400"/> :
+                     <Globe size={24} className="text-emerald-400"/>}
                  </div>
                  <span className="text-[10px] text-white font-medium truncate w-full text-center group-hover:text-blue-400">{app.name}</span>
                </button>
              ))}
+          </div>
+          <div className="mt-auto pt-6 border-t border-white/5 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                 <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-[10px] font-bold">ZD</div>
+                 <span className="text-xs text-white">Cloud User</span>
+              </div>
           </div>
         </div>
       )}
 
       {/* TASKBAR */}
       <div className="absolute bottom-0 w-full h-12 glass border-t border-white/5 flex items-center justify-between px-4 z-[70]">
-        <div className="w-24"></div> 
+        <div className="w-24 flex items-center">
+            <button 
+                onClick={toggleFullscreen}
+                className={`p-2 rounded-lg hover:bg-white/10 transition-colors ${isFullscreen ? 'text-blue-400' : 'text-slate-400'}`}
+                title="Toggle Fullscreen"
+            >
+                {isFullscreen ? <Minimize2 size={20}/> : <Maximize2 size={20}/>}
+            </button>
+        </div> 
+
         <div className="flex items-center gap-1.5">
-           <button onClick={() => setStartMenuOpen(!startMenuOpen)} className={`p-2.5 rounded-xl hover:bg-white/10 transition-all ${startMenuOpen ? 'bg-white/10' : ''}`}><Grid size={24} className="text-blue-400"/></button>
+           <button onClick={() => setStartMenuOpen(!startMenuOpen)} className={`p-2.5 rounded-xl hover:bg-white/10 transition-all ${startMenuOpen ? 'bg-white/10 scale-90' : ''}`}><Grid size={24} className="text-blue-400"/></button>
            <div className="w-px h-6 bg-white/5 mx-2"></div>
            {windows.map(win => (
              <button key={win.instanceId} onClick={() => { if (win.isMinimized) toggleMinimize(win.instanceId); setActiveWindowId(win.instanceId); }}
                      className={`p-2 rounded-xl hover:bg-white/10 transition-all relative group ${activeWindowId === win.instanceId && !win.isMinimized ? 'bg-white/10' : 'opacity-60'}`}>
-                <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-white text-[10px] font-bold shadow-lg ${win.appId === 'file-explorer' ? 'bg-blue-600' : 'bg-slate-700'}`}>{win.title.charAt(0)}</div>
+                <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-white text-[10px] font-bold shadow-lg ${win.appId === 'file-explorer' ? 'bg-blue-600' : win.appId === 'app-store' ? 'bg-pink-600' : 'bg-slate-700'}`}>
+                    {win.appId === 'file-explorer' ? <Folder size={14}/> : win.appId === 'app-store' ? <ShoppingBag size={14}/> : win.title.charAt(0)}
+                </div>
                 {!win.isMinimized && activeWindowId === win.instanceId && <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-3 h-1 bg-blue-400 rounded-full"></div>}
              </button>
            ))}
         </div>
-        <div className="flex items-center gap-3 text-white">
+
+        <div className="flex items-center gap-3 text-white w-24 justify-end">
              <div className="flex flex-col items-end leading-none font-bold">
                <span className="text-[10px]">{clock.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
                <span className="text-[8px] text-slate-400">{clock.toLocaleDateString([], {day:'2-digit', month:'2-digit'})}</span>
@@ -1048,5 +1187,36 @@ const ItemOverlay = ({ status }: { status?: string }) => {
 const FolderItem: React.FC<ItemComponentProps & { isRecycleBin?: boolean; isSystem?: boolean; isDropTarget?: boolean }> = ({ item, selected, hasComments, onClick, onDoubleClick, onContextMenu, onToggleSelect, onCommentClick, isRecycleBin, isSystem, isDropTarget }) => ( <div id={`item-${item.id}`} data-folder-id={item.id} data-item-id={item.id} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => onContextMenu(e, item)} className={`group relative p-4 rounded-xl border transition-all cursor-default flex flex-col items-center gap-2 ${isDropTarget ? 'bg-blue-500/40 border-blue-400 scale-105' : selected ? 'bg-blue-500/20 border-blue-500 shadow-md ring-1 ring-blue-500' : 'bg-slate-900 border-slate-800 hover:bg-slate-800'}`}> <ItemOverlay status={item.status} /> {hasComments && <button onClick={(e)=>{e.stopPropagation(); onCommentClick?.();}} className="absolute bottom-1.5 right-1.5 p-1 bg-blue-600 rounded-full z-30"><MessageSquare size={10} fill="white"/></button>} <div className={`absolute top-2 left-2 z-20 ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><CheckSquare size={16} className={selected ? "text-blue-500" : "text-slate-500"} onClick={(e)=>{e.stopPropagation(); onToggleSelect();}}/></div> <Folder size={40} className={`${isRecycleBin ? 'text-red-500' : isSystem ? 'text-slate-500' : 'text-blue-500'} drop-shadow-md`}/> <span className="text-[10px] font-bold text-center truncate w-full px-1 text-slate-300">{item.name}</span> </div> );
 const NoteItem: React.FC<ItemComponentProps> = ({ item, selected, hasComments, onClick, onDoubleClick, onContextMenu, onToggleSelect, onCommentClick }) => ( <div id={`item-${item.id}`} data-item-id={item.id} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => onContextMenu(e, item)} className={`group relative p-4 rounded-xl border transition-all cursor-default flex flex-col gap-2 aspect-square ${selected ? 'bg-[#fff9c4] border-blue-500 ring-2 ring-blue-500' : 'bg-[#fff9c4] border-transparent'}`}> <ItemOverlay status={item.status} /> {hasComments && <button onClick={(e)=>{e.stopPropagation(); onCommentClick?.();}} className="absolute bottom-1.5 right-1.5 p-1 bg-blue-600 rounded-full z-30"><MessageSquare size={10} fill="white"/></button>} <div className={`absolute top-2 left-2 z-20 ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><CheckSquare size={16} className="text-blue-600" onClick={(e)=>{e.stopPropagation(); onToggleSelect();}}/></div> <div className="flex-1 overflow-hidden"><h4 className="text-[10px] font-bold text-slate-900 border-b border-black/10 pb-1 mb-1 truncate">{item.name}</h4><p className="text-[9px] text-slate-800 line-clamp-5">{stripHtml(item.content || item.snippet || "")}</p></div> </div> );
 const ImageItem: React.FC<ItemComponentProps> = ({ item, selected, hasComments, onClick, onDoubleClick, onContextMenu, onToggleSelect, onCommentClick }) => ( <div id={`item-${item.id}`} data-item-id={item.id} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => onContextMenu(e, item)} className={`group relative rounded-xl border transition-all cursor-default overflow-hidden aspect-square flex flex-col items-center justify-center bg-slate-950 ${selected ? 'border-blue-500 ring-1 ring-blue-500' : 'border-slate-800'}`}> <ItemOverlay status={item.status} /> {hasComments && <button onClick={(e)=>{e.stopPropagation(); onCommentClick?.();}} className="absolute bottom-1.5 right-1.5 p-1 bg-blue-600 rounded-full z-30"><MessageSquare size={10} fill="white"/></button>} <div className={`absolute top-2 left-2 z-20 ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><CheckSquare size={16} className="text-blue-500" onClick={(e)=>{e.stopPropagation(); onToggleSelect();}}/></div> {item.thumbnail || item.url ? <img src={item.thumbnail || item.url} className="w-full h-full object-cover" loading="lazy" referrerPolicy="no-referrer" /> : <ImageIcon size={24} className="text-slate-600" />} <div className="absolute bottom-0 left-0 right-0 bg-black/60 p-1 truncate"><span className="text-[8px] font-bold text-slate-200 block text-center truncate">{item.name}</span></div> </div> );
+
+// --- SETTINGS APP COMPONENT ---
+const SettingsApp = ({ config, onSave }: any) => {
+  const [localConfig, setLocalConfig] = useState(config);
+  return (
+    <div className="h-full bg-slate-900 text-white p-6 flex flex-col gap-6 overflow-auto">
+      <h2 className="text-2xl font-bold flex items-center gap-3 text-white"><Settings size={28} className="text-blue-600"/> Settings</h2>
+      <div className="space-y-6 max-w-lg">
+        <section className="bg-slate-800 p-4 rounded-xl shadow-sm border border-slate-700">
+          <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-3">Appearance</h3>
+          <div className="space-y-4">
+            <div>
+              <label className="block text-xs font-bold text-slate-400 mb-1">Wallpaper URL</label>
+              <input 
+                className="w-full p-2 border border-slate-700 rounded-lg text-sm bg-slate-950 text-white focus:outline-none focus:border-blue-500" 
+                value={localConfig.wallpaper} 
+                onChange={(e) => setLocalConfig({...localConfig, wallpaper: e.target.value})}
+              />
+            </div>
+          </div>
+        </section>
+        <button 
+          onClick={() => onSave(localConfig)}
+          className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl shadow-lg transition-all active:scale-95"
+        >
+          Save Changes
+        </button>
+      </div>
+    </div>
+  );
+};
 
 export default App;
