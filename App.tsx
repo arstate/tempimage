@@ -281,7 +281,6 @@ const App = () => {
   };
 
   const handlePointerDown = (e: React.PointerEvent) => {
-     // CRITICAL: Jika klik di elemen interaktif, jangan mulai seleksi drag
      if ((e.target as HTMLElement).closest('button, .item-handle, .floating-ui, select, input')) return;
      if (!e.isPrimary) return;
      const target = e.target as HTMLElement;
@@ -354,27 +353,45 @@ const App = () => {
 
   const handlePointerUp = async (e: React.PointerEvent) => {
       if (longPressTimerRef.current) { clearTimeout(longPressTimerRef.current); longPressTimerRef.current = null; }
-      if (customDragItem && dropTargetId) {
-          if (dropTargetId === systemFolderId) {
+      
+      const currentDrag = customDragItem;
+      const targetId = dropTargetId;
+
+      // FIX BUG: Langsung hapus UI drag saat dilepas
+      setCustomDragItem(null);
+      setCustomDragPos(null);
+      setDropTargetId(null);
+      setIsDragSelecting(false);
+      setSelectionBox(null);
+      dragStartPos.current = null;
+      lastTouchedIdRef.current = null;
+      isPaintingRef.current = false;
+      if (containerRef.current) { try { containerRef.current.releasePointerCapture(e.pointerId); } catch(err) {} }
+
+      if (currentDrag && targetId) {
+          if (targetId === systemFolderId) {
               addNotification("Tidak bisa memindahkan ke Folder System", "error");
           } else {
-              const idsToMove = selectedIds.size > 0 ? Array.from(selectedIds) : [customDragItem.id];
-              const targetName = items.find(i => i.id === dropTargetId)?.name || "Folder";
+              const idsToMove = selectedIds.size > 0 ? Array.from(selectedIds) : [currentDrag.id];
+              const targetName = items.find(i => i.id === targetId)?.name || "Folder";
+              
+              // OPTIMISTIC: Beri overlay 'deleting' atau hapus sementara dari view
+              const backupItems = [...items];
+              setItems(prev => prev.map(item => idsToMove.includes(item.id) ? { ...item, status: 'deleting' } : item));
+              
               const notifId = addNotification(`Memindahkan ${idsToMove.length} item ke ${targetName}...`, 'loading');
-              setIsProcessingAction(true);
               try {
-                  await API.moveItems(idsToMove, dropTargetId);
-                  const foldersMoved = items.filter(i => idsToMove.includes(i.id) && i.type === 'folder');
-                  if (foldersMoved.length > 0) updateMap('move', foldersMoved.map(f => ({ id: f.id, parentId: dropTargetId })));
-                  updateNotification(notifId, 'Berhasil dipindahkan', 'success'); await loadFolder(currentFolderId);
-              } catch(err) { updateNotification(notifId, 'Gagal pindah', 'error'); } 
-              finally { setIsProcessingAction(false); }
+                  await API.moveItems(idsToMove, targetId);
+                  const foldersMoved = backupItems.filter(i => idsToMove.includes(i.id) && i.type === 'folder');
+                  if (foldersMoved.length > 0) updateMap('move', foldersMoved.map(f => ({ id: f.id, parentId: targetId })));
+                  updateNotification(notifId, 'Berhasil dipindahkan', 'success');
+                  await loadFolder(currentFolderId);
+              } catch(err) {
+                  updateNotification(notifId, 'Gagal pindah', 'error');
+                  setItems(backupItems); // Rollback
+              } 
           }
       }
-      setCustomDragItem(null); setCustomDragPos(null); setDropTargetId(null);
-      setIsDragSelecting(false); setSelectionBox(null); dragStartPos.current = null;
-      lastTouchedIdRef.current = null; isPaintingRef.current = false;
-      if (containerRef.current) { try { containerRef.current.releasePointerCapture(e.pointerId); } catch(err) {} }
   };
 
   const handleToggleSelect = (id: string) => {
@@ -527,6 +544,7 @@ const App = () => {
       const item = contextMenu?.targetItem;
       const ids = selectedIds.size > 0 ? Array.from(selectedIds) : (item ? [item.id] : []);
       setContextMenu(null);
+
       switch (action) {
           case 'new_folder':
               setModal({
@@ -534,18 +552,32 @@ const App = () => {
                   onConfirm: async (name) => {
                       if (name) {
                           setModal(null);
+                          const tempId = 'temp-' + Date.now();
+                          const optimisticFolder: Item = { 
+                            id: tempId, name: name, type: 'folder', lastUpdated: Date.now(), status: 'restoring' 
+                          };
+                          
+                          // OPTIMISTIC: Munculkan langsung
+                          setItems(prev => [...prev, optimisticFolder].sort((a,b) => a.name.localeCompare(b.name)));
                           const notifId = addNotification('Membuat folder...', 'loading');
+                          
                           try {
                               const res = await API.createFolder(currentFolderId, name);
                               if (res.status === 'success' && res.data) {
                                   updateMap('add', [{ id: res.data.id, name: res.data.name, parentId: currentFolderId }]);
-                                  updateNotification(notifId, 'Folder dibuat', 'success'); loadFolder(currentFolderId);
+                                  updateNotification(notifId, 'Folder dibuat', 'success');
+                                  // Refresh untuk ganti tempId jadi realId
+                                  await loadFolder(currentFolderId);
                               } else { throw new Error(res.message); }
-                          } catch (e) { updateNotification(notifId, 'Gagal membuat folder', 'error'); }
+                          } catch (e) { 
+                              updateNotification(notifId, 'Gagal membuat folder', 'error');
+                              setItems(prev => prev.filter(i => i.id !== tempId)); // Rollback
+                          }
                       }
                   }
               });
               break;
+
           case 'rename':
               const targetItem = items.find(i => i.id === ids[0]);
               if (targetItem) {
@@ -554,116 +586,79 @@ const App = () => {
                     onConfirm: async (newName) => {
                         if (newName && newName !== targetItem.name) {
                             setModal(null);
+                            const oldName = targetItem.name;
+                            const optimisticItems = items.map(i => i.id === targetItem.id ? { ...i, name: newName } : i);
+                            
+                            // OPTIMISTIC: Ubah nama langsung
+                            setItems(optimisticItems);
                             const notifId = addNotification('Mengganti nama...', 'loading');
+                            
                             try {
                                 await API.renameItem(targetItem.id, newName);
                                 if (targetItem.type === 'folder') updateMap('update', [{ id: targetItem.id, name: newName }]);
-                                updateNotification(notifId, 'Berhasil diganti', 'success'); loadFolder(currentFolderId);
-                            } catch (e) { updateNotification(notifId, 'Gagal ganti nama', 'error'); }
+                                updateNotification(notifId, 'Berhasil diganti', 'success');
+                                await loadFolder(currentFolderId);
+                            } catch (e) { 
+                                updateNotification(notifId, 'Gagal ganti nama', 'error'); 
+                                setItems(prev => prev.map(i => i.id === targetItem.id ? { ...i, name: oldName } : i)); // Rollback
+                            }
                         }
                     }
                 });
               }
               break;
+
           case 'delete':
               setModal({
                   type: 'confirm', title: 'Hapus Item?', message: `Pindahkan ${ids.length} item ke Recycle Bin?`, confirmText: 'Hapus', isDanger: true,
                   onConfirm: async () => {
                       setModal(null);
+                      const backupItems = [...items];
+                      
+                      // OPTIMISTIC: Beri overlay 'deleting'
+                      setItems(prev => prev.map(item => ids.includes(item.id) ? { ...item, status: 'deleting' } : item));
                       const notifId = addNotification(`Menghapus ${ids.length} item...`, 'loading');
+                      
                       try {
                           const binId = await getOrCreateRecycleBin();
                           for (const id of ids) await DB.saveDeletedMeta(id, currentFolderId || "root");
                           await API.moveItems(ids, binId);
-                          const foldersDeleted = items.filter(i => ids.includes(i.id) && i.type === 'folder');
+                          const foldersDeleted = backupItems.filter(i => ids.includes(i.id) && i.type === 'folder');
                           if (foldersDeleted.length > 0) updateMap('move', foldersDeleted.map(f => ({ id: f.id, parentId: binId })));
-                          updateNotification(notifId, 'Item dipindahkan ke Recycle Bin', 'success'); loadFolder(currentFolderId);
-                      } catch (e) { updateNotification(notifId, 'Gagal menghapus', 'error'); }
+                          updateNotification(notifId, 'Item dipindahkan ke Recycle Bin', 'success');
+                          await loadFolder(currentFolderId);
+                      } catch (e) { 
+                          updateNotification(notifId, 'Gagal menghapus', 'error'); 
+                          setItems(backupItems); // Rollback
+                      }
                   }
               });
               break;
+
           case 'delete_permanent':
                setModal({
                   type: 'confirm', title: 'Hapus Permanen?', message: `Tindakan ini tidak bisa dibatalkan! Hapus ${ids.length} item?`, confirmText: 'Hapus Selamanya', isDanger: true,
                   onConfirm: async () => {
                       setModal(null);
+                      const backupItems = [...items];
+                      setItems(prev => prev.map(item => ids.includes(item.id) ? { ...item, status: 'deleting' } : item));
+                      
                       const notifId = addNotification(`Menghapus permanen ${ids.length} item...`, 'loading');
                       try {
                           await API.deleteItems(ids);
-                          const folders = items.filter(i => ids.includes(i.id) && i.type === 'folder');
+                          const folders = backupItems.filter(i => ids.includes(i.id) && i.type === 'folder');
                           if(folders.length > 0) updateMap('remove', folders.map(f => ({ id: f.id })));
                           for(const id of ids) await DB.removeDeletedMeta(id);
-                          updateNotification(notifId, 'Item dihapus permanen', 'success'); loadFolder(currentFolderId);
-                      } catch (e) { updateNotification(notifId, 'Gagal hapus permanen', 'error'); }
+                          updateNotification(notifId, 'Item dihapus permanen', 'success');
+                          await loadFolder(currentFolderId);
+                      } catch (e) { 
+                          updateNotification(notifId, 'Gagal hapus permanen', 'error'); 
+                          setItems(backupItems);
+                      }
                   }
               });
               break;
-          case 'restore':
-              const notifRestore = addNotification(`Mengembalikan ${ids.length} item...`, 'loading');
-              try {
-                  const restoreMap: Record<string, string[]> = {}; const defaultTarget = "root";
-                  for (const id of ids) {
-                      const originalParent = await DB.getDeletedMeta(id);
-                      const target = originalParent || defaultTarget;
-                      if (!restoreMap[target]) restoreMap[target] = []; restoreMap[target].push(id);
-                  }
-                  for (const [targetFolder, itemIds] of Object.entries(restoreMap)) {
-                      await API.moveItems(itemIds, targetFolder);
-                      const foldersRestored = items.filter(i => itemIds.includes(i.id) && i.type === 'folder');
-                      if (foldersRestored.length > 0) updateMap('move', foldersRestored.map(f => ({ id: f.id, parentId: targetFolder })));
-                      for(const id of itemIds) await DB.removeDeletedMeta(id);
-                  }
-                  updateNotification(notifRestore, 'Item dikembalikan', 'success'); loadFolder(currentFolderId);
-              } catch (e) { updateNotification(notifRestore, 'Gagal restore', 'error'); }
-              break;
-          case 'restore_all':
-              const notifRestoreAll = addNotification('Mengembalikan semua item...', 'loading');
-              try {
-                  let idsToRestore: string[] = []; let itemsToRestore: Item[] = [];
-                  if (currentFolderId === recycleBinId) { idsToRestore = items.map(i => i.id); itemsToRestore = [...items]; } 
-                  else {
-                       const binId = await getOrCreateRecycleBin(); const res = await API.getFolderContents(binId);
-                       if (res.status === 'success' && Array.isArray(res.data)) { idsToRestore = res.data.map((i: any) => i.id); itemsToRestore = res.data; }
-                  }
-                  if (idsToRestore.length === 0) { updateNotification(notifRestoreAll, 'Recycle Bin sudah kosong', 'success'); return; }
-                  const restoreMap: Record<string, string[]> = {}; const defaultTarget = "root";
-                  for (const id of idsToRestore) {
-                      const originalParent = await DB.getDeletedMeta(id); const target = originalParent || defaultTarget;
-                      if (!restoreMap[target]) restoreMap[target] = []; restoreMap[target].push(id);
-                  }
-                  for (const [targetFolder, itemIds] of Object.entries(restoreMap)) {
-                      await API.moveItems(itemIds, targetFolder);
-                      const foldersRestored = itemsToRestore.filter(i => itemIds.includes(i.id) && i.type === 'folder');
-                      if (foldersRestored.length > 0) updateMap('move', foldersRestored.map(f => ({ id: f.id, parentId: targetFolder })));
-                      for(const id of itemIds) await DB.removeDeletedMeta(id);
-                  }
-                  updateNotification(notifRestoreAll, 'Semua item dikembalikan', 'success');
-                  if (currentFolderId === recycleBinId) loadFolder(currentFolderId);
-              } catch(e) { updateNotification(notifRestoreAll, 'Gagal restore all', 'error'); }
-              break;
-          case 'empty_bin':
-              setModal({
-                  type: 'confirm', title: 'Kosongkan Recycle Bin?', message: 'Semua file di sini akan hilang selamanya.', confirmText: 'Kosongkan', isDanger: true,
-                  onConfirm: async () => {
-                      setModal(null);
-                      const notifId = addNotification('Mengosongkan Recycle Bin...', 'loading');
-                      try {
-                          let idsToDelete: string[] = [];
-                          if (currentFolderId === recycleBinId) idsToDelete = items.map(i => i.id);
-                          else {
-                               const binId = await getOrCreateRecycleBin(); const res = await API.getFolderContents(binId);
-                               if (res.status === 'success' && Array.isArray(res.data)) idsToDelete = res.data.map((i: any) => i.id);
-                          }
-                          if (idsToDelete.length === 0) { updateNotification(notifId, 'Recycle Bin sudah kosong', 'success'); return; }
-                          await API.deleteItems(idsToDelete);
-                          if (idsToDelete.length > 0) updateMap('remove', idsToDelete.map(id => ({ id })));
-                          for(const id of idsToDelete) await DB.removeDeletedMeta(id);
-                          updateNotification(notifId, 'Recycle Bin bersih', 'success');
-                          if (currentFolderId === recycleBinId) loadFolder(currentFolderId);
-                      } catch(e) { updateNotification(notifId, 'Gagal', 'error'); }
-                  }
-              });
-              break;
+
           case 'move':
               const folderOptions = Object.values(systemMap).filter(f => !ids.includes(f.id) && f.id !== currentFolderId && f.id !== recycleBinId).sort((a,b) => a.name.localeCompare(b.name)).map(f => ({ label: f.name, value: f.id }));
               folderOptions.unshift({ label: "Home (Root)", value: "" });
@@ -673,17 +668,52 @@ const App = () => {
                       if (targetId !== undefined) {
                           setModal(null);
                           const targetName = targetId === "" ? "Home" : (systemMap[targetId]?.name || "Folder");
+                          const backupItems = [...items];
+                          
+                          // OPTIMISTIC: Status moving
+                          setItems(prev => prev.map(item => ids.includes(item.id) ? { ...item, status: 'deleting' } : item));
                           const notifId = addNotification(`Memindahkan ke ${targetName}...`, 'loading');
+                          
                           try {
                               await API.moveItems(ids, targetId);
-                              const foldersMoved = items.filter(i => ids.includes(i.id) && i.type === 'folder');
+                              const foldersMoved = backupItems.filter(i => ids.includes(i.id) && i.type === 'folder');
                               if (foldersMoved.length > 0) updateMap('move', foldersMoved.map(f => ({ id: f.id, parentId: targetId })));
-                              updateNotification(notifId, 'Berhasil dipindahkan', 'success'); loadFolder(currentFolderId);
-                          } catch(e) { updateNotification(notifId, 'Gagal pindah', 'error'); }
+                              updateNotification(notifId, 'Berhasil dipindahkan', 'success');
+                              await loadFolder(currentFolderId);
+                          } catch (e) { 
+                              updateNotification(notifId, 'Gagal pindah', 'error'); 
+                              setItems(backupItems);
+                          }
                       }
                   }
               });
               break;
+
+          case 'restore':
+              const notifRestore = addNotification(`Mengembalikan ${ids.length} item...`, 'loading');
+              const backupRestore = [...items];
+              setItems(prev => prev.map(item => ids.includes(item.id) ? { ...item, status: 'restoring' } : item));
+              try {
+                  const restoreMap: Record<string, string[]> = {}; const defaultTarget = "root";
+                  for (const id of ids) {
+                      const originalParent = await DB.getDeletedMeta(id);
+                      const target = originalParent || defaultTarget;
+                      if (!restoreMap[target]) restoreMap[target] = []; restoreMap[target].push(id);
+                  }
+                  for (const [targetFolder, itemIds] of Object.entries(restoreMap)) {
+                      await API.moveItems(itemIds, targetFolder);
+                      const foldersRestored = backupRestore.filter(i => itemIds.includes(i.id) && i.type === 'folder');
+                      if (foldersRestored.length > 0) updateMap('move', foldersRestored.map(f => ({ id: f.id, parentId: targetFolder })));
+                      for(const id of itemIds) await DB.removeDeletedMeta(id);
+                  }
+                  updateNotification(notifRestore, 'Item dikembalikan', 'success');
+                  await loadFolder(currentFolderId);
+              } catch (e) { 
+                  updateNotification(notifRestore, 'Gagal restore', 'error'); 
+                  setItems(backupRestore);
+              }
+              break;
+              
           case 'duplicate':
               const notifDup = addNotification(`Menduplikasi ${ids.length} item...`, 'loading');
               try {
