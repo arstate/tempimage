@@ -64,8 +64,8 @@ const App = () => {
   const [isNotFound, setIsNotFound] = useState(false); 
   const [isSavingDB, setIsSavingDB] = useState(false);
   const [isSavingComments, setIsSavingComments] = useState(false);
-  const [isRefreshingComments, setIsRefreshingComments] = useState(false);
   const [isPostingComment, setIsPostingComment] = useState(false);
+  const [isRefreshingComments, setIsRefreshingComments] = useState(false);
   const saveTimeoutRef = useRef<any>(null);
   const commentSaveTimeoutRef = useRef<any>(null);
   const [isGlobalLoading, setIsGlobalLoading] = useState(true); 
@@ -129,22 +129,22 @@ const App = () => {
     if (!commentFileId) return;
     if (commentSaveTimeoutRef.current) clearTimeout(commentSaveTimeoutRef.current);
     
-    const doSync = async () => {
-      try {
-        setIsSavingComments(true);
-        await API.updateCommentDBFile(commentFileId, commentsRef.current);
-        await DB.saveCommentsCache(commentsRef.current);
-      } catch (e) {
-        console.error("Comment Sync Error:", e);
-      } finally {
-        setIsSavingComments(false);
-      }
+    const performSync = async () => {
+        try {
+            setIsSavingComments(true);
+            await API.updateCommentDBFile(commentFileId, commentsRef.current);
+            await DB.saveCommentsCache(commentsRef.current);
+        } catch (e) {
+            console.error("Comment Sync Failed", e);
+        } finally {
+            setIsSavingComments(false);
+        }
     };
 
     if (immediate) {
-      await doSync();
+        await performSync();
     } else {
-      commentSaveTimeoutRef.current = setTimeout(doSync, 2000);
+        commentSaveTimeoutRef.current = setTimeout(performSync, 2000);
     }
   }, [commentFileId]);
 
@@ -152,16 +152,16 @@ const App = () => {
     if (!commentFileId) return;
     setIsRefreshingComments(true);
     try {
-      const content = await API.getFileContent(commentFileId);
-      const remoteComments = JSON.parse(content);
-      commentsRef.current = remoteComments;
-      setComments(remoteComments);
-      await DB.saveCommentsCache(remoteComments);
+        const content = await API.getFileContent(commentFileId);
+        const remoteComments = JSON.parse(content);
+        commentsRef.current = remoteComments;
+        setComments(remoteComments);
+        await DB.saveCommentsCache(remoteComments);
     } catch (e) {
-      console.error("Failed to refresh comments:", e);
-      addNotification("Gagal memuat komentar terbaru", "error");
+        console.error("Failed to fetch latest comments:", e);
+        addNotification("Gagal memperbarui komentar", "error");
     } finally {
-      setIsRefreshingComments(false);
+        setIsRefreshingComments(false);
     }
   }, [commentFileId]);
 
@@ -584,22 +584,23 @@ const App = () => {
       parentId: replyingTo || undefined
     };
 
+    // Update locally immediately
     const nextComments = { ...commentsRef.current };
     if (!nextComments[modal.targetItem.id]) nextComments[modal.targetItem.id] = [];
     nextComments[modal.targetItem.id].push(newComment);
-    
     commentsRef.current = nextComments;
     setComments(nextComments);
-    
+
     try {
-      await triggerCommentSync(true); // Immediate sync
-      setCommentText('');
-      setReplyingTo(null);
-      addNotification("Komentar terkirim", "success");
+        // Force immediate sync to cloud
+        await triggerCommentSync(true);
+        setCommentText('');
+        setReplyingTo(null);
+        addNotification("Komentar terposting", "success");
     } catch (e) {
-      addNotification("Gagal mengirim komentar", "error");
+        addNotification("Gagal memposting komentar", "error");
     } finally {
-      setIsPostingComment(false);
+        setIsPostingComment(false);
     }
   };
 
@@ -958,7 +959,20 @@ const App = () => {
       {isDraggingFile && (<div className="fixed inset-0 z-[1000] bg-blue-500/20 backdrop-blur-sm border-4 border-blue-500 border-dashed m-4 rounded-3xl flex flex-col items-center justify-center pointer-events-none animate-in fade-in zoom-in-95"><CloudUpload size={64} className="text-blue-500 mb-4 animate-bounce" /><h2 className="text-3xl font-bold text-blue-100">Drop Files Here</h2><p className="text-blue-200 mt-2">Upload to {currentFolderId ? "Current Folder" : "Home"}</p></div>)}
       {customDragItem && customDragPos && (<div className="fixed z-[999] pointer-events-none p-4 rounded-xl border border-blue-500 bg-slate-800/90 shadow-2xl flex flex-col items-center gap-2 w-32 backdrop-blur-sm" style={{ left: customDragPos.x, top: customDragPos.y, transform: 'translate(-50%, -50%) rotate(5deg)' }}>{customDragItem.type === 'folder' ? <Folder size={32} className="text-blue-500"/> : customDragItem.type === 'note' ? <FileText size={32} className="text-yellow-500"/> : (customDragItem.thumbnail ? <img src={customDragItem.thumbnail} className="w-16 h-16 object-cover rounded"/> : <ImageIcon size={32} className="text-purple-500"/>)}<span className="text-[10px] font-bold text-slate-200 truncate w-full text-center">{selectedIds.size > 1 ? `${selectedIds.size} Items` : customDragItem.name}</span></div>)}
       {selectionBox && (<div className="fixed z-50 bg-blue-500/20 border border-blue-400 pointer-events-none" style={{ left: selectionBox.x, top: selectionBox.y, width: selectionBox.width, height: selectionBox.height }} />)}
-      {isGlobalLoading && (<div className="fixed inset-0 z-[999] bg-black/70 backdrop-blur-sm flex flex-col items-center justify-center cursor-wait animate-in fade-in"><div className="relative"><Loader2 size={48} className="animate-spin text-blue-500 mb-4"/><div className="absolute inset-0 flex items-center justify-center"><Database size={20} className="text-blue-300 opacity-80" /></div></div><p className="text-white font-semibold text-lg animate-pulse">{globalLoadingMessage}</p></div>)}
+      
+      {(isGlobalLoading || isRefreshingComments) && (
+        <div className="fixed inset-0 z-[999] bg-black/70 backdrop-blur-sm flex flex-col items-center justify-center cursor-wait animate-in fade-in">
+          <div className="relative">
+            <Loader2 size={48} className="animate-spin text-blue-500 mb-4"/>
+            <div className="absolute inset-0 flex items-center justify-center">
+              {isRefreshingComments ? <MessageSquare size={20} className="text-blue-300 opacity-80" /> : <Database size={20} className="text-blue-300 opacity-80" />}
+            </div>
+          </div>
+          <p className="text-white font-semibold text-lg animate-pulse">
+            {isRefreshingComments ? "Mengambil Komentar Terbaru..." : globalLoadingMessage}
+          </p>
+        </div>
+      )}
       
       <SelectionFloatingMenu selectedIds={selectedIds} items={items} onClear={() => setSelectedIds(new Set())} onSelectAll={handleSelectAllByCategory} onAction={executeAction} containerRef={containerRef} isInRecycleBin={currentFolderId === recycleBinId} recycleBinId={recycleBinId} isSystemFolder={currentFolderId === systemFolderId} systemFolderId={systemFolderId}/>
       <UploadProgress uploads={uploadQueue} onClose={() => setUploadQueue([])} onRemove={(id) => setUploadQueue(prev => prev.filter(u => u.id !== id))} />
@@ -1045,25 +1059,25 @@ const App = () => {
             {/* COMMENT UI */}
             {modal.type === 'comment' ? (
               <div className="flex flex-col h-[80vh] md:h-[600px] comment-area relative">
-                {/* POSTING OVERLAY */}
+                {/* POSTING LOADING OVERLAY */}
                 {isPostingComment && (
-                  <div className="absolute inset-0 z-[100] bg-slate-950/60 backdrop-blur-sm flex flex-col items-center justify-center animate-in fade-in">
-                    <Loader2 size={40} className="animate-spin text-blue-500 mb-3" />
-                    <p className="text-white font-bold tracking-widest text-sm uppercase">Memposting Komentar...</p>
-                    <p className="text-slate-400 text-xs mt-1 italic">Tunggu hingga tersinkron ke cloud</p>
-                  </div>
+                    <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-md z-[200] flex flex-col items-center justify-center animate-in fade-in">
+                        <Loader2 size={48} className="animate-spin text-blue-500 mb-4" />
+                        <h4 className="text-lg font-bold text-white tracking-widest uppercase">Memposting Komentar...</h4>
+                        <p className="text-slate-400 text-sm mt-2 italic">Harap tunggu hingga tersinkron ke Cloud</p>
+                    </div>
                 )}
 
                 <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950">
                   <div className="flex items-center gap-3">
-                    <h3 className="text-lg font-bold flex items-center gap-2 truncate max-w-[200px] sm:max-w-md"><MessageSquare className="text-blue-400" size={20}/> {modal.title}</h3>
+                    <h3 className="text-lg font-bold flex items-center gap-2"><MessageSquare className="text-blue-400" size={20}/> {modal.title}</h3>
                     <button 
-                      onClick={handleRefreshComments}
-                      disabled={isRefreshingComments || isPostingComment}
-                      className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-400 transition-colors disabled:opacity-30"
-                      title="Refresh Komentar"
+                        onClick={handleRefreshComments}
+                        disabled={isRefreshingComments || isPostingComment}
+                        className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-400 transition-colors disabled:opacity-30"
+                        title="Refresh Komentar"
                     >
-                      <RefreshCw size={16} className={isRefreshingComments ? 'animate-spin' : ''}/>
+                        <RefreshCw size={16} className={isRefreshingComments ? 'animate-spin' : ''}/>
                     </button>
                   </div>
                   {!isPostingComment && (
@@ -1073,26 +1087,21 @@ const App = () => {
                 
                 {/* Comment List */}
                 <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-900/50">
-                  {isRefreshingComments ? (
-                    <div className="h-full flex flex-col items-center justify-center text-slate-500 opacity-50 italic">
-                      <Loader2 size={32} className="animate-spin mb-2"/>
-                      <p>Menghubungkan ke cloud...</p>
-                    </div>
-                  ) : modal.targetItem && (comments[modal.targetItem.id] || []).length === 0 ? (
+                  {modal.targetItem && (comments[modal.targetItem.id] || []).length === 0 ? (
                     <div className="h-full flex flex-col items-center justify-center text-slate-500 opacity-50 italic">
                       <MessageSquare size={48} className="mb-2"/>
                       <p>Belum ada komentar.</p>
                     </div>
                   ) : (
                     modal.targetItem && [...(comments[modal.targetItem.id] || [])]
-                      .sort((a,b) => b.timestamp - a.timestamp) // Newest first for main list
+                      .sort((a,b) => b.timestamp - a.timestamp) // Show newest main comments first
                       .filter(c => !c.parentId) // Main comments
                       .map(comment => (
                         <div key={comment.id} className="space-y-3">
                           {/* Main Comment Bubble */}
                           <div className="flex gap-3 group">
                             <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center text-white text-xs font-bold flex-shrink-0">
-                              {comment.author[0]?.toUpperCase() || '?'}
+                              {comment.author[0].toUpperCase()}
                             </div>
                             <div className="flex-1">
                               <div className="bg-slate-800 p-3 rounded-2xl rounded-tl-none border border-slate-700 shadow-sm">
@@ -1115,11 +1124,11 @@ const App = () => {
                           {/* Replies */}
                           {(comments[modal.targetItem!.id] || [])
                             .filter(r => r.parentId === comment.id)
-                            .sort((a,b) => a.timestamp - b.timestamp) // Replies in chronological order
+                            .sort((a,b) => a.timestamp - b.timestamp) // Sort replies chronologically
                             .map(reply => (
                               <div key={reply.id} className="flex gap-3 ml-11">
                                 <div className="w-6 h-6 rounded-full bg-slate-700 flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0">
-                                  {reply.author[0]?.toUpperCase() || '?'}
+                                  {reply.author[0].toUpperCase()}
                                 </div>
                                 <div className="flex-1 bg-slate-800/40 p-2.5 rounded-xl rounded-tl-none border border-slate-700/50 shadow-sm">
                                   <div className="flex items-center justify-between mb-1">
@@ -1172,7 +1181,7 @@ const App = () => {
                       disabled={!commentName.trim() || !commentText.trim() || isPostingComment}
                       className="p-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-30 text-white rounded-lg transition-colors"
                     >
-                      {isPostingComment ? <Loader2 size={18} className="animate-spin"/> : <Send size={18}/>}
+                      {isPostingComment ? <Loader2 size={18} className="animate-spin" /> : <Send size={18}/>}
                     </button>
                   </div>
                 </div>
