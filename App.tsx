@@ -1010,10 +1010,10 @@ const App = () => {
       
       {(isGlobalLoading || isRefreshingComments) && (
         <div className="fixed inset-0 z-[999] bg-black/70 backdrop-blur-sm flex flex-col items-center justify-center cursor-wait animate-in fade-in">
-          <div className="relative">
-            <Loader2 size={48} className="animate-spin text-blue-500 mb-4"/>
-            <div className="absolute inset-0 flex items-center justify-center">
-              {isRefreshingComments ? <MessageSquare size={20} className="text-blue-300 opacity-80" /> : <Database size={20} className="text-blue-300 opacity-80" />}
+          <div className="relative w-14 h-14 flex items-center justify-center mb-6">
+            <Loader2 size={56} className="animate-spin text-blue-500 absolute"/>
+            <div className="z-10 flex items-center justify-center">
+              {isRefreshingComments ? <MessageSquare size={24} className="text-blue-300 opacity-80" /> : <Database size={24} className="text-blue-300 opacity-80" />}
             </div>
           </div>
           <p className="text-white font-semibold text-lg animate-pulse">
@@ -1110,7 +1110,10 @@ const App = () => {
                 {/* POSTING LOADING OVERLAY */}
                 {isPostingComment && (
                     <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-md z-[200] flex flex-col items-center justify-center animate-in fade-in">
-                        <Loader2 size={48} className="animate-spin text-blue-500 mb-4" />
+                        <div className="relative w-14 h-14 flex items-center justify-center mb-6">
+                            <Loader2 size={56} className="animate-spin text-blue-500 absolute" />
+                            <Cloud size={24} className="text-blue-300 z-10 opacity-80" />
+                        </div>
                         <h4 className="text-lg font-bold text-white tracking-widest uppercase">Processing...</h4>
                         <p className="text-slate-400 text-sm mt-2 italic">Menyinkronkan dengan Cloud</p>
                     </div>
