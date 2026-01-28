@@ -68,6 +68,7 @@ const FileExplorerApp = ({
     setModal, modal,
     setEditingNote,
     setViewingRawFile,
+    setViewingRawFile,
     setPreviewImage,
     handleUploadFiles,
     executeAction,
@@ -115,14 +116,11 @@ const FileExplorerApp = ({
   };
 
   const handlePointerDown = (e: React.PointerEvent) => {
-     // Don't start selection if clicking UI elements
      if ((e.target as HTMLElement).closest('button, .item-handle, .floating-ui, select, input, .comment-area')) return;
-     
      const target = e.target as HTMLElement;
      const checkbox = target.closest('.selection-checkbox');
      const itemRow = target.closest('[data-item-id]');
      
-     // Button 2 is right click, we don't start dragging/selecting with it
      if (e.button === 2) return;
 
      const rect = containerRef.current?.getBoundingClientRect();
@@ -148,8 +146,7 @@ const FileExplorerApp = ({
              if (clickedItem) {
                  longPressTimerRef.current = setTimeout(() => {
                      if (clickedItem.id === systemFolderId || currentFolderId === systemFolderId) return;
-                     setCustomDragItem(clickedItem); 
-                     setCustomDragPos({ x: e.clientX, y: e.clientY });
+                     setCustomDragItem(clickedItem); setCustomDragPos({ x: e.clientX, y: e.clientY });
                      if (!selectedIds.has(clickedItem.id)) setSelectedIds(new Set([clickedItem.id]));
                      if (navigator.vibrate) navigator.vibrate(50);
                  }, 500); 
@@ -252,6 +249,7 @@ const FileExplorerApp = ({
             const newSet = new Set(selectedIds); rangeIds.forEach(itemId => newSet.add(itemId)); setSelectedIds(newSet);
         }
     } else if (e.ctrlKey || e.metaKey) { 
+        // Fix: Changed 'id' to 'item.id' as 'id' was not defined in this scope
         setSelectedIds((prev: Set<string>) => { const next = new Set(prev); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; });
         setLastSelectedId(item.id);
     } 
@@ -311,7 +309,6 @@ const FileExplorerApp = ({
         setSelectedIds(new Set([item.id])); 
         setLastSelectedId(item.id); 
     }
-    // Pass coordinates to the onContextMenu prop from App
     onContextMenu(e, item, currentFolderId === recycleBinId);
   };
 
@@ -461,8 +458,8 @@ const App = () => {
   const [commentText, setCommentText] = useState('');
   const [isPostingComment, setIsPostingComment] = useState(false);
 
-  // Direct DOM Refs for performance
-  const isInteractingRef = useRef(false);
+  // State untuk melacak interaksi drag secara responsif (terutama mobile)
+  const [isInteracting, setIsInteracting] = useState(false);
 
   // --- OS BOOT ---
   useEffect(() => {
@@ -613,7 +610,6 @@ const App = () => {
             const item = itemsToDownload.find(i => i.id === dItem.id);
             if (!item || !item.url) throw new Error("URL missing");
 
-            // Use high-quality proxy for original download
             const proxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(item.url)}`;
             const response = await fetch(proxyUrl);
             if (!response.ok) throw new Error("Fetch failed");
@@ -707,13 +703,8 @@ const App = () => {
     const newUploads: UploadItem[] = files.map(f => ({ id: Math.random().toString(), file: f, status: 'uploading', progress: 0 }));
     setUploadQueue(prev => [...prev, ...newUploads]);
     for (const up of newUploads) {
-      try { 
-        await API.uploadToDrive(up.file, currentFolderId); 
-        setUploadQueue(prev => prev.map(u => u.id === up.id ? {...u, status:'success', progress: 100} : u)); 
-      }
-      catch(e) { 
-        setUploadQueue(prev => prev.map(u => u.id === up.id ? {...u, status:'error'} : u)); 
-      }
+      try { await API.uploadToDrive(up.file, currentFolderId); setUploadQueue(prev => prev.map(u => u.id === up.id ? {...u, status:'success', progress: 100} : u)); }
+      catch(e) { setUploadQueue(prev => prev.map(u => u.id === up.id ? {...u, status:'error'} : u)); }
     }
     await loadFolder(currentFolderId);
   };
@@ -751,7 +742,7 @@ const App = () => {
     if (!win || win.isMaximized) return;
 
     setActiveWindowId(instanceId);
-    isInteractingRef.current = true;
+    setIsInteracting(true); // Memunculkan overlay transparan untuk menangkap gerak (crucial for mobile touch)
 
     const startX = e.pageX;
     const startY = e.pageY;
@@ -761,38 +752,46 @@ const App = () => {
     const winEl = document.getElementById(`window-${instanceId}`);
     if (!winEl) return;
 
+    // Aktifkan akselerasi hardware selama interaksi
+    winEl.style.willChange = actionType === 'move' ? 'left, top' : 'width, height, left, top';
+    winEl.style.transform = 'translateZ(0)';
+
     let currentX = initialPos.x;
     let currentY = initialPos.y;
     let currentW = initialSize.w;
     let currentH = initialSize.h;
 
     const onPointerMove = (moveEvent: PointerEvent) => {
-        const dx = moveEvent.pageX - startX;
-        const dy = moveEvent.pageY - startY;
+        // Gunakan requestAnimationFrame untuk sinkronisasi render browser
+        requestAnimationFrame(() => {
+          const dx = moveEvent.pageX - startX;
+          const dy = moveEvent.pageY - startY;
 
-        if (actionType === 'move') {
-            currentX = initialPos.x + dx;
-            currentY = initialPos.y + dy;
-            winEl.style.left = `${currentX}px`;
-            winEl.style.top = `${currentY}px`;
-        } else if (actionType === 'resize') {
-            if (corner?.includes('right')) currentW = Math.max(300, initialSize.w + dx);
-            if (corner?.includes('bottom')) currentH = Math.max(200, initialSize.h + dy);
-            if (corner?.includes('left')) {
-                const deltaW = initialSize.w - dx;
-                if (deltaW >= 300) { currentW = deltaW; currentX = initialPos.x + dx; winEl.style.left = `${currentX}px`; }
-            }
-            if (corner?.includes('top')) {
-                const deltaH = initialSize.h - dy;
-                if (deltaH >= 200) { currentH = deltaH; currentY = initialPos.y + dy; winEl.style.top = `${currentY}px`; }
-            }
-            winEl.style.width = `${currentW}px`;
-            winEl.style.height = `${currentH}px`;
-        }
+          if (actionType === 'move') {
+              currentX = initialPos.x + dx;
+              currentY = initialPos.y + dy;
+              winEl.style.left = `${currentX}px`;
+              winEl.style.top = `${currentY}px`;
+          } else if (actionType === 'resize') {
+              if (corner?.includes('right')) currentW = Math.max(300, initialSize.w + dx);
+              if (corner?.includes('bottom')) currentH = Math.max(200, initialSize.h + dy);
+              if (corner?.includes('left')) {
+                  const deltaW = initialSize.w - dx;
+                  if (deltaW >= 300) { currentW = deltaW; currentX = initialPos.x + dx; winEl.style.left = `${currentX}px`; }
+              }
+              if (corner?.includes('top')) {
+                  const deltaH = initialSize.h - dy;
+                  if (deltaH >= 200) { currentH = deltaH; currentY = initialPos.y + dy; winEl.style.top = `${currentY}px`; }
+              }
+              winEl.style.width = `${currentW}px`;
+              winEl.style.height = `${currentH}px`;
+          }
+        });
     };
 
     const onPointerUp = () => {
-        isInteractingRef.current = false;
+        setIsInteracting(false);
+        winEl.style.willChange = 'auto';
         window.removeEventListener('pointermove', onPointerMove);
         window.removeEventListener('pointerup', onPointerUp);
         
@@ -803,7 +802,7 @@ const App = () => {
         } : w));
     };
 
-    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointermove', onPointerMove, { passive: true });
     window.addEventListener('pointerup', onPointerUp);
   };
 
@@ -838,7 +837,10 @@ const App = () => {
          style={{ backgroundImage: `url(${config?.wallpaper})`, backgroundSize: 'cover', backgroundPosition: 'center' }}
          onPointerDown={() => setGlobalContextMenu(null)}>
       
-      {isInteractingRef.current && <div className="fixed inset-0 z-[9999] cursor-move" />}
+      {/* Overlay penangkap gerak saat drag sedang berlangsung agar tetap responsif di mobile */}
+      {isInteracting && (
+        <div className="fixed inset-0 z-[9999] cursor-move bg-transparent touch-none" />
+      )}
 
       {/* DESKTOP ICONS */}
       <div className="absolute top-0 left-0 bottom-12 w-full p-4 flex flex-col flex-wrap content-start gap-2 z-0" 
@@ -863,10 +865,10 @@ const App = () => {
              style={!win.isMaximized ? { top: win.position.y, left: win.position.x, width: win.size.w, height: win.size.h } : {}}
              onPointerDown={() => setActiveWindowId(win.instanceId)}>
           
-          <div className="h-10 bg-slate-950/40 border-b border-white/5 flex items-center justify-between px-3 select-none cursor-default"
+          <div className="h-10 bg-slate-950/40 border-b border-white/5 flex items-center justify-between px-3 select-none cursor-default touch-none"
                onDoubleClick={() => toggleMaximize(win.instanceId)}
                onPointerDown={(e) => handleWindowAction(win.instanceId, e, 'move')}>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 pointer-events-none">
                <div className="w-4 h-4 flex items-center justify-center text-white">{win.appId === 'file-explorer' ? <Folder size={14}/> : <Globe size={14}/>}</div>
                <span className="text-[10px] font-bold text-slate-300 tracking-wide uppercase">{win.title}</span>
             </div>
@@ -900,11 +902,11 @@ const App = () => {
 
           {!win.isMaximized && (
             <>
-              <div className="absolute top-0 left-0 w-1.5 h-full cursor-ew-resize hover:bg-white/10" onPointerDown={(e) => handleWindowAction(win.instanceId, e, 'resize', 'left')} />
-              <div className="absolute top-0 right-0 w-1.5 h-full cursor-ew-resize hover:bg-white/10" onPointerDown={(e) => handleWindowAction(win.instanceId, e, 'resize', 'right')} />
-              <div className="absolute bottom-0 left-0 w-full h-1.5 cursor-ns-resize hover:bg-white/10" onPointerDown={(e) => handleWindowAction(win.instanceId, e, 'resize', 'bottom')} />
-              <div className="absolute bottom-0 right-0 w-4 h-4 cursor-nwse-resize hover:bg-blue-400/30 z-[60]" onPointerDown={(e) => handleWindowAction(win.instanceId, e, 'resize', 'bottom-right')} />
-              <div className="absolute bottom-0 left-0 w-4 h-4 cursor-nesw-resize hover:bg-blue-400/30 z-[60]" onPointerDown={(e) => handleWindowAction(win.instanceId, e, 'resize', 'bottom-left')} />
+              <div className="absolute top-0 left-0 w-1.5 h-full cursor-ew-resize hover:bg-white/10 touch-none" onPointerDown={(e) => handleWindowAction(win.instanceId, e, 'resize', 'left')} />
+              <div className="absolute top-0 right-0 w-1.5 h-full cursor-ew-resize hover:bg-white/10 touch-none" onPointerDown={(e) => handleWindowAction(win.instanceId, e, 'resize', 'right')} />
+              <div className="absolute bottom-0 left-0 w-full h-1.5 cursor-ns-resize hover:bg-white/10 touch-none" onPointerDown={(e) => handleWindowAction(win.instanceId, e, 'resize', 'bottom')} />
+              <div className="absolute bottom-0 right-0 w-4 h-4 cursor-nwse-resize hover:bg-blue-400/30 z-[60] touch-none" onPointerDown={(e) => handleWindowAction(win.instanceId, e, 'resize', 'bottom-right')} />
+              <div className="absolute bottom-0 left-0 w-4 h-4 cursor-nesw-resize hover:bg-blue-400/30 z-[60] touch-none" onPointerDown={(e) => handleWindowAction(win.instanceId, e, 'resize', 'bottom-left')} />
             </>
           )}
         </div>
