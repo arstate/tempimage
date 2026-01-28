@@ -112,11 +112,12 @@ const App = () => {
       setIsSavingDB(true);
       saveTimeoutRef.current = setTimeout(async () => {
           try {
+              // OVERWRITE: Always use dbFileId to overwrite existing cloud file
               await API.updateSystemDBFile(dbFileId, systemMapRef.current);
               setIsSavingDB(false);
               await DB.saveSystemMap({ fileId: dbFileId, map: systemMapRef.current, lastSync: Date.now() });
           } catch (e) { setIsSavingDB(false); }
-      }, 3000); 
+      }, 2000); 
   }, [dbFileId]);
 
   const triggerCommentSync = useCallback(() => {
@@ -125,6 +126,7 @@ const App = () => {
     setIsSavingComments(true);
     commentSaveTimeoutRef.current = setTimeout(async () => {
         try {
+            // OVERWRITE: Always use commentFileId to overwrite existing cloud file
             await API.updateCommentDBFile(commentFileId, commentsRef.current);
             setIsSavingComments(false);
             await DB.saveCommentsCache(commentsRef.current);
@@ -132,6 +134,7 @@ const App = () => {
     }, 2000);
   }, [commentFileId]);
 
+  // Real-time interval check for cloud updates (from other devices)
   useEffect(() => {
     if (!isSystemInitialized || !dbFileId || isSavingDB) return;
     const interval = setInterval(async () => {
@@ -143,7 +146,7 @@ const App = () => {
                     systemMapRef.current = remoteMap;
                     setSystemMap(remoteMap);
                     await DB.saveSystemMap({ fileId: dbFileId, map: remoteMap, lastSync: Date.now() });
-                    if (currentFolderId) loadFolder(currentFolderId);
+                    if (activeFolderIdRef.current !== undefined) loadFolder(activeFolderIdRef.current);
                 }
             }
             if (!isSavingComments && commentFileId) {
@@ -156,83 +159,93 @@ const App = () => {
                 }
             }
         } catch (e) {}
-    }, 60000); 
+    }, 30000); 
     return () => clearInterval(interval);
-  }, [isSystemInitialized, dbFileId, commentFileId, isSavingDB, isSavingComments, currentFolderId]);
+  }, [isSystemInitialized, dbFileId, commentFileId, isSavingDB, isSavingComments]);
 
   useEffect(() => {
     const initSystem = async () => {
        try {
-           const cachedDB = await DB.getSystemMap();
-           const cachedComments = await DB.getCommentsCache();
-           let currentMap: FolderMap = cachedDB ? cachedDB.map : {};
-           let currentComments: CommentDB = cachedComments || {};
+           setIsGlobalLoading(true);
+           setGlobalLoadingMessage("Mencari Folder System...");
            
-           setGlobalLoadingMessage("Sinkronisasi Cloud...");
-           const location = await API.locateSystemDB();
-           let sysFolderId = location.systemFolderId;
-           let currentFileId = location.fileId; 
-           let currentCommentFileId = location.commentFileId;
+           // 1. Locate System folder and files on Drive FIRST (Avoid device conflict)
+           const cloudLocation = await API.locateSystemDB();
+           let sysFolderId = cloudLocation.systemFolderId;
+           let currentDbFileId = cloudLocation.fileId; 
+           let currentCommentFileId = cloudLocation.commentFileId;
 
+           let finalMap: FolderMap = { "root": { id: "root", name: "Home", parentId: "" } };
+           let finalComments: CommentDB = {};
+
+           // 2. Create System Folder if truly missing on Drive
            if (!sysFolderId) {
-               setGlobalLoadingMessage("Membuat Folder System...");
+               setGlobalLoadingMessage("Membuat Folder System Baru...");
                sysFolderId = await API.createSystemFolder();
            }
            setSystemFolderId(sysFolderId);
 
-           if (!currentFileId) {
-               setGlobalLoadingMessage("Membuat Database Baru...");
-               if (!cachedDB) currentMap = { "root": { id: "root", name: "Home", parentId: "" } };
-               currentFileId = await API.createSystemDBFile(currentMap, sysFolderId);
-           } else {
-               setGlobalLoadingMessage("Mengunduh Database...");
+           // 3. Sync Database File
+           if (currentDbFileId) {
+               setGlobalLoadingMessage("Mengunduh Database Utama...");
                try {
-                   const content = await API.getFileContent(currentFileId);
-                   currentMap = JSON.parse(content);
-               } catch(e) { }
-           }
-
-           if (!currentCommentFileId) {
-             setGlobalLoadingMessage("Membuat DB Komentar...");
-             currentCommentFileId = await API.createCommentDBFile(currentComments, sysFolderId);
+                   const content = await API.getFileContent(currentDbFileId);
+                   finalMap = JSON.parse(content);
+               } catch(e) { console.error("Failed to parse cloud DB", e); }
            } else {
-             setGlobalLoadingMessage("Mengunduh Komentar...");
-             try {
-                const content = await API.getFileContent(currentCommentFileId);
-                currentComments = JSON.parse(content);
-             } catch(e) {}
+               setGlobalLoadingMessage("Inisialisasi Database...");
+               currentDbFileId = await API.createSystemDBFile(finalMap, sysFolderId);
            }
 
-           await DB.saveSystemMap({ fileId: currentFileId, map: currentMap, lastSync: Date.now() });
-           await DB.saveCommentsCache(currentComments);
+           // 4. Sync Comment File
+           if (currentCommentFileId) {
+               setGlobalLoadingMessage("Mengunduh Komentar...");
+               try {
+                   const content = await API.getFileContent(currentCommentFileId);
+                   finalComments = JSON.parse(content);
+               } catch(e) { console.error("Failed to parse cloud Comments", e); }
+           } else {
+               setGlobalLoadingMessage("Inisialisasi Komentar...");
+               currentCommentFileId = await API.createCommentDBFile(finalComments, sysFolderId);
+           }
+
+           // 5. Update Local State and IndexedDB Cache
+           systemMapRef.current = finalMap;
+           setSystemMap(finalMap);
+           setDbFileId(currentDbFileId);
            
-           systemMapRef.current = currentMap;
-           setSystemMap(currentMap);
-           setDbFileId(currentFileId);
-           
-           commentsRef.current = currentComments;
-           setComments(currentComments);
+           commentsRef.current = finalComments;
+           setComments(finalComments);
            setCommentFileId(currentCommentFileId);
 
+           await DB.saveSystemMap({ fileId: currentDbFileId, map: finalMap, lastSync: Date.now() });
+           await DB.saveCommentsCache(finalComments);
+
            setIsSystemInitialized(true);
+           
+           // Handle Hash Deep Linking
            const hash = window.location.hash.replace(/^#/, ''); 
-           const path = hash.split('/').filter(p => p);
-           if (path.length > 0) {
-               setGlobalLoadingMessage("Membuka Link...");
+           if (hash && hash !== '/') {
+               const path = hash.split('/').filter(p => p);
                let parentSearchId = "root"; 
                let foundId = "";
                const traceHistory: {id:string, name:string}[] = [];
                for (const segment of path) {
                    const decodedName = decodeURIComponent(segment);
-                   const entryId = Object.keys(currentMap).find(key => {
-                       const node = currentMap[key];
+                   const entryId = Object.keys(finalMap).find(key => {
+                       const node = finalMap[key];
                        return node.name === decodedName && (node.parentId || "root") === parentSearchId;
                    });
                    if (entryId) { parentSearchId = entryId; traceHistory.push({ id: entryId, name: decodedName }); foundId = entryId; } 
                }
-               if (foundId) { setFolderHistory(traceHistory); setCurrentFolderId(foundId); } else { setIsNotFound(true); }
-           } else { setCurrentFolderId(""); }
-       } catch (err) { setIsNotFound(true); } finally { setIsGlobalLoading(false); }
+               if (foundId) { setFolderHistory(traceHistory); setCurrentFolderId(foundId); }
+           }
+       } catch (err) { 
+           console.error("System Init Error:", err);
+           setIsNotFound(true); 
+       } finally { 
+           setIsGlobalLoading(false); 
+       }
     };
     initSystem();
   }, []);
@@ -793,7 +806,6 @@ const App = () => {
               const notifRA = addNotification('Mengembalikan semua item...', 'loading');
               try {
                   let itemsToRestore: Item[] = [];
-                  // Explicitly fetch correct items to restore, handling case where we are not in Recycle Bin
                   if (currentFolderId === recycleBinId) {
                       itemsToRestore = [...items];
                   } else {
@@ -817,17 +829,11 @@ const App = () => {
                       restoreMap[target].push(itemToRestore.id);
                   }
                   
-                  // Process restoration by target folder
                   for (const [tf, iids] of Object.entries(restoreMap)) {
                       await API.moveItems(iids, tf);
-                      // Correctly identifying folders among restored items using correctly typed list
                       const foldersRestored = itemsToRestore.filter((i: Item) => iids.includes(i.id) && i.type === 'folder');
                       if (foldersRestored.length > 0) {
-                          // Update map with correctly inferred or typed properties to avoid unknown property errors
-                          updateMap('move', foldersRestored.map((f: Item) => ({ 
-                              id: f.id, 
-                              parentId: tf 
-                          })));
+                          updateMap('move', foldersRestored.map((f: Item) => ({ id: f.id, parentId: tf })));
                       }
                       for(const id of iids) await DB.removeDeletedMeta(id);
                   }
@@ -1154,16 +1160,16 @@ const MoreBtn = ({ onTrigger, selected }: { onTrigger: (e: React.MouseEvent | Re
 const CommentBadge = ({ onClick }: { onClick?: () => void }) => (
   <button 
     onClick={(e) => { e.stopPropagation(); onClick?.(); }}
-    className="absolute top-1 left-1 z-30 p-1.5 bg-blue-600 text-white rounded-full shadow-lg hover:bg-blue-500 transition-all hover:scale-110 border border-blue-400/50"
+    className="absolute bottom-2 right-2 z-30 p-1.5 bg-blue-600 text-white rounded-full shadow-lg hover:bg-blue-500 transition-all hover:scale-110 border border-blue-400/50"
     title="Lihat Komentar"
   >
     <MessageSquare size={12} fill="currentColor"/>
   </button>
 );
 
-const FolderItem: React.FC<ItemComponentProps & { isRecycleBin?: boolean; isSystem?: boolean; isDropTarget?: boolean }> = ({ item, selected, hasComments, onClick, onDoubleClick, onContextMenu, onToggleSelect, onCommentClick, isRecycleBin, isSystem, isDropTarget }) => ( <div id={`item-${item.id}`} data-folder-id={item.id} data-item-id={item.id} draggable={false} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} style={{ touchAction: 'pan-y' }} className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col items-center gap-2 item-clickable select-none ${isDropTarget ? 'bg-blue-500/40 border-blue-400 scale-105 shadow-xl ring-2 ring-blue-400 z-30' : selected ? 'bg-blue-500/20 border-blue-500 shadow-md ring-1 ring-blue-500' : 'bg-slate-900 border-slate-800 hover:bg-slate-800 hover:border-slate-600'}`}> <ItemOverlay status={item.status} /> {hasComments && <CommentBadge onClick={onCommentClick}/>} <div className={`absolute top-2 left-8 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/></div> {!isRecycleBin && !isSystem && <MoreBtn onTrigger={(e) => onContextMenu(e, item)} selected={selected} />} {isRecycleBin ? (<Trash2 size={48} className="text-red-500 fill-red-500/10 drop-shadow-md pointer-events-none" />) : isSystem ? (<div className="relative"><Folder size={48} className="text-slate-500 fill-slate-500/10 drop-shadow-md pointer-events-none" /><Lock size={16} className="absolute bottom-0 right-0 text-amber-400 bg-slate-900 rounded-full p-0.5 border border-slate-800" /></div>) : (<Folder size={48} className="text-blue-500 fill-blue-500/10 drop-shadow-md pointer-events-none" />)} <span className={`text-xs font-medium text-center truncate w-full px-1 ${isRecycleBin ? 'text-red-400' : isSystem ? 'text-slate-400' : 'text-slate-200'}`}>{item.name}</span> </div> );
-const NoteItem: React.FC<ItemComponentProps> = ({ item, selected, hasComments, onClick, onDoubleClick, onContextMenu, onToggleSelect, onCommentClick }) => { const isDBFile = item.name.includes(DB_FILENAME_BASE); const cleanText = stripHtml(item.content || item.snippet || "").slice(0, 150); return ( <div id={`item-${item.id}`} data-item-id={item.id} draggable={false} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} style={{ touchAction: 'pan-y' }} className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col gap-2 item-clickable select-none aspect-square shadow-lg hover:shadow-xl hover:-translate-y-1 hover:rotate-1 duration-200 ${selected ? 'bg-yellow-200 border-blue-500 ring-2 ring-blue-500 scale-[1.02] z-10' : isDBFile ? 'bg-slate-800 border-slate-700 hover:border-blue-500/50' : 'bg-[#fff9c4] border-transparent hover:border-yellow-300'}`}> <ItemOverlay status={item.status} /> {hasComments && <CommentBadge onClick={onCommentClick}/>} <div className={`absolute top-2 left-8 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><CheckSquare size={18} className={selected ? "text-blue-600 bg-white rounded shadow-sm" : "text-slate-600/50 hover:text-slate-900"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/></div> <MoreBtn onTrigger={(e) => onContextMenu(e, item)} selected={selected} /> {isDBFile ? (<div className="flex-1 w-full flex flex-col items-center justify-center text-slate-400"><Database size={32} className="mb-2 text-blue-500" /><span className="text-xs font-mono font-bold text-center break-all">{item.name}</span></div>) : (<><div className="flex-1 w-full overflow-hidden flex flex-col"><h4 className="text-sm font-bold text-slate-900 mb-1.5 truncate border-b border-slate-800/10 pb-1">{item.name.replace('.txt', '')}</h4><p className="text-xs text-slate-800/90 leading-relaxed font-sans font-medium break-words whitespace-pre-wrap line-clamp-6">{cleanText || <span className="italic text-slate-500">Kosong...</span>}</p></div><div className="flex items-center justify-between w-full pt-2 mt-auto opacity-50"><FileText size={10} className="text-slate-600" /><span className="text-[9px] text-slate-600">{new Date(item.lastUpdated).toLocaleDateString()}</span></div></>)} </div> ); };
-const ImageItem: React.FC<ItemComponentProps> = ({ item, selected, hasComments, onClick, onDoubleClick, onContextMenu, onToggleSelect, onCommentClick }) => ( <div id={`item-${item.id}`} data-item-id={item.id} draggable={false} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} style={{ touchAction: 'pan-y' }} className={`group relative rounded-xl border transition-all cursor-pointer overflow-hidden aspect-square flex flex-col items-center justify-center bg-slate-950 item-clickable select-none ${selected ? 'border-blue-500 shadow-md ring-1 ring-blue-500' : 'border-slate-800 hover:border-slate-600'}`}> <ItemOverlay status={item.status} /> {hasComments && <CommentBadge onClick={onCommentClick}/>} <div className={`absolute top-2 left-8 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300 shadow-sm"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/></div> <MoreBtn onTrigger={(e) => onContextMenu(e, item)} selected={selected} /> {item.thumbnail || item.url ? (<img src={item.thumbnail || item.url} alt={item.name} className="w-full h-full object-cover pointer-events-none" loading="lazy" referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.style.display = 'none'; e.currentTarget.parentElement?.classList.add('bg-slate-800'); }} />) : (<ImageIcon size={32} className="text-slate-600 pointer-events-none" />)} <div className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm p-1.5 truncate pointer-events-none"><span className="text-[10px] font-medium text-slate-200 block text-center truncate">{item.name}</span></div> </div> );
+const FolderItem: React.FC<ItemComponentProps & { isRecycleBin?: boolean; isSystem?: boolean; isDropTarget?: boolean }> = ({ item, selected, hasComments, onClick, onDoubleClick, onContextMenu, onToggleSelect, onCommentClick, isRecycleBin, isSystem, isDropTarget }) => ( <div id={`item-${item.id}`} data-folder-id={item.id} data-item-id={item.id} draggable={false} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} style={{ touchAction: 'pan-y' }} className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col items-center gap-2 item-clickable select-none ${isDropTarget ? 'bg-blue-500/40 border-blue-400 scale-105 shadow-xl ring-2 ring-blue-400 z-30' : selected ? 'bg-blue-500/20 border-blue-500 shadow-md ring-1 ring-blue-500' : 'bg-slate-900 border-slate-800 hover:bg-slate-800 hover:border-slate-600'}`}> <ItemOverlay status={item.status} /> {hasComments && <CommentBadge onClick={onCommentClick}/>} <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/></div> {!isRecycleBin && !isSystem && <MoreBtn onTrigger={(e) => onContextMenu(e, item)} selected={selected} />} {isRecycleBin ? (<Trash2 size={48} className="text-red-500 fill-red-500/10 drop-shadow-md pointer-events-none" />) : isSystem ? (<div className="relative"><Folder size={48} className="text-slate-500 fill-slate-500/10 drop-shadow-md pointer-events-none" /><Lock size={16} className="absolute bottom-0 right-0 text-amber-400 bg-slate-900 rounded-full p-0.5 border border-slate-800" /></div>) : (<Folder size={48} className="text-blue-500 fill-blue-500/10 drop-shadow-md pointer-events-none" />)} <span className={`text-xs font-medium text-center truncate w-full px-1 ${isRecycleBin ? 'text-red-400' : isSystem ? 'text-slate-400' : 'text-slate-200'}`}>{item.name}</span> </div> );
+const NoteItem: React.FC<ItemComponentProps> = ({ item, selected, hasComments, onClick, onDoubleClick, onContextMenu, onToggleSelect, onCommentClick }) => { const isDBFile = item.name.includes(DB_FILENAME_BASE); const cleanText = stripHtml(item.content || item.snippet || "").slice(0, 150); return ( <div id={`item-${item.id}`} data-item-id={item.id} draggable={false} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} style={{ touchAction: 'pan-y' }} className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col gap-2 item-clickable select-none aspect-square shadow-lg hover:shadow-xl hover:-translate-y-1 hover:rotate-1 duration-200 ${selected ? 'bg-yellow-200 border-blue-500 ring-2 ring-blue-500 scale-[1.02] z-10' : isDBFile ? 'bg-slate-800 border-slate-700 hover:border-blue-500/50' : 'bg-[#fff9c4] border-transparent hover:border-yellow-300'}`}> <ItemOverlay status={item.status} /> {hasComments && <CommentBadge onClick={onCommentClick}/>} <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><CheckSquare size={18} className={selected ? "text-blue-600 bg-white rounded shadow-sm" : "text-slate-600/50 hover:text-slate-900"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/></div> <MoreBtn onTrigger={(e) => onContextMenu(e, item)} selected={selected} /> {isDBFile ? (<div className="flex-1 w-full flex flex-col items-center justify-center text-slate-400"><Database size={32} className="mb-2 text-blue-500" /><span className="text-xs font-mono font-bold text-center break-all">{item.name}</span></div>) : (<><div className="flex-1 w-full overflow-hidden flex flex-col"><h4 className="text-sm font-bold text-slate-900 mb-1.5 truncate border-b border-slate-800/10 pb-1">{item.name.replace('.txt', '')}</h4><p className="text-xs text-slate-800/90 leading-relaxed font-sans font-medium break-words whitespace-pre-wrap line-clamp-6">{cleanText || <span className="italic text-slate-500">Kosong...</span>}</p></div><div className="flex items-center justify-between w-full pt-2 mt-auto opacity-50"><FileText size={10} className="text-slate-600" /><span className="text-[9px] text-slate-600">{new Date(item.lastUpdated).toLocaleDateString()}</span></div></>)} </div> ); };
+const ImageItem: React.FC<ItemComponentProps> = ({ item, selected, hasComments, onClick, onDoubleClick, onContextMenu, onToggleSelect, onCommentClick }) => ( <div id={`item-${item.id}`} data-item-id={item.id} draggable={false} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} style={{ touchAction: 'pan-y' }} className={`group relative rounded-xl border transition-all cursor-pointer overflow-hidden aspect-square flex flex-col items-center justify-center bg-slate-950 item-clickable select-none ${selected ? 'border-blue-500 shadow-md ring-1 ring-blue-500' : 'border-slate-800 hover:border-slate-600'}`}> <ItemOverlay status={item.status} /> {hasComments && <CommentBadge onClick={onCommentClick}/>} <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300 shadow-sm"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/></div> <MoreBtn onTrigger={(e) => onContextMenu(e, item)} selected={selected} /> {item.thumbnail || item.url ? (<img src={item.thumbnail || item.url} alt={item.name} className="w-full h-full object-cover pointer-events-none" loading="lazy" referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.style.display = 'none'; e.currentTarget.parentElement?.classList.add('bg-slate-800'); }} />) : (<ImageIcon size={32} className="text-slate-600 pointer-events-none" />)} <div className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm p-1.5 truncate pointer-events-none"><span className="text-[10px] font-medium text-slate-200 block text-center truncate">{item.name}</span></div> </div> );
 
 const SelectionFloatingMenu = ({ selectedIds, items, onClear, onSelectAll, onAction, containerRef, isInRecycleBin, recycleBinId, isSystemFolder, systemFolderId }: { selectedIds: Set<string>, items: Item[], onClear: () => void, onSelectAll: () => void, onAction: (a: string) => void, containerRef: React.RefObject<HTMLDivElement>, isInRecycleBin: boolean, recycleBinId: string, isSystemFolder: boolean, systemFolderId: string | null }) => {
     const [pos, setPos] = useState<{top?: number, left?: number, bottom?: number, x?:number}>({ bottom: 24, left: window.innerWidth / 2 }); const [styleType, setStyleType] = useState<'contextual' | 'dock'>('dock'); const menuRef = useRef<HTMLDivElement>(null); 
