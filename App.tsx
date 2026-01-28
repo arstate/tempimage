@@ -9,7 +9,7 @@ import {
   CheckCheck, MessageSquare, Reply, Send, User, Clock,
   Grid, Monitor, Globe, Settings, ShoppingBag, Minus, Square, Search, Wifi,
   Maximize2, MonitorCheck, ExternalLink, Minimize2, LayoutGrid, Youtube, Play, Pause, SkipForward, Music,
-  UploadCloud, RefreshCcw
+  UploadCloud, RefreshCcw, Hand
 } from 'lucide-react';
 import * as API from './services/api';
 import * as DB from './services/db';
@@ -769,8 +769,12 @@ const App = () => {
   const [isInteracting, setIsInteracting] = useState(false);
   const [iconLayout, setIconLayout] = useState<{ [appId: string]: {x: number, y: number} }>({});
   const [selectedDesktopIcon, setSelectedDesktopIcon] = useState<string | null>(null);
-  const desktopDragStart = useRef<{x: number, y: number} | null>(null);
-  const isDraggingDesktop = useRef(false);
+  
+  // DRAG & DROP LOGIC (Hold to Move)
+  const [draggingAppId, setDraggingAppId] = useState<string | null>(null);
+  const longPressTimerRef = useRef<any>(null);
+  const dragStartPosRef = useRef<{ x: number, y: number } | null>(null);
+  const iconRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
 
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) { document.documentElement.requestFullscreen().catch(e => console.error(e)); } 
@@ -1134,103 +1138,111 @@ const App = () => {
      catch(e) { addNotification("Failed to save keys", "error"); }
   };
 
-  const handleDesktopIconDrag = (appId: string, e: React.PointerEvent) => {
-     if (e.button !== 0) return;
-     
-     const iconEl = e.currentTarget as HTMLElement;
-     const startX = e.pageX;
-     const startY = e.pageY;
-     
-     // Get initial positions
-     const initial = iconLayout[appId] || { x: 0, y: 0 };
-     let startLeft = initial.x;
-     let startTop = initial.y;
+  // --- DESKTOP ICON DRAG & DROP LOGIC (HOLD TO MOVE) ---
+  const handleIconPointerDown = (app: API.AppDefinition, e: React.PointerEvent) => {
+      // 1. Instant Select (Normal Click Behavior)
+      setSelectedDesktopIcon(app.id);
+      
+      if (e.button !== 0) return;
+      e.stopPropagation();
 
-     // If not in layout (grid flow), get current computed position
-     if (!startLeft && !startTop) {
-         const rect = iconEl.getBoundingClientRect();
-         startLeft = rect.left;
-         startTop = rect.top;
-     }
+      const el = iconRefs.current[app.id];
+      if (!el) return;
 
-     isDraggingDesktop.current = false;
-     desktopDragStart.current = { x: startX, y: startY };
+      const rect = el.getBoundingClientRect();
+      dragStartPosRef.current = { x: e.clientX, y: e.clientY };
 
-     let curX = startLeft; 
-     let curY = startTop;
+      // 2. Start Long Press Timer
+      longPressTimerRef.current = setTimeout(() => {
+          // Timer Finished -> Enable Drag Mode
+          setDraggingAppId(app.id);
+          setIsInteracting(true); // Blocks interaction with iframes/windows
+          if (navigator.vibrate) navigator.vibrate(50); // Haptic feedback
+      }, 500); // 500ms Hold Threshold
+  };
 
-     const onMove = (mv: PointerEvent) => {
-         const dx = mv.pageX - startX;
-         const dy = mv.pageY - startY;
-         
-         // Threshold for drag detection (prevent accidental moves on click)
-         if (!isDraggingDesktop.current && (Math.abs(dx) > 5 || Math.abs(dy) > 5)) {
-             isDraggingDesktop.current = true;
-             setIsInteracting(true); // Overlay to block iframes
-             
-             // Promote to absolute on first move
-             iconEl.style.position = 'absolute';
-             iconEl.style.zIndex = '50';
-             iconEl.style.transition = 'none';
-             // Compensate for grid flow position by setting explicit left/top now
-             iconEl.style.left = `${startLeft}px`;
-             iconEl.style.top = `${startTop}px`;
-         }
+  const handleGlobalPointerMove = (e: PointerEvent) => {
+      // Check for jitter/scroll intent during Hold phase
+      if (longPressTimerRef.current && dragStartPosRef.current) {
+          const dist = Math.hypot(e.clientX - dragStartPosRef.current.x, e.clientY - dragStartPosRef.current.y);
+          if (dist > 10) {
+              // User moved too much before Hold time was up -> Cancel Hold
+              clearTimeout(longPressTimerRef.current);
+              longPressTimerRef.current = null;
+          }
+      }
 
-         if (isDraggingDesktop.current) {
-             curX = startLeft + dx;
-             curY = startTop + dy;
-             iconEl.style.left = `${curX}px`;
-             iconEl.style.top = `${curY}px`;
-         }
-     };
+      // Handle Active Dragging
+      if (draggingAppId && dragStartPosRef.current) {
+          const el = iconRefs.current[draggingAppId];
+          if (el) {
+              const dx = e.clientX - dragStartPosRef.current.x;
+              const dy = e.clientY - dragStartPosRef.current.y;
+              
+              // Apply transform directly for performance
+              el.style.transform = `translate(${dx}px, ${dy}px) scale(1.1)`;
+              el.style.zIndex = '100';
+              el.style.transition = 'none';
+              el.style.pointerEvents = 'none'; 
+          }
+      }
+  };
 
-     const onUp = () => {
-         window.removeEventListener('pointermove', onMove);
-         window.removeEventListener('pointerup', onUp);
-         setIsInteracting(false);
+  const handleGlobalPointerUp = (e: PointerEvent) => {
+      // Clean up timer if released early (It was just a click)
+      if (longPressTimerRef.current) {
+          clearTimeout(longPressTimerRef.current);
+          longPressTimerRef.current = null;
+      }
 
-         if (isDraggingDesktop.current) {
-             // Snap to Grid Logic
-             const snappedX = Math.round(curX / GRID_SIZE_X) * GRID_SIZE_X + 20; // + margin offset
-             const snappedY = Math.round(curY / GRID_SIZE_Y) * GRID_SIZE_Y + 20;
+      if (draggingAppId) {
+          // Drop Logic
+          const el = iconRefs.current[draggingAppId];
+          if (el && dragStartPosRef.current) {
+              // Reset styles
+              el.style.transform = '';
+              el.style.zIndex = '';
+              el.style.pointerEvents = '';
 
-             iconEl.style.zIndex = '';
-             iconEl.style.transition = '';
-             iconEl.style.left = `${snappedX}px`;
-             iconEl.style.top = `${snappedY}px`;
+              // Calculate final position
+              const rect = el.getBoundingClientRect();
+              
+              // Snap to Grid (20px margin + grid size)
+              const snappedX = Math.round(rect.left / GRID_SIZE_X) * GRID_SIZE_X + 20;
+              const snappedY = Math.round(rect.top / GRID_SIZE_Y) * GRID_SIZE_Y + 20;
 
-             const newLayout = { ...iconLayout, [appId]: { x: snappedX, y: snappedY } };
-             setIconLayout(newLayout);
-             
-             // Sync to cloud
-             if (config) {
+              // Save new position
+              const newLayout = { ...iconLayout, [draggingAppId]: { x: snappedX, y: snappedY } };
+              setIconLayout(newLayout);
+              
+              // Sync to Cloud
+              if (config) {
                  const updatedConfig = { ...config, desktopLayout: newLayout };
                  setConfig(updatedConfig);
-                 API.saveSystemConfig(updatedConfig).catch(() => console.error("Failed to save layout"));
-             }
-         } else {
-             // Clean up style if it was just a click
-             iconEl.style.position = '';
-             iconEl.style.zIndex = '';
-             iconEl.style.transition = '';
-             iconEl.style.left = '';
-             iconEl.style.top = '';
-         }
-         
-         desktopDragStart.current = null;
-         isDraggingDesktop.current = false;
-     };
-
-     window.addEventListener('pointermove', onMove);
-     window.addEventListener('pointerup', onUp);
+                 API.saveSystemConfig(updatedConfig).catch(console.error);
+              }
+          }
+          setDraggingAppId(null);
+          setIsInteracting(false);
+      }
+      
+      dragStartPosRef.current = null;
   };
+
+  // Bind global pointer events
+  useEffect(() => {
+      window.addEventListener('pointermove', handleGlobalPointerMove);
+      window.addEventListener('pointerup', handleGlobalPointerUp);
+      return () => {
+          window.removeEventListener('pointermove', handleGlobalPointerMove);
+          window.removeEventListener('pointerup', handleGlobalPointerUp);
+      }
+  }, [draggingAppId, iconLayout]); // Re-bind when dragging state changes to ensure closure captures correctly
 
   const handleDesktopIconClick = (appId: string, e: React.MouseEvent) => {
       e.stopPropagation();
-      // If we dragged, don't register as click
-      if (isDraggingDesktop.current) return;
-      setSelectedDesktopIcon(appId);
+      // Click logic is handled by PointerDown (for selection)
+      // Double click logic handles Open
   };
   
   const handleRefreshDesktop = async () => {
@@ -1376,40 +1388,38 @@ const App = () => {
 
       {/* DESKTOP ICONS GRID CONTAINER */}
       <div className="absolute top-0 left-0 bottom-12 w-full p-4 z-0">
-        {/* We use a grid for responsive layout, but allow absolute override for custom positions */}
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(100px,1fr))] grid-rows-[repeat(auto-fill,minmax(120px,1fr))] h-full gap-2 pointer-events-none">
+        <div className="grid grid-cols-[repeat(auto-fill,100px)] grid-rows-[repeat(auto-fill,120px)] h-full gap-2 pointer-events-none">
             {config?.installedApps.map((app) => {
                 const pos = iconLayout[app.id];
-                // If it has a position, it's absolute (removed from grid flow effectively via absolute positioning)
-                // If no position, it flows in the grid
-                const style: React.CSSProperties = pos 
+                // Determine style: Grid Flow vs Absolute (Locked)
+                const isLocked = !!pos;
+                const style: React.CSSProperties = isLocked 
                     ? { position: 'absolute', left: pos.x, top: pos.y, pointerEvents: 'auto' } 
                     : { position: 'relative', pointerEvents: 'auto' };
                 
                 const isSelected = selectedDesktopIcon === app.id;
+                const isBeingDragged = draggingAppId === app.id;
 
                 return (
-                <div key={app.id} 
+                <div 
+                    key={app.id} 
+                    ref={el => { iconRefs.current[app.id] = el; }}
                     style={style}
                     onDoubleClick={(e) => { 
                         e.stopPropagation(); 
                         openApp(app); 
                     }}
-                    onPointerDown={(e) => { 
-                        e.stopPropagation(); 
-                        setStartMenuOpen(false); setActiveWindowId(null);
-                        if (e.button === 0) { 
-                            setGlobalContextMenu(null); 
-                            handleDesktopIconDrag(app.id, e); 
-                        }
-                    }}
+                    onPointerDown={(e) => handleIconPointerDown(app, e)}
                     onClick={(e) => handleDesktopIconClick(app.id, e)}
                     onContextMenu={(e) => {
                         e.preventDefault(); e.stopPropagation();
                         setSelectedDesktopIcon(app.id);
                         setGlobalContextMenu({ x: e.clientX, y: e.clientY, targetItem: app as any, type: 'app' });
                     }}
-                    className={`w-24 flex flex-col items-center gap-1.5 p-2 rounded-lg cursor-default group transition-colors select-none ${isSelected ? 'bg-white/20 ring-1 ring-white/30' : 'hover:bg-white/10'}`}
+                    className={`w-24 flex flex-col items-center gap-1.5 p-2 rounded-lg cursor-default group transition-all duration-200 select-none 
+                        ${isSelected ? 'bg-white/20 ring-1 ring-white/30' : 'hover:bg-white/10'}
+                        ${isBeingDragged ? 'scale-110 shadow-2xl z-[100] animate-pulse bg-white/30 ring-2 ring-blue-400' : ''}
+                    `}
                 >
                     <div className="w-12 h-12 glass-light rounded-2xl flex items-center justify-center shadow-lg group-hover:scale-105 transition-transform text-white overflow-hidden pointer-events-none">
                     {app.icon.startsWith('http') ? <img src={app.icon} className="w-full h-full object-cover"/> :
