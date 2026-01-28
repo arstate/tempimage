@@ -23,6 +23,7 @@ export interface SystemConfig {
   theme: 'dark' | 'light';
   installedApps: AppDefinition[];
   youtubeApiKeys?: string[]; // Custom user keys
+  desktopLayout?: { [appId: string]: { x: number; y: number } }; // Icon positions
 }
 
 interface ApiResponse {
