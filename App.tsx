@@ -61,6 +61,149 @@ const stripHtml = (html: string) => {
   return tmp.textContent || tmp.innerText || "";
 };
 
+// --- FILE SYSTEM ITEM COMPONENTS ---
+
+const FolderItem = ({ item, hasComments, isRecycleBin, isSystem, selected, isDropTarget, onClick, onDoubleClick, onContextMenu, onToggleSelect, onCommentClick }: any) => (
+  <div 
+    id={`item-${item.id}`}
+    data-item-id={item.id}
+    data-folder-id={item.id}
+    onClick={(e) => onClick(e, item)}
+    onDoubleClick={(e) => onDoubleClick(e, item)}
+    onContextMenu={(e) => onContextMenu(e, item)}
+    className={`relative group p-2 rounded-xl border transition-all duration-200 flex flex-col items-center gap-2 select-none cursor-pointer
+      ${selected ? 'bg-blue-600/20 border-blue-500/50 shadow-lg' : 'bg-slate-800/40 border-slate-700/50 hover:bg-slate-800'}
+      ${isDropTarget ? 'ring-2 ring-yellow-400 bg-yellow-400/10' : ''}
+    `}
+  >
+    <div 
+      onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}
+      className={`selection-checkbox absolute top-2 left-2 w-5 h-5 rounded-full border border-slate-500 flex items-center justify-center transition-all z-10
+        ${selected ? 'bg-blue-500 border-blue-500 opacity-100' : 'bg-slate-900/50 opacity-0 group-hover:opacity-100 hover:bg-slate-700'}
+      `}
+    >
+      {selected && <CheckCheck size={12} className="text-white"/>}
+    </div>
+
+    {hasComments && (
+      <button 
+        onClick={(e) => { e.stopPropagation(); onCommentClick(); }}
+        className="absolute top-2 right-2 p-1 bg-slate-900/80 rounded-full text-blue-400 hover:text-white hover:bg-blue-600 transition-colors z-10"
+      >
+        <MessageSquare size={12} fill="currentColor" className="opacity-80"/>
+      </button>
+    )}
+
+    <div className="w-16 h-14 flex items-center justify-center relative">
+      {isRecycleBin ? <Trash2 size={40} className="text-red-500 drop-shadow-lg"/> : 
+       isSystem ? <Database size={40} className="text-slate-400 drop-shadow-lg"/> :
+       <Folder size={40} className={`${item.status === 'moving' ? 'text-slate-600' : 'text-blue-400'} drop-shadow-lg transition-colors`}/>}
+      
+      {item.status === 'moving' && <div className="absolute inset-0 flex items-center justify-center"><Loader2 size={20} className="animate-spin text-white"/></div>}
+    </div>
+
+    <span className={`text-[11px] font-medium text-center leading-tight line-clamp-2 px-1 rounded ${selected ? 'text-blue-200' : 'text-slate-300'}`}>
+      {item.name}
+    </span>
+  </div>
+);
+
+const NoteItem = ({ item, hasComments, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect, onCommentClick }: any) => (
+  <div 
+    id={`item-${item.id}`}
+    data-item-id={item.id}
+    onClick={(e) => onClick(e, item)}
+    onDoubleClick={(e) => onDoubleClick(e, item)}
+    onContextMenu={(e) => onContextMenu(e, item)}
+    className={`relative group p-2 rounded-xl border transition-all duration-200 flex flex-col items-center gap-2 select-none cursor-pointer
+      ${selected ? 'bg-blue-600/20 border-blue-500/50 shadow-lg' : 'bg-slate-800/40 border-slate-700/50 hover:bg-slate-800'}
+    `}
+  >
+    <div 
+      onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}
+      className={`selection-checkbox absolute top-2 left-2 w-5 h-5 rounded-full border border-slate-500 flex items-center justify-center transition-all z-10
+        ${selected ? 'bg-blue-500 border-blue-500 opacity-100' : 'bg-slate-900/50 opacity-0 group-hover:opacity-100 hover:bg-slate-700'}
+      `}
+    >
+      {selected && <CheckCheck size={12} className="text-white"/>}
+    </div>
+
+    {hasComments && (
+      <button 
+        onClick={(e) => { e.stopPropagation(); onCommentClick(); }}
+        className="absolute top-2 right-2 p-1 bg-slate-900/80 rounded-full text-blue-400 hover:text-white hover:bg-blue-600 transition-colors z-10"
+      >
+        <MessageSquare size={12} fill="currentColor" className="opacity-80"/>
+      </button>
+    )}
+
+    <div className="w-16 h-14 flex items-center justify-center relative bg-white rounded-lg shadow-sm overflow-hidden">
+      <div className="absolute top-0 left-0 w-full h-1 bg-yellow-400"></div>
+      {item.status === 'creating' ? <Loader2 size={20} className="animate-spin text-slate-400"/> : (
+        <div className="p-1.5 text-[6px] text-slate-800 w-full h-full overflow-hidden text-left font-mono leading-tight opacity-70">
+          {item.content || "No content..."}
+        </div>
+      )}
+    </div>
+
+    <span className={`text-[11px] font-medium text-center leading-tight line-clamp-2 px-1 rounded ${selected ? 'text-blue-200' : 'text-slate-300'}`}>
+      {item.name.replace('.txt','')}
+    </span>
+  </div>
+);
+
+const ImageItem = ({ item, hasComments, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect, onCommentClick }: any) => (
+  <div 
+    id={`item-${item.id}`}
+    data-item-id={item.id}
+    onClick={(e) => onClick(e, item)}
+    onDoubleClick={(e) => onDoubleClick(e, item)}
+    onContextMenu={(e) => onContextMenu(e, item)}
+    className={`relative group p-2 rounded-xl border transition-all duration-200 flex flex-col items-center gap-2 select-none cursor-pointer
+      ${selected ? 'bg-blue-600/20 border-blue-500/50 shadow-lg' : 'bg-slate-800/40 border-slate-700/50 hover:bg-slate-800'}
+    `}
+  >
+    <div 
+      onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}
+      className={`selection-checkbox absolute top-2 left-2 w-5 h-5 rounded-full border border-slate-500 flex items-center justify-center transition-all z-10
+        ${selected ? 'bg-blue-500 border-blue-500 opacity-100' : 'bg-slate-900/50 opacity-0 group-hover:opacity-100 hover:bg-slate-700'}
+      `}
+    >
+      {selected && <CheckCheck size={12} className="text-white"/>}
+    </div>
+
+    {hasComments && (
+      <button 
+        onClick={(e) => { e.stopPropagation(); onCommentClick(); }}
+        className="absolute top-2 right-2 p-1 bg-slate-900/80 rounded-full text-blue-400 hover:text-white hover:bg-blue-600 transition-colors z-10"
+      >
+        <MessageSquare size={12} fill="currentColor" className="opacity-80"/>
+      </button>
+    )}
+
+    <div className="w-16 h-14 flex items-center justify-center relative bg-slate-950 rounded-lg overflow-hidden border border-slate-800">
+      {item.status === 'uploading' ? (
+        <div className="absolute inset-0 flex items-center justify-center bg-slate-900/80"><Loader2 size={20} className="animate-spin text-blue-500"/></div>
+      ) : (
+        <>
+           <img 
+            src={item.thumbnail || item.url} 
+            className="w-full h-full object-cover" 
+            loading="lazy" 
+            referrerPolicy="no-referrer"
+            onError={(e) => { e.currentTarget.style.display='none'; }}
+           />
+           <ImageIcon size={20} className="text-slate-700 absolute -z-10"/>
+        </>
+      )}
+    </div>
+
+    <span className={`text-[11px] font-medium text-center leading-tight line-clamp-2 px-1 rounded ${selected ? 'text-blue-200' : 'text-slate-300'}`}>
+      {item.name}
+    </span>
+  </div>
+);
+
 // --- YOUTUBE APP COMPONENT ---
 const YouTubeApp = ({ customKeys }: { customKeys?: string[] }) => {
   const [searchQuery, setSearchQuery] = useState("");
@@ -309,7 +452,7 @@ const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId }: any
     let cleanUrl = appUrl.startsWith('http') || appUrl.startsWith('internal') ? appUrl : `https://${appUrl}`;
     
     if (useProxy && !cleanUrl.startsWith('internal')) {
-        cleanUrl = `https://corsproxy.io/?${encodeURIComponent(cleanUrl)}`;
+        cleanUrl = `https://api.allorigins.win/raw?url=${encodeURIComponent(cleanUrl)}`;
     }
 
     const newApp = {
@@ -1342,7 +1485,7 @@ const App = () => {
                  {win.appId === 'file-explorer' ? <Folder size={14}/> : 
                   (win.appId === 'app-store' || win.appId === 'store') ? <ShoppingBag size={14}/> : 
                   win.appId === 'settings' ? <Settings size={14}/> : 
-                  win.appId === 'youtube' ? <Youtube size={14} className="text-red-500"/> :
+                  win.appId === 'youtube' ? <Youtube size={14}/> :
                   win.appData.icon === 'image' ? <ImageIcon size={14}/> : <Globe size={14}/>}
                </div>
                <span className="text-[10px] font-bold text-slate-300 tracking-wide uppercase">{win.title}</span>
@@ -1626,22 +1769,5 @@ const App = () => {
     </div>
   );
 };
-
-// --- HELPER ITEM COMPONENTS ---
-interface ItemComponentProps { item: Item; selected: boolean; hasComments?: boolean; onClick: (e: React.MouseEvent, item: Item) => void; onDoubleClick: (e: React.MouseEvent, item: Item) => void; onContextMenu: (e: React.MouseEvent | React.PointerEvent, item: Item) => void; onToggleSelect: () => void; onCommentClick?: () => void; }
-const ItemOverlay = ({ status }: { status?: string }) => { 
-    if (!status || status === 'idle') return null; 
-    return ( 
-        <div className="absolute inset-0 bg-black/60 backdrop-blur-sm z-[90] flex flex-col items-center justify-center rounded-xl"> 
-            <Loader2 size={24} className="text-blue-400 animate-spin mb-1" />
-            <span className="text-[10px] font-bold text-white uppercase tracking-wider">
-                {status === 'creating' ? 'loading' : status}
-            </span> 
-        </div> 
-    ); 
-};
-const FolderItem: React.FC<ItemComponentProps & { isRecycleBin?: boolean; isSystem?: boolean; isDropTarget?: boolean }> = ({ item, selected, hasComments, onClick, onDoubleClick, onContextMenu, onToggleSelect, onCommentClick, isRecycleBin, isSystem, isDropTarget }) => ( <div id={`item-${item.id}`} data-folder-id={item.id} data-item-id={item.id} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => onContextMenu(e, item)} className={`group relative p-4 rounded-xl border transition-all cursor-default flex flex-col items-center gap-2 ${isDropTarget ? 'bg-blue-500/40 border-blue-400 scale-105' : selected ? 'bg-blue-500/20 border-blue-500 shadow-md ring-1 ring-blue-500' : 'bg-slate-900 border-slate-800 hover:bg-slate-800'}`}> <ItemOverlay status={item.status} /> {hasComments && <button onClick={(e)=>{e.stopPropagation(); onCommentClick?.();}} className="absolute bottom-1.5 right-1.5 p-1 bg-blue-600 rounded-full z-30"><MessageSquare size={10} fill="white"/></button>} <div className={`absolute top-2 left-2 z-20 ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><CheckSquare size={16} className={selected ? "text-blue-500" : "text-slate-500"} onClick={(e)=>{e.stopPropagation(); onToggleSelect();}}/></div> <Folder size={40} className={`${isRecycleBin ? 'text-red-500' : isSystem ? 'text-slate-500' : 'text-blue-500'} drop-shadow-md`}/> <span className="text-[10px] font-bold text-center truncate w-full px-1 text-slate-300">{item.name}</span> </div> );
-const NoteItem: React.FC<ItemComponentProps> = ({ item, selected, hasComments, onClick, onDoubleClick, onContextMenu, onToggleSelect, onCommentClick }) => ( <div id={`item-${item.id}`} data-item-id={item.id} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => onContextMenu(e, item)} className={`group relative p-4 rounded-xl border transition-all cursor-default flex flex-col gap-2 aspect-square ${selected ? 'bg-[#fff9c4] border-blue-500 ring-2 ring-blue-500' : 'bg-[#fff9c4] border-transparent'}`}> <ItemOverlay status={item.status} /> {hasComments && <button onClick={(e)=>{e.stopPropagation(); onCommentClick?.();}} className="absolute bottom-1.5 right-1.5 p-1 bg-blue-600 rounded-full z-30"><MessageSquare size={10} fill="white"/></button>} <div className={`absolute top-2 left-2 z-20 ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><CheckSquare size={16} className="text-blue-600" onClick={(e)=>{e.stopPropagation(); onToggleSelect();}}/></div> <div className="flex-1 overflow-hidden"><h4 className="text-[10px] font-bold text-slate-900 border-b border-black/10 pb-1 mb-1 truncate">{item.name}</h4><p className="text-[9px] text-slate-800 line-clamp-5">{stripHtml(item.content || item.snippet || "")}</p></div> </div> );
-const ImageItem: React.FC<ItemComponentProps> = ({ item, selected, hasComments, onClick, onDoubleClick, onContextMenu, onToggleSelect, onCommentClick }) => ( <div id={`item-${item.id}`} data-item-id={item.id} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => onContextMenu(e, item)} className={`group relative rounded-xl border transition-all cursor-default overflow-hidden aspect-square flex flex-col items-center justify-center bg-slate-950 ${selected ? 'border-blue-500 ring-1 ring-blue-500' : 'border-slate-800'}`}> <ItemOverlay status={item.status} /> {hasComments && <button onClick={(e)=>{e.stopPropagation(); onCommentClick?.();}} className="absolute bottom-1.5 right-1.5 p-1 bg-blue-600 rounded-full z-30"><MessageSquare size={10} fill="white"/></button>} <div className={`absolute top-2 left-2 z-20 ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><CheckSquare size={16} className="text-blue-500" onClick={(e)=>{e.stopPropagation(); onToggleSelect();}}/></div> {item.thumbnail || item.url ? <img src={item.thumbnail || item.url} className="w-full h-full object-cover" loading="lazy" referrerPolicy="no-referrer" /> : <ImageIcon size={24} className="text-slate-600" />} <div className="absolute bottom-0 left-0 right-0 bg-black/60 p-1 truncate"><span className="text-[8px] font-bold text-slate-200 block text-center truncate">{item.name}</span></div> </div> );
 
 export default App;
