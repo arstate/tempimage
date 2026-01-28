@@ -584,7 +584,6 @@ const App = () => {
       parentId: replyingTo || undefined
     };
 
-    // Update locally immediately
     const nextComments = { ...commentsRef.current };
     if (!nextComments[modal.targetItem.id]) nextComments[modal.targetItem.id] = [];
     nextComments[modal.targetItem.id].push(newComment);
@@ -592,7 +591,6 @@ const App = () => {
     setComments(nextComments);
 
     try {
-        // Force immediate sync to cloud
         await triggerCommentSync(true);
         setCommentText('');
         setReplyingTo(null);
@@ -602,6 +600,56 @@ const App = () => {
     } finally {
         setIsPostingComment(false);
     }
+  };
+
+  const handleDeleteIndividualComment = async (itemId: string, commentId: string) => {
+    setIsPostingComment(true);
+    try {
+        const nextComments = { ...commentsRef.current };
+        if (nextComments[itemId]) {
+            // Delete comment and all its replies
+            nextComments[itemId] = nextComments[itemId].filter(c => c.id !== commentId && c.parentId !== commentId);
+            commentsRef.current = nextComments;
+            setComments(nextComments);
+            await triggerCommentSync(true);
+            addNotification("Komentar dihapus", "success");
+        }
+    } catch (e) {
+        addNotification("Gagal menghapus komentar", "error");
+    } finally {
+        setIsPostingComment(false);
+    }
+  };
+
+  const handleClearAllComments = async (itemId: string) => {
+    setModal({
+        type: 'confirm',
+        title: 'Hapus Semua Komentar?',
+        message: 'Tindakan ini akan menghapus seluruh percakapan di item ini secara permanen.',
+        confirmText: 'Hapus Semua',
+        isDanger: true,
+        onConfirm: async () => {
+            setIsPostingComment(true);
+            setModal(null);
+            try {
+                const nextComments = { ...commentsRef.current };
+                delete nextComments[itemId];
+                commentsRef.current = nextComments;
+                setComments(nextComments);
+                await triggerCommentSync(true);
+                addNotification("Seluruh komentar dibersihkan", "success");
+                // Re-open comment modal for the same item but empty
+                const target = items.find(i => i.id === itemId);
+                if (target) {
+                    setModal({ type: 'comment', title: `Komentar: ${target.name}`, targetItem: target });
+                }
+            } catch (e) {
+                addNotification("Gagal membersihkan komentar", "error");
+            } finally {
+                setIsPostingComment(false);
+            }
+        }
+    });
   };
 
   const downloadWithProgress = async (url: string, name: string, isImage: boolean) => {
@@ -1063,22 +1111,34 @@ const App = () => {
                 {isPostingComment && (
                     <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-md z-[200] flex flex-col items-center justify-center animate-in fade-in">
                         <Loader2 size={48} className="animate-spin text-blue-500 mb-4" />
-                        <h4 className="text-lg font-bold text-white tracking-widest uppercase">Memposting Komentar...</h4>
-                        <p className="text-slate-400 text-sm mt-2 italic">Harap tunggu hingga tersinkron ke Cloud</p>
+                        <h4 className="text-lg font-bold text-white tracking-widest uppercase">Processing...</h4>
+                        <p className="text-slate-400 text-sm mt-2 italic">Menyinkronkan dengan Cloud</p>
                     </div>
                 )}
 
                 <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950">
                   <div className="flex items-center gap-3">
                     <h3 className="text-lg font-bold flex items-center gap-2"><MessageSquare className="text-blue-400" size={20}/> {modal.title}</h3>
-                    <button 
-                        onClick={handleRefreshComments}
-                        disabled={isRefreshingComments || isPostingComment}
-                        className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-400 transition-colors disabled:opacity-30"
-                        title="Refresh Komentar"
-                    >
-                        <RefreshCw size={16} className={isRefreshingComments ? 'animate-spin' : ''}/>
-                    </button>
+                    <div className="flex items-center gap-1">
+                        <button 
+                            onClick={handleRefreshComments}
+                            disabled={isRefreshingComments || isPostingComment}
+                            className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-400 transition-colors disabled:opacity-30"
+                            title="Refresh Komentar"
+                        >
+                            <RefreshCw size={16} className={isRefreshingComments ? 'animate-spin' : ''}/>
+                        </button>
+                        {modal.targetItem && comments[modal.targetItem.id]?.length > 0 && (
+                            <button 
+                                onClick={() => handleClearAllComments(modal.targetItem!.id)}
+                                disabled={isPostingComment}
+                                className="p-1.5 hover:bg-red-500/10 rounded-lg text-red-500/70 hover:text-red-500 transition-colors disabled:opacity-30"
+                                title="Hapus Semua Komentar"
+                            >
+                                <Trash2 size={16}/>
+                            </button>
+                        )}
+                    </div>
                   </div>
                   {!isPostingComment && (
                     <button onClick={() => { setModal(null); setReplyingTo(null); }} className="p-2 hover:bg-slate-800 rounded-lg text-slate-400"><X size={20}/></button>
@@ -1094,8 +1154,8 @@ const App = () => {
                     </div>
                   ) : (
                     modal.targetItem && [...(comments[modal.targetItem.id] || [])]
-                      .sort((a,b) => b.timestamp - a.timestamp) // Show newest main comments first
-                      .filter(c => !c.parentId) // Main comments
+                      .sort((a,b) => b.timestamp - a.timestamp) 
+                      .filter(c => !c.parentId) 
                       .map(comment => (
                         <div key={comment.id} className="space-y-3">
                           {/* Main Comment Bubble */}
@@ -1104,10 +1164,19 @@ const App = () => {
                               {comment.author[0].toUpperCase()}
                             </div>
                             <div className="flex-1">
-                              <div className="bg-slate-800 p-3 rounded-2xl rounded-tl-none border border-slate-700 shadow-sm">
+                              <div className="bg-slate-800 p-3 rounded-2xl rounded-tl-none border border-slate-700 shadow-sm relative group/bubble">
                                 <div className="flex items-center justify-between mb-1">
                                   <span className="text-sm font-bold text-blue-400">{comment.author}</span>
-                                  <span className="text-[10px] text-slate-500 flex items-center gap-1"><Clock size={10}/> {new Date(comment.timestamp).toLocaleString()}</span>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-[10px] text-slate-500 flex items-center gap-1"><Clock size={10}/> {new Date(comment.timestamp).toLocaleString()}</span>
+                                    <button 
+                                        onClick={() => handleDeleteIndividualComment(modal.targetItem!.id, comment.id)}
+                                        className="opacity-0 group-hover/bubble:opacity-100 text-red-400/50 hover:text-red-400 transition-all p-0.5"
+                                        title="Hapus Komentar"
+                                    >
+                                        <Trash2 size={12}/>
+                                    </button>
+                                  </div>
                                 </div>
                                 <p className="text-sm text-slate-200">{comment.text}</p>
                               </div>
@@ -1124,16 +1193,25 @@ const App = () => {
                           {/* Replies */}
                           {(comments[modal.targetItem!.id] || [])
                             .filter(r => r.parentId === comment.id)
-                            .sort((a,b) => a.timestamp - b.timestamp) // Sort replies chronologically
+                            .sort((a,b) => a.timestamp - b.timestamp) 
                             .map(reply => (
                               <div key={reply.id} className="flex gap-3 ml-11">
                                 <div className="w-6 h-6 rounded-full bg-slate-700 flex items-center justify-center text-white text-[10px] font-bold flex-shrink-0">
                                   {reply.author[0].toUpperCase()}
                                 </div>
-                                <div className="flex-1 bg-slate-800/40 p-2.5 rounded-xl rounded-tl-none border border-slate-700/50 shadow-sm">
+                                <div className="flex-1 bg-slate-800/40 p-2.5 rounded-xl rounded-tl-none border border-slate-700/50 shadow-sm group/reply">
                                   <div className="flex items-center justify-between mb-1">
                                     <span className="text-xs font-bold text-slate-300">{reply.author}</span>
-                                    <span className="text-[9px] text-slate-500">{new Date(reply.timestamp).toLocaleString()}</span>
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-[9px] text-slate-500">{new Date(reply.timestamp).toLocaleString()}</span>
+                                        <button 
+                                            onClick={() => handleDeleteIndividualComment(modal.targetItem!.id, reply.id)}
+                                            className="opacity-0 group-hover/reply:opacity-100 text-red-400/50 hover:text-red-400 transition-all"
+                                            title="Hapus Balasan"
+                                        >
+                                            <Trash2 size={10}/>
+                                        </button>
+                                    </div>
                                   </div>
                                   <p className="text-xs text-slate-300">{reply.text}</p>
                                 </div>
