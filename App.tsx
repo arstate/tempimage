@@ -219,20 +219,26 @@ const App = () => {
     setTimeout(() => { setNotifications(prev => prev.filter(n => n.id !== id)); }, 3000);
   };
 
-  const prefetchNoteContents = async (folderId: string, notesToFetch: Item[]) => {
-      if (notesToFetch.length === 0) return;
-      for (const note of notesToFetch) {
-          if (folderId !== activeFolderIdRef.current) return;
-          try {
-              if (!note.content) {
-                  const content = await API.getFileContent(note.id);
-                  const updatedItem = { ...note, content: content };
-                  await DB.updateItemInCache(folderId, updatedItem);
-                  if (folderId === activeFolderIdRef.current) setItems(prevItems => prevItems.map(i => i.id === note.id ? updatedItem : i));
-              }
-          } catch (e) {}
+  // --- PREFETCH NOTE CONTENTS ---
+  /**
+   * Mengambil konten catatan di latar belakang untuk mempercepat UX saat membuka catatan.
+   * Konten yang didapat akan diupdate ke local state items dan IndexedDB cache.
+   */
+  const prefetchNoteContents = useCallback(async (folderId: string, notes: Item[]) => {
+    for (const note of notes) {
+      try {
+        const content = await API.getFileContent(note.id);
+        const updatedItem = { ...note, content };
+        await DB.updateItemInCache(folderId, updatedItem);
+        // Pastikan kita masih di folder yang sama sebelum update state
+        if (activeFolderIdRef.current === folderId) {
+          setItems(prev => prev.map(i => i.id === note.id ? updatedItem : i));
+        }
+      } catch (e) {
+        console.error("Gagal prefetch content catatan:", e);
       }
-  };
+    }
+  }, []);
 
   const loadFolder = useCallback(async (folderId: string = "") => {
     setItems([]); setSelectedIds(new Set()); setLastSelectedId(null);
@@ -265,7 +271,7 @@ const App = () => {
         prefetchNoteContents(folderId, notesMissingContent);
       }
     } catch (e) { if (folderId === activeFolderIdRef.current) setLoading(false); }
-  }, [dbFileId]);
+  }, [dbFileId, prefetchNoteContents]);
 
   useEffect(() => { if (isSystemInitialized && !isNotFound) loadFolder(currentFolderId); }, [currentFolderId, loadFolder, isSystemInitialized, isNotFound]);
 
@@ -375,9 +381,9 @@ const App = () => {
               const idsToMove = selectedIds.size > 0 ? Array.from(selectedIds) : [currentDrag.id];
               const targetName = items.find(i => i.id === targetId)?.name || "Folder";
               
-              // OPTIMISTIC: Beri overlay 'deleting' atau hapus sementara dari view
+              // OPTIMISTIC: Status moving
               const backupItems = [...items];
-              setItems(prev => prev.map(item => idsToMove.includes(item.id) ? { ...item, status: 'deleting' } : item));
+              setItems(prev => prev.map(item => idsToMove.includes(item.id) ? { ...item, status: 'moving' } : item));
               
               const notifId = addNotification(`Memindahkan ${idsToMove.length} item ke ${targetName}...`, 'loading');
               try {
@@ -540,7 +546,7 @@ const App = () => {
   };
 
   const executeAction = async (action: string) => {
-      if (!contextMenu && action !== 'paste' && selectedIds.size === 0) return;
+      if (!contextMenu && action !== 'paste' && selectedIds.size === 0 && action !== 'new_folder') return;
       const item = contextMenu?.targetItem;
       const ids = selectedIds.size > 0 ? Array.from(selectedIds) : (item ? [item.id] : []);
       setContextMenu(null);
@@ -554,7 +560,7 @@ const App = () => {
                           setModal(null);
                           const tempId = 'temp-' + Date.now();
                           const optimisticFolder: Item = { 
-                            id: tempId, name: name, type: 'folder', lastUpdated: Date.now(), status: 'restoring' 
+                            id: tempId, name: name, type: 'folder', lastUpdated: Date.now(), status: 'creating' 
                           };
                           
                           // OPTIMISTIC: Munculkan langsung
@@ -671,7 +677,7 @@ const App = () => {
                           const backupItems = [...items];
                           
                           // OPTIMISTIC: Status moving
-                          setItems(prev => prev.map(item => ids.includes(item.id) ? { ...item, status: 'deleting' } : item));
+                          setItems(prev => prev.map(item => ids.includes(item.id) ? { ...item, status: 'moving' } : item));
                           const notifId = addNotification(`Memindahkan ke ${targetName}...`, 'loading');
                           
                           try {
@@ -847,13 +853,34 @@ interface ItemComponentProps {
   onToggleSelect: () => void;
 }
 
-const ItemOverlay = ({ status }: { status?: string }) => { if (!status || status === 'idle') return null; return ( <div className="absolute inset-0 bg-black/60 backdrop-blur-sm z-20 flex flex-col items-center justify-center rounded-xl animate-in fade-in"><Loader2 size={24} className="text-blue-400 animate-spin mb-1" /><span className="text-[10px] font-bold text-white uppercase tracking-wider">{status === 'deleting' ? 'Deleting...' : 'Restoring...'}</span></div> ); };
-const DragHandle = ({ item }: { item: Item }) => { return (<div className="absolute top-2 right-10 z-20 opacity-0 group-hover:opacity-100 transition-opacity p-2 bg-slate-800/80 rounded-lg hover:bg-slate-700 cursor-grab active:cursor-grabbing text-slate-400 item-handle backdrop-blur-sm border border-slate-600/30 shadow-lg" draggable={true} onDragStart={(e: React.DragEvent) => { e.dataTransfer.setData("text/item-id", item.id); if (item.type === 'note' && item.content) e.dataTransfer.setData("text/plain", stripHtml(item.content)); e.stopPropagation(); }}><GripVertical size={18} /></div>); };
-const MoreBtn = ({ onTrigger }: { onTrigger: (e: React.MouseEvent | React.PointerEvent) => void }) => ( <button className="absolute top-2 right-2 z-20 opacity-0 group-hover:opacity-100 transition-opacity p-2 bg-slate-800/80 rounded-lg hover:bg-slate-700 text-slate-400 hover:text-white backdrop-blur-sm border border-slate-600/30 shadow-lg" onPointerDown={(e) => { e.stopPropagation(); onTrigger(e); }} onClick={(e) => { e.stopPropagation(); onTrigger(e); }} title="Lainnya"><MoreVertical size={18} /></button> );
+const ItemOverlay = ({ status }: { status?: string }) => { 
+  if (!status || status === 'idle') return null; 
+  const label = status === 'creating' ? 'New Folder...' : 
+                status === 'moving' ? 'Moving...' : 
+                status === 'deleting' ? 'Deleting...' : 
+                status === 'restoring' ? 'Restoring...' : 'Loading...';
+  return ( 
+    <div className="absolute inset-0 bg-black/60 backdrop-blur-sm z-20 flex flex-col items-center justify-center rounded-xl animate-in fade-in">
+      <Loader2 size={24} className="text-blue-400 animate-spin mb-1" />
+      <span className="text-[10px] font-bold text-white uppercase tracking-wider">{label}</span>
+    </div> 
+  ); 
+};
 
-const FolderItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect, isRecycleBin, isSystem, isDropTarget }: ItemComponentProps & { isRecycleBin?: boolean; isSystem?: boolean; isDropTarget?: boolean }) => ( <div id={`item-${item.id}`} data-folder-id={item.id} data-item-id={item.id} draggable={false} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} style={{ touchAction: 'pan-y' }} className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col items-center gap-2 item-clickable select-none ${isDropTarget ? 'bg-blue-500/40 border-blue-400 scale-105 shadow-xl ring-2 ring-blue-400 z-30' : selected ? 'bg-blue-500/20 border-blue-500 shadow-md ring-1 ring-blue-500' : 'bg-slate-900 border-slate-800 hover:bg-slate-800 hover:border-slate-600'}`}> <ItemOverlay status={item.status} /> <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/></div> {!isRecycleBin && !isSystem && <><DragHandle item={item} /><MoreBtn onTrigger={(e) => onContextMenu(e, item)} /></>} {isRecycleBin ? (<Trash2 size={48} className="text-red-500 fill-red-500/10 drop-shadow-md pointer-events-none" />) : isSystem ? (<div className="relative"><Folder size={48} className="text-slate-500 fill-slate-500/10 drop-shadow-md pointer-events-none" /><Lock size={16} className="absolute bottom-0 right-0 text-amber-400 bg-slate-900 rounded-full p-0.5 border border-slate-800" /></div>) : (<Folder size={48} className="text-blue-500 fill-blue-500/10 drop-shadow-md pointer-events-none" />)} <span className={`text-xs font-medium text-center truncate w-full px-1 ${isRecycleBin ? 'text-red-400' : isSystem ? 'text-slate-400' : 'text-slate-200'}`}>{item.name}</span> </div> );
-const NoteItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }: ItemComponentProps) => { const isDBFile = item.name.includes(DB_FILENAME_BASE); const cleanText = stripHtml(item.content || item.snippet || "").slice(0, 150); return ( <div id={`item-${item.id}`} data-item-id={item.id} draggable={false} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} style={{ touchAction: 'pan-y' }} className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col gap-2 item-clickable select-none aspect-square shadow-lg hover:shadow-xl hover:-translate-y-1 hover:rotate-1 duration-200 ${selected ? 'bg-yellow-200 border-blue-500 ring-2 ring-blue-500 scale-[1.02] z-10' : isDBFile ? 'bg-slate-800 border-slate-700 hover:border-blue-500/50' : 'bg-[#fff9c4] border-transparent hover:border-yellow-300'}`}> <ItemOverlay status={item.status} /> <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><CheckSquare size={18} className={selected ? "text-blue-600 bg-white rounded shadow-sm" : "text-slate-600/50 hover:text-slate-900"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/></div> <DragHandle item={item} /><MoreBtn onTrigger={(e) => onContextMenu(e, item)} /> {isDBFile ? (<div className="flex-1 w-full flex flex-col items-center justify-center text-slate-400"><Database size={32} className="mb-2 text-blue-500" /><span className="text-xs font-mono font-bold text-center break-all">{item.name}</span></div>) : (<><div className="flex-1 w-full overflow-hidden flex flex-col"><h4 className="text-sm font-bold text-slate-900 mb-1.5 truncate border-b border-slate-800/10 pb-1">{item.name.replace('.txt', '')}</h4><p className="text-xs text-slate-800/90 leading-relaxed font-sans font-medium break-words whitespace-pre-wrap line-clamp-6">{cleanText || <span className="italic text-slate-500">Kosong...</span>}</p></div><div className="flex items-center justify-between w-full pt-2 mt-auto opacity-50"><FileText size={10} className="text-slate-600" /><span className="text-[9px] text-slate-600">{new Date(item.lastUpdated).toLocaleDateString()}</span></div></>)} </div> ); };
-const ImageItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }: ItemComponentProps) => ( <div id={`item-${item.id}`} data-item-id={item.id} draggable={false} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} style={{ touchAction: 'pan-y' }} className={`group relative rounded-xl border transition-all cursor-pointer overflow-hidden aspect-square flex flex-col items-center justify-center bg-slate-950 item-clickable select-none ${selected ? 'border-blue-500 shadow-md ring-1 ring-blue-500' : 'border-slate-800 hover:border-slate-600'}`}> <ItemOverlay status={item.status} /> <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300 shadow-sm"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/></div> <DragHandle item={item} /><MoreBtn onTrigger={(e) => onContextMenu(e, item)} /> {item.thumbnail || item.url ? (<img src={item.thumbnail || item.url} alt={item.name} className="w-full h-full object-cover pointer-events-none" loading="lazy" referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.style.display = 'none'; e.currentTarget.parentElement?.classList.add('bg-slate-800'); }} />) : (<ImageIcon size={32} className="text-slate-600 pointer-events-none" />)} <div className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm p-1.5 truncate pointer-events-none"><span className="text-[10px] font-medium text-slate-200 block text-center truncate">{item.name}</span></div> </div> );
+const MoreBtn = ({ onTrigger, selected }: { onTrigger: (e: React.MouseEvent | React.PointerEvent) => void, selected?: boolean }) => ( 
+  <button 
+    className={`absolute top-2 right-2 z-20 transition-opacity p-2 bg-slate-800/80 rounded-lg hover:bg-slate-700 text-slate-400 hover:text-white backdrop-blur-sm border border-slate-600/30 shadow-lg ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`} 
+    onPointerDown={(e) => { e.stopPropagation(); onTrigger(e); }} 
+    onClick={(e) => { e.stopPropagation(); onTrigger(e); }} 
+    title="Lainnya"
+  >
+    <MoreVertical size={18} />
+  </button> 
+);
+
+const FolderItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect, isRecycleBin, isSystem, isDropTarget }: ItemComponentProps & { isRecycleBin?: boolean; isSystem?: boolean; isDropTarget?: boolean }) => ( <div id={`item-${item.id}`} data-folder-id={item.id} data-item-id={item.id} draggable={false} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} style={{ touchAction: 'pan-y' }} className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col items-center gap-2 item-clickable select-none ${isDropTarget ? 'bg-blue-500/40 border-blue-400 scale-105 shadow-xl ring-2 ring-blue-400 z-30' : selected ? 'bg-blue-500/20 border-blue-500 shadow-md ring-1 ring-blue-500' : 'bg-slate-900 border-slate-800 hover:bg-slate-800 hover:border-slate-600'}`}> <ItemOverlay status={item.status} /> <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/></div> {!isRecycleBin && !isSystem && <MoreBtn onTrigger={(e) => onContextMenu(e, item)} selected={selected} />} {isRecycleBin ? (<Trash2 size={48} className="text-red-500 fill-red-500/10 drop-shadow-md pointer-events-none" />) : isSystem ? (<div className="relative"><Folder size={48} className="text-slate-500 fill-slate-500/10 drop-shadow-md pointer-events-none" /><Lock size={16} className="absolute bottom-0 right-0 text-amber-400 bg-slate-900 rounded-full p-0.5 border border-slate-800" /></div>) : (<Folder size={48} className="text-blue-500 fill-blue-500/10 drop-shadow-md pointer-events-none" />)} <span className={`text-xs font-medium text-center truncate w-full px-1 ${isRecycleBin ? 'text-red-400' : isSystem ? 'text-slate-400' : 'text-slate-200'}`}>{item.name}</span> </div> );
+const NoteItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }: ItemComponentProps) => { const isDBFile = item.name.includes(DB_FILENAME_BASE); const cleanText = stripHtml(item.content || item.snippet || "").slice(0, 150); return ( <div id={`item-${item.id}`} data-item-id={item.id} draggable={false} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} style={{ touchAction: 'pan-y' }} className={`group relative p-4 rounded-xl border transition-all cursor-pointer flex flex-col gap-2 item-clickable select-none aspect-square shadow-lg hover:shadow-xl hover:-translate-y-1 hover:rotate-1 duration-200 ${selected ? 'bg-yellow-200 border-blue-500 ring-2 ring-blue-500 scale-[1.02] z-10' : isDBFile ? 'bg-slate-800 border-slate-700 hover:border-blue-500/50' : 'bg-[#fff9c4] border-transparent hover:border-yellow-300'}`}> <ItemOverlay status={item.status} /> <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><CheckSquare size={18} className={selected ? "text-blue-600 bg-white rounded shadow-sm" : "text-slate-600/50 hover:text-slate-900"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/></div> <MoreBtn onTrigger={(e) => onContextMenu(e, item)} selected={selected} /> {isDBFile ? (<div className="flex-1 w-full flex flex-col items-center justify-center text-slate-400"><Database size={32} className="mb-2 text-blue-500" /><span className="text-xs font-mono font-bold text-center break-all">{item.name}</span></div>) : (<><div className="flex-1 w-full overflow-hidden flex flex-col"><h4 className="text-sm font-bold text-slate-900 mb-1.5 truncate border-b border-slate-800/10 pb-1">{item.name.replace('.txt', '')}</h4><p className="text-xs text-slate-800/90 leading-relaxed font-sans font-medium break-words whitespace-pre-wrap line-clamp-6">{cleanText || <span className="italic text-slate-500">Kosong...</span>}</p></div><div className="flex items-center justify-between w-full pt-2 mt-auto opacity-50"><FileText size={10} className="text-slate-600" /><span className="text-[9px] text-slate-600">{new Date(item.lastUpdated).toLocaleDateString()}</span></div></>)} </div> ); };
+const ImageItem = ({ item, selected, onClick, onDoubleClick, onContextMenu, onToggleSelect }: ItemComponentProps) => ( <div id={`item-${item.id}`} data-item-id={item.id} draggable={false} onClick={(e) => onClick(e, item)} onDoubleClick={(e) => onDoubleClick(e, item)} onContextMenu={(e) => { e.stopPropagation(); onContextMenu(e, item); }} style={{ touchAction: 'pan-y' }} className={`group relative rounded-xl border transition-all cursor-pointer overflow-hidden aspect-square flex flex-col items-center justify-center bg-slate-950 item-clickable select-none ${selected ? 'border-blue-500 shadow-md ring-1 ring-blue-500' : 'border-slate-800 hover:border-slate-600'}`}> <ItemOverlay status={item.status} /> <div className={`absolute top-2 left-2 z-20 transition-opacity selection-checkbox ${selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}><CheckSquare size={18} className={selected ? "text-blue-500 bg-slate-900 rounded" : "text-slate-500 hover:text-slate-300 shadow-sm"} onClick={(e) => { e.stopPropagation(); onToggleSelect(); }}/></div> <MoreBtn onTrigger={(e) => onContextMenu(e, item)} selected={selected} /> {item.thumbnail || item.url ? (<img src={item.thumbnail || item.url} alt={item.name} className="w-full h-full object-cover pointer-events-none" loading="lazy" referrerPolicy="no-referrer" onError={(e) => { e.currentTarget.style.display = 'none'; e.currentTarget.parentElement?.classList.add('bg-slate-800'); }} />) : (<ImageIcon size={32} className="text-slate-600 pointer-events-none" />)} <div className="absolute bottom-0 left-0 right-0 bg-black/60 backdrop-blur-sm p-1.5 truncate pointer-events-none"><span className="text-[10px] font-medium text-slate-200 block text-center truncate">{item.name}</span></div> </div> );
 
 const SelectionFloatingMenu = ({ selectedIds, items, onClear, onSelectAll, onAction, containerRef, isInRecycleBin, recycleBinId, isSystemFolder, systemFolderId }: { selectedIds: Set<string>, items: Item[], onClear: () => void, onSelectAll: () => void, onAction: (a: string) => void, containerRef: React.RefObject<HTMLDivElement>, isInRecycleBin: boolean, recycleBinId: string, isSystemFolder: boolean, systemFolderId: string | null }) => {
     const [pos, setPos] = useState<{top?: number, left?: number, bottom?: number, x?:number}>({ bottom: 24, left: window.innerWidth / 2 }); const [styleType, setStyleType] = useState<'contextual' | 'dock'>('dock'); const menuRef = useRef<HTMLDivElement>(null); 

@@ -34,7 +34,7 @@ export interface Item {
   snippet?: string;
   lastUpdated: number;
   content?: string; // Cache content for notes locally
-  status?: 'idle' | 'deleting' | 'restoring' | 'uploading'; // UI State
+  status?: 'idle' | 'deleting' | 'restoring' | 'uploading' | 'moving' | 'creating'; // UI State
 }
 
 export interface DownloadItem {
