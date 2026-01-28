@@ -1,11 +1,11 @@
 
-import { Item, FolderMap, CommentDB } from '../types';
+import { Item, FolderMap, CommentDB, SystemConfig } from '../types';
 
-// URL Final Baru (File Manager Backend)
-const API_URL = "https://script.google.com/macros/s/AKfycbw-khPTpmPiuUhTzo-vqtkHZTqJ3MLqZtP-btpHLbnBVyJ13Z6k5glBBpMWomP8p6BIog/exec";
+const API_URL = "https://script.google.com/macros/s/AKfycbxppo1lC_7BdI7ToceKqNHRrcr3HljGHNphudbseZSsQbq01XASQ7RtRUEpkDh3RPtPUg/exec";
 
-const DB_FILENAME_KEYWORD = "system_zombio_db"; 
-const COMMENT_DB_FILENAME = "COMENTDATABASE";
+const DB_FILENAME_KEYWORD = "system_zombio_db.json"; 
+const COMMENT_DB_FILENAME = "COMENTDATABASE.json";
+const CONFIG_FILENAME = "system_config.json";
 const SYSTEM_FOLDER_NAME = "System";
 
 interface ApiResponse {
@@ -28,14 +28,12 @@ export const callGoogleScript = async (payload: any): Promise<ApiResponse> => {
     });
 
     const textResult = await response.text();
-    
     try {
       return JSON.parse(textResult);
     } catch (e) {
       console.error("Non-JSON Response received:", textResult);
       throw new Error("Server merespon dengan format yang salah.");
     }
-
   } catch (error) {
     console.error("Fetch Error:", error);
     throw new Error(error instanceof Error ? error.message : "Gagal menghubungi server Google.");
@@ -49,6 +47,19 @@ export const fileToBase64 = (file: File | Blob): Promise<string> => {
     reader.onload = () => resolve(reader.result as string);
     reader.onerror = error => reject(error);
   });
+};
+
+// --- SYSTEM CONFIG ACTIONS ---
+
+export const getSystemConfig = async (): Promise<SystemConfig> => {
+  const res = await callGoogleScript({ action: "getSystemConfig" });
+  if (res.status === 'success') return res.data;
+  throw new Error(res.message || "Gagal memuat konfigurasi sistem.");
+};
+
+export const saveSystemConfig = async (config: SystemConfig): Promise<void> => {
+  const res = await callGoogleScript({ action: "saveSystemConfig", config });
+  if (res.status !== 'success') throw new Error(res.message);
 };
 
 // --- FILE MANAGER API ACTIONS ---
