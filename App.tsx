@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { 
   Folder, FileText, Image as ImageIcon, MoreVertical, 
@@ -1433,10 +1432,7 @@ const App = () => {
     <div className="fixed inset-0 w-full h-[100dvh] overflow-hidden bg-slate-900 select-none font-sans touch-none" 
          style={{ backgroundImage: `url(${config?.wallpaper})`, backgroundSize: 'cover', backgroundPosition: 'center' }}
          onPointerDown={() => setGlobalContextMenu(null)}
-         onContextMenu={(e) => {
-             e.preventDefault();
-             setGlobalContextMenu({ x: e.clientX, y: e.clientY, type: 'desktop' });
-         }}
+         // Removed onContextMenu from root
     >
       
       {isInteracting && (
@@ -1444,11 +1440,23 @@ const App = () => {
       )}
 
       {/* DESKTOP ICONS */}
-      <div className="absolute top-0 left-0 bottom-12 w-full p-4 flex flex-col flex-wrap content-start gap-2 z-0">
+      <div className="absolute top-0 left-0 bottom-12 w-full p-4 flex flex-col flex-wrap content-start gap-2 z-0"
+           onContextMenu={(e) => {
+             e.preventDefault();
+             // Since app icons stop propagation, this will only fire when clicking empty space
+             setGlobalContextMenu({ x: e.clientX, y: e.clientY, type: 'desktop' });
+           }}
+      >
         {config?.installedApps.map(app => (
           <div key={app.id} 
                onDoubleClick={() => openApp(app)}
-               onPointerDown={() => { setStartMenuOpen(false); setActiveWindowId(null); }}
+               onPointerDown={(e) => { 
+                 e.stopPropagation(); // Stop propagation to root to handle clicks specifically here
+                 setStartMenuOpen(false); 
+                 setActiveWindowId(null);
+                 // If left click, close context menu
+                 if (e.button === 0) setGlobalContextMenu(null);
+               }}
                onContextMenu={(e) => {
                  e.preventDefault();
                  e.stopPropagation();
