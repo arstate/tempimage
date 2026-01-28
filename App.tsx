@@ -73,11 +73,10 @@ const FileExplorerApp = ({
     executeAction,
     loadFolder,
     selectedIds, setSelectedIds,
-    onContextMenu // Global context menu handler from App.tsx
+    onContextMenu 
 }: any) => {
   const [lastSelectedId, setLastSelectedId] = useState<string | null>(null);
   const [isNewDropdownOpen, setIsNewDropdownOpen] = useState(false);
-  // selectionBox coordinates are now relative to the explorer container
   const [selectionBox, setSelectionBox] = useState<{x:number, y:number, width:number, height:number} | null>(null);
   const [customDragItem, setCustomDragItem] = useState<Item | null>(null);
   const [customDragPos, setCustomDragPos] = useState<{x:number, y:number} | null>(null);
@@ -94,9 +93,9 @@ const FileExplorerApp = ({
      const checkbox = target.closest('.selection-checkbox');
      const itemRow = target.closest('[data-item-id]');
      
-     // Detect right click
      if (e.button === 2) return;
 
+     // Calculate coordinates relative to the explorer container (important for window mode)
      const rect = containerRef.current?.getBoundingClientRect();
      const localX = e.clientX - (rect?.left || 0);
      const localY = e.clientY - (rect?.top || 0);
@@ -151,11 +150,12 @@ const FileExplorerApp = ({
      }
 
      const rect = containerRef.current?.getBoundingClientRect();
-     const currentLocalX = e.clientX - (rect?.left || 0);
-     const currentLocalY = e.clientY - (rect?.top || 0);
+     if (!rect) return;
+     const currentLocalX = e.clientX - rect.left;
+     const currentLocalY = e.clientY - rect.top;
 
      const moveDist = Math.sqrt(Math.pow(currentLocalX - dragStartPos.current.x, 2) + Math.pow(currentLocalY - dragStartPos.current.y, 2));
-     if (moveDist > 8) {
+     if (moveDist > 5) {
          if (longPressTimerRef.current) { clearTimeout(longPressTimerRef.current); longPressTimerRef.current = null; }
          if (!isDragSelecting) { setIsDragSelecting(true); }
          
@@ -170,11 +170,10 @@ const FileExplorerApp = ({
             const el = document.getElementById(`item-${item.id}`);
             if (el) {
                 const itemRect = el.getBoundingClientRect();
-                const containerRect = containerRef.current!.getBoundingClientRect();
-                const relativeItemLeft = itemRect.left - containerRect.left;
-                const relativeItemTop = itemRect.top - containerRect.top;
-                const relativeItemRight = itemRect.right - containerRect.left;
-                const relativeItemBottom = itemRect.bottom - containerRect.top;
+                const relativeItemLeft = itemRect.left - rect.left;
+                const relativeItemTop = itemRect.top - rect.top;
+                const relativeItemRight = itemRect.right - rect.left;
+                const relativeItemBottom = itemRect.bottom - rect.top;
 
                 if (x < relativeItemRight && x + width > relativeItemLeft && y < relativeItemBottom && y + height > relativeItemTop) {
                     newSelected.add(item.id);
@@ -258,7 +257,6 @@ const FileExplorerApp = ({
                 setViewingRawFile({ title: item.name, content: content || "" }); removeNotification(notifId);
             } catch(e) { updateNotification(notifId, 'Failed to open DB', 'error'); }
         } else { 
-            // Show loading overlay on thumbnail while opening
             setItems((prev: Item[]) => prev.map(i => i.id === item.id ? { ...i, status: 'creating' } : i));
             await handleOpenNote(item); 
             setItems((prev: Item[]) => prev.map(i => i.id === item.id ? { ...i, status: 'idle' } : i));
@@ -299,8 +297,7 @@ const FileExplorerApp = ({
          onContextMenu={(e) => localHandleContextMenu(e)}>
       
       {selectionBox && (<div className="absolute z-[150] bg-blue-500/20 border border-blue-400 pointer-events-none" style={{ left: selectionBox.x, top: selectionBox.y, width: selectionBox.width, height: selectionBox.height }} />)}
-      {customDragItem && customDragPos && (<div className="fixed z-[999] pointer-events-none p-3 rounded-lg border border-blue-500 bg-slate-800/90 shadow-2xl flex flex-col items-center gap-2 w-24 backdrop-blur-sm" style={{ left: customDragPos.x, top: customDragPos.y, transform: 'translate(-50%, -50%) rotate(5deg)' }}>{customDragItem.type === 'folder' ? <Folder size={24} className="text-blue-500"/> : customDragItem.type === 'note' ? <FileText size={24} className="text-yellow-500"/> : <ImageIcon size={24} className="text-purple-500"/>}<span className="text-[10px] font-bold text-slate-200 truncate w-full text-center">{selectedIds.size > 1 ? `${selectedIds.size} Items` : customDragItem.name}</span></div>)}
-
+      
       {/* Explorer Header */}
       <div className="flex items-center justify-between p-3 bg-slate-950/50 border-b border-slate-800">
         <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
@@ -437,17 +434,14 @@ const AppStore = ({ installedApps, onInstall, onUninstall }: any) => {
 
 // --- MAIN OS SHELL APP ---
 const App = () => {
-  // OS STATE
   const [config, setConfig] = useState<API.SystemConfig | null>(null);
   const [windows, setWindows] = useState<any[]>([]); 
   const [activeWindowId, setActiveWindowId] = useState<string | null>(null);
   const [startMenuOpen, setStartMenuOpen] = useState(false);
   const [clock, setClock] = useState(new Date());
-  
-  // GLOBAL CONTEXT MENU STATE
   const [globalContextMenu, setGlobalContextMenu] = useState<{x:number, y:number, targetItem?: Item, isRecycleBin?: boolean} | null>(null);
 
-  // FILE EXPLORER SHARED STATE
+  // EXPLORER STATE
   const [currentFolderId, setCurrentFolderId] = useState<string>(""); 
   const [folderHistory, setFolderHistory] = useState<{id:string, name:string}[]>([]);
   const [items, setItems] = useState<Item[]>([]);
@@ -477,6 +471,10 @@ const App = () => {
   const [commentName, setCommentName] = useState(localStorage.getItem('zombio_comment_name') || '');
   const [commentText, setCommentText] = useState('');
   const [isPostingComment, setIsPostingComment] = useState(false);
+
+  // Performance Optimization: Direct DOM Refs
+  const isInteractingRef = useRef(false);
+  const activeWindowRef = useRef<HTMLDivElement | null>(null);
 
   // --- OS BOOT ---
   useEffect(() => {
@@ -525,7 +523,6 @@ const App = () => {
         setIsSystemInitialized(true);
       } catch (e) {
         console.error("Boot Error:", e);
-        setNotifications([{id: 'boot-error', message: 'Boot failure. Please refresh.', type: 'error'}]);
       } finally {
         setIsGlobalLoading(false);
       }
@@ -533,7 +530,6 @@ const App = () => {
     boot();
   }, []);
 
-  // Real-time clock
   useEffect(() => {
     const timer = setInterval(() => setClock(new Date()), 1000);
     return () => clearInterval(timer);
@@ -542,15 +538,9 @@ const App = () => {
   // --- SHARED EXPLORER ACTIONS ---
   const loadFolder = useCallback(async (folderId: string = "") => {
     const cacheKey = folderId || "root";
-    
-    // Check Cache first
     const cached = await DB.getCachedFolder(cacheKey);
-    if (cached) {
-      setItems(cached);
-    } else {
-      setItems([]);
-      setLoading(true);
-    }
+    if (cached) setItems(cached);
+    else { setItems([]); setLoading(true); }
     
     setSelectedIds(new Set());
     try {
@@ -558,16 +548,12 @@ const App = () => {
       if (res.status === 'success') {
         const freshItems: Item[] = (Array.isArray(res.data) ? res.data : []);
         freshItems.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
-        
         if (folderId === "") {
             const bin = freshItems.find(i => i.name === RECYCLE_BIN_NAME && i.type === 'folder');
             if (bin) setRecycleBinId(bin.id);
         }
-        
         setItems(freshItems);
-        // Save to cache
         await DB.cacheFolderContents(cacheKey, freshItems);
-
         const folders = freshItems.filter(i => i.type === 'folder');
         if (folders.length > 0) {
             const nextMap = { ...systemMapRef.current };
@@ -575,7 +561,7 @@ const App = () => {
             systemMapRef.current = nextMap; setSystemMap(nextMap); triggerCloudSync();
         }
       }
-    } catch (e) { console.error("Load folder error", e); } finally { setLoading(false); }
+    } catch (e) { console.error(e); } finally { setLoading(false); }
   }, [systemMap]);
 
   useEffect(() => { if (isSystemInitialized) loadFolder(currentFolderId); }, [currentFolderId, isSystemInitialized]);
@@ -628,10 +614,7 @@ const App = () => {
     if (itemsToDownload.length === 0) return addNotification("Only images can be downloaded", "error");
 
     const newDownloads: DownloadItem[] = itemsToDownload.map(i => ({
-      id: i.id,
-      name: i.name,
-      status: 'pending',
-      progress: 0
+      id: i.id, name: i.name, status: 'pending', progress: 0
     }));
 
     setDownloadQueue(prev => [...prev, ...newDownloads]);
@@ -642,10 +625,10 @@ const App = () => {
             const item = itemsToDownload.find(i => i.id === dItem.id);
             if (!item || !item.url) throw new Error("URL missing");
 
-            // Use wsrv.nl proxy to bypass CORS and download original quality
+            // Use wsrv.nl proxy to bypass CORS and get original quality (high quality download)
             const proxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(item.url)}`;
             const response = await fetch(proxyUrl);
-            if (!response.ok) throw new Error("Fetch failed from proxy");
+            if (!response.ok) throw new Error("Fetch failed");
             
             const blob = await response.blob();
             const blobUrl = URL.createObjectURL(blob);
@@ -657,12 +640,10 @@ const App = () => {
             link.click();
             document.body.removeChild(link);
             
-            setTimeout(() => URL.revokeObjectURL(blobUrl), 200);
-
+            setTimeout(() => URL.revokeObjectURL(blobUrl), 500);
             setDownloadQueue(prev => prev.map(d => d.id === dItem.id ? { ...d, status: 'completed', progress: 100 } : d));
         } catch (e) {
-            console.error("Download error:", e);
-            setDownloadQueue(prev => prev.map(d => d.id === dItem.id ? { ...d, status: 'error', error: 'Failed to download' } : d));
+            setDownloadQueue(prev => prev.map(d => d.id === dItem.id ? { ...d, status: 'error', error: 'Failed' } : d));
         }
     }
   };
@@ -673,7 +654,6 @@ const App = () => {
       case 'comment':
         const targetComment = items.find(i => i.id === ids[0]);
         if(targetComment) {
-          // Add loading state to the target item while comments refresh
           setItems(prev => prev.map(i => i.id === targetComment.id ? { ...i, status: 'creating' } : i));
           await handleRefreshComments();
           setItems(prev => prev.map(i => i.id === targetComment.id ? { ...i, status: 'idle' } : i));
@@ -749,33 +729,83 @@ const App = () => {
   const handleAddComment = async () => {
     if (!commentName.trim() || !commentText.trim() || !modal?.targetItem) return;
     setIsPostingComment(true); 
-    localStorage.setItem('zombio_comment_name', commentName);
-    
     const targetId = modal.targetItem.id;
     const newComment: Comment = { 
-      id: Date.now().toString(), 
-      itemId: targetId, 
-      author: commentName, 
-      text: commentText, 
-      timestamp: Date.now() 
+      id: Date.now().toString(), itemId: targetId, author: commentName, text: commentText, timestamp: Date.now() 
     };
-    
     const next = { ...commentsRef.current }; 
     if (!next[targetId]) next[targetId] = []; 
     next[targetId] = [...next[targetId], newComment];
-    
-    commentsRef.current = next; 
-    setComments(next);
-    
-    try { 
-      await triggerCommentSync(); 
-      setCommentText(''); 
-      addNotification("Comment posted", "success"); 
-    } 
-    catch (e) { addNotification("Failed to post", "error"); } finally { setIsPostingComment(false); }
+    commentsRef.current = next; setComments(next);
+    try { await triggerCommentSync(); setCommentText(''); addNotification("Comment posted", "success"); } 
+    catch (e) { addNotification("Failed", "error"); } finally { setIsPostingComment(false); }
   };
 
-  // --- WINDOW MANAGER ---
+  // --- PERFORMANCE OPTIMIZED WINDOW MANAGER ---
+  const handleWindowAction = (instanceId: string, e: React.PointerEvent, actionType: 'move' | 'resize', corner?: string) => {
+    if (e.button !== 0) return;
+    const win = windows.find(w => w.instanceId === instanceId);
+    if (!win || win.isMaximized) return;
+
+    setActiveWindowId(instanceId);
+    isInteractingRef.current = true;
+
+    const startX = e.pageX;
+    const startY = e.pageY;
+    const initialPos = { ...win.position };
+    const initialSize = { ...win.size };
+
+    // Direct DOM element for high-perf updates
+    const winEl = document.getElementById(`window-${instanceId}`);
+    if (!winEl) return;
+
+    let currentX = initialPos.x;
+    let currentY = initialPos.y;
+    let currentW = initialSize.w;
+    let currentH = initialSize.h;
+
+    const onPointerMove = (moveEvent: PointerEvent) => {
+        const dx = moveEvent.pageX - startX;
+        const dy = moveEvent.pageY - startY;
+
+        if (actionType === 'move') {
+            currentX = initialPos.x + dx;
+            currentY = initialPos.y + dy;
+            winEl.style.left = `${currentX}px`;
+            winEl.style.top = `${currentY}px`;
+        } else if (actionType === 'resize') {
+            if (corner?.includes('right')) currentW = Math.max(300, initialSize.w + dx);
+            if (corner?.includes('bottom')) currentH = Math.max(200, initialSize.h + dy);
+            if (corner?.includes('left')) {
+                const deltaW = initialSize.w - dx;
+                if (deltaW >= 300) { currentW = deltaW; currentX = initialPos.x + dx; winEl.style.left = `${currentX}px`; }
+            }
+            if (corner?.includes('top')) {
+                const deltaH = initialSize.h - dy;
+                if (deltaH >= 200) { currentH = deltaH; currentY = initialPos.y + dy; winEl.style.top = `${currentY}px`; }
+            }
+            winEl.style.width = `${currentW}px`;
+            winEl.style.height = `${currentH}px`;
+        }
+    };
+
+    const onPointerUp = () => {
+        isInteractingRef.current = false;
+        window.removeEventListener('pointermove', onPointerMove);
+        window.removeEventListener('pointerup', onPointerUp);
+        
+        // Sync final values back to React state ONCE
+        setWindows(prev => prev.map(w => w.instanceId === instanceId ? {
+            ...w, 
+            position: { x: currentX, y: currentY },
+            size: { w: currentW, h: currentH }
+        } : w));
+    };
+
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+  };
+
   const openApp = (app: API.AppDefinition) => {
     setStartMenuOpen(false);
     const existing = windows.find(w => w.appId === app.id);
@@ -791,74 +821,9 @@ const App = () => {
     setWindows([...windows, newWindow]); setActiveWindowId(newWindow.instanceId);
   };
   
-  const closeWindow = (instanceId: string) => { setWindows(prev => prev.filter(w => w.instanceId !== instanceId)); };
-  
-  const toggleMaximize = (instanceId: string) => { setWindows(prev => prev.map(w => w.instanceId === instanceId ? {...w, isMaximized: !w.isMaximized, isMinimized: false} : w)); };
-  
-  const toggleMinimize = (instanceId: string) => { setWindows(prev => prev.map(w => w.instanceId === instanceId ? {...w, isMinimized: !w.isMinimized} : w)); };
-
-  const updateConfig = async (newConf: API.SystemConfig) => { setConfig(newConf); await API.saveSystemConfig(newConf); addNotification("Settings saved", "success"); };
-  
-  const installApp = async (newApp: API.AppDefinition) => { if(!config) return; const newConfig = { ...config, installedApps: [...config.installedApps, newApp] }; updateConfig(newConfig); };
-  
-  const uninstallApp = async (appId: string) => { if(!config) return; const newConfig = { ...config, installedApps: config.installedApps.filter(a => a.id !== appId) }; updateConfig(newConfig); };
-
-  const handleWindowAction = useCallback((id: string, e: React.PointerEvent, type: 'move' | 'resize', corner?: string) => {
-    if (e.button !== 0) return;
-    const win = windows.find(w => w.instanceId === id);
-    if (!win || win.isMaximized) return;
-    
-    setActiveWindowId(id);
-    const startX = e.pageX;
-    const startY = e.pageY;
-    const startPos = { ...win.position };
-    const startSize = { ...win.size };
-
-    let rafId: number;
-    const handlePointerMove = (moveEvent: PointerEvent) => {
-      cancelAnimationFrame(rafId);
-      rafId = requestAnimationFrame(() => {
-        const deltaX = moveEvent.pageX - startX;
-        const deltaY = moveEvent.pageY - startY;
-
-        setWindows(prev => prev.map(w => {
-          if (w.instanceId !== id) return w;
-          
-          if (type === 'move') {
-            return { ...w, position: { x: startPos.x + deltaX, y: startPos.y + deltaY } };
-          } else if (type === 'resize') {
-            let newW = startSize.w;
-            let newH = startSize.h;
-            let newX = startPos.x;
-            let newY = startPos.y;
-
-            if (corner?.includes('right')) newW = Math.max(300, startSize.w + deltaX);
-            if (corner?.includes('bottom')) newH = Math.max(200, startSize.h + deltaY);
-            if (corner?.includes('left')) {
-               const widthChange = startSize.w - deltaX;
-               if (widthChange >= 300) { newW = widthChange; newX = startPos.x + deltaX; }
-            }
-            if (corner?.includes('top')) {
-               const heightChange = startSize.h - deltaY;
-               if (heightChange >= 200) { newH = heightChange; newY = startPos.y + deltaY; }
-            }
-
-            return { ...w, position: { x: newX, y: newY }, size: { w: newW, h: newH } };
-          }
-          return w;
-        }));
-      });
-    };
-
-    const handlePointerUp = () => {
-      window.removeEventListener('pointermove', handlePointerMove);
-      window.removeEventListener('pointerup', handlePointerUp);
-      cancelAnimationFrame(rafId);
-    };
-
-    window.addEventListener('pointermove', handlePointerMove);
-    window.addEventListener('pointerup', handlePointerUp);
-  }, [windows]);
+  const closeWindow = (instanceId: string) => setWindows(prev => prev.filter(w => w.instanceId !== instanceId));
+  const toggleMaximize = (instanceId: string) => setWindows(prev => prev.map(w => w.instanceId === instanceId ? {...w, isMaximized: !w.isMaximized, isMinimized: false} : w));
+  const toggleMinimize = (instanceId: string) => setWindows(prev => prev.map(w => w.instanceId === instanceId ? {...w, isMinimized: !w.isMinimized} : w));
 
   if (isGlobalLoading) return (
     <div className="h-screen w-screen bg-slate-950 flex flex-col items-center justify-center gap-6">
@@ -868,12 +833,15 @@ const App = () => {
   );
 
   return (
-    <div className="h-screen w-screen overflow-hidden relative bg-slate-900 select-none transition-all duration-700 font-sans" 
+    <div className="h-screen w-screen overflow-hidden relative bg-slate-900 select-none font-sans" 
          style={{ backgroundImage: `url(${config?.wallpaper})`, backgroundSize: 'cover', backgroundPosition: 'center' }}
          onPointerDown={() => setGlobalContextMenu(null)}>
       
+      {/* Interaction Shield (Prevents pointer capture by iframes during drag) */}
+      {isInteractingRef.current && <div className="fixed inset-0 z-[9999] cursor-move" />}
+
       {/* DESKTOP ICONS */}
-      <div className="absolute top-0 left-0 bottom-12 w-full p-4 flex flex-col flex-wrap content-start gap-2 z-0 overflow-hidden" 
+      <div className="absolute top-0 left-0 bottom-12 w-full p-4 flex flex-col flex-wrap content-start gap-2 z-0" 
            onPointerDown={() => { setStartMenuOpen(false); setActiveWindowId(null); }}>
         {config?.installedApps.map(app => (
           <div key={app.id} onDoubleClick={() => openApp(app)} className="w-24 flex flex-col items-center gap-1.5 p-2 rounded-lg hover:bg-white/10 cursor-default group transition-colors">
@@ -890,12 +858,12 @@ const App = () => {
 
       {/* WINDOWS */}
       {windows.map(win => (
-        <div key={win.instanceId} 
-             className={`absolute flex flex-col glass rounded-xl shadow-2xl overflow-hidden transition-all duration-300 animate-window-open ${win.isMaximized ? 'inset-0 !top-0 !left-0 !w-full !h-[calc(100vh-48px)] rounded-none' : ''} ${activeWindowId === win.instanceId ? 'z-40 ring-1 ring-white/20' : 'z-10'} ${win.isMinimized ? 'hidden' : ''}`}
+        <div key={win.instanceId} id={`window-${win.instanceId}`}
+             className={`absolute flex flex-col glass rounded-xl shadow-2xl overflow-hidden transition-none animate-window-open ${win.isMaximized ? 'inset-0 !top-0 !left-0 !w-full !h-[calc(100vh-48px)] rounded-none' : ''} ${activeWindowId === win.instanceId ? 'z-40 ring-1 ring-white/20 shadow-[0_30px_60px_rgba(0,0,0,0.5)]' : 'z-10'} ${win.isMinimized ? 'hidden' : ''}`}
              style={!win.isMaximized ? { top: win.position.y, left: win.position.x, width: win.size.w, height: win.size.h } : {}}
              onPointerDown={() => setActiveWindowId(win.instanceId)}>
           
-          <div className="h-10 bg-slate-950/40 border-b border-white/5 flex items-center justify-between px-3 select-none"
+          <div className="h-10 bg-slate-950/40 border-b border-white/5 flex items-center justify-between px-3 select-none cursor-default"
                onDoubleClick={() => toggleMaximize(win.instanceId)}
                onPointerDown={(e) => handleWindowAction(win.instanceId, e, 'move')}>
             <div className="flex items-center gap-2">
@@ -921,12 +889,11 @@ const App = () => {
                   onContextMenu: (e: any, item: any, isBin: boolean) => setGlobalContextMenu({ x: e.clientX, y: e.clientY, targetItem: item, isRecycleBin: isBin })
               }} />
             )}
-            {win.appId === 'settings' && <SettingsApp config={config!} onSave={updateConfig}/>}
-            {win.appId === 'store' && <AppStore installedApps={config!.installedApps} onInstall={installApp} onUninstall={uninstallApp}/>}
-            {(win.appData.type === 'webapp' || win.appId === 'browser') && (
+            {win.appId === 'settings' && <SettingsApp config={config!} onSave={(c:any)=>setConfig(c)}/>}
+            {(win.appData.type === 'webapp') && (
               <div className="h-full flex flex-col bg-white">
-                <div className="p-1 bg-slate-100 flex items-center gap-2 border-b"><Globe size={12} className="text-slate-400 ml-2"/><input className="flex-1 bg-white px-3 py-1 rounded-lg border-none text-[10px] outline-none" defaultValue={win.appData.url || 'https://www.google.com'} /></div>
-                <iframe src={win.appData.url || "https://www.wikipedia.org"} className="flex-1 w-full border-none" sandbox="allow-scripts allow-same-origin allow-forms allow-popups" />
+                <div className="p-1 bg-slate-100 flex items-center gap-2 border-b"><Globe size={12} className="text-slate-400 ml-2"/><input className="flex-1 bg-white px-3 py-1 rounded-lg border-none text-[10px] outline-none" defaultValue={win.appData.url} readOnly /></div>
+                <iframe src={win.appData.url} className="flex-1 w-full border-none" sandbox="allow-scripts allow-same-origin allow-forms allow-popups" />
               </div>
             )}
           </div>
@@ -945,20 +912,14 @@ const App = () => {
 
       {/* START MENU */}
       {startMenuOpen && (
-        <div className="absolute bottom-14 left-1/2 -translate-x-1/2 w-[600px] max-w-[95vw] h-[550px] glass rounded-3xl shadow-[0_32px_64px_rgba(0,0,0,0.5)] z-[60] p-8 flex flex-col animate-in slide-in-from-bottom-5 duration-300">
-          <div className="mb-8">
-            <div className="bg-white/10 p-3 rounded-2xl flex items-center gap-3 border border-white/5 shadow-inner">
-              <Search size={18} className="text-slate-300 ml-2"/>
-              <input type="text" placeholder="Search for apps, settings, and files" className="bg-transparent border-none outline-none text-white text-sm w-full placeholder-slate-400 font-medium"/>
-            </div>
-          </div>
+        <div className="absolute bottom-14 left-1/2 -translate-x-1/2 w-[600px] max-w-[95vw] h-[550px] glass rounded-3xl shadow-[0_32px_64px_rgba(0,0,0,0.5)] z-[60] p-8 flex flex-col animate-in slide-in-from-bottom-5 duration-200">
           <div className="grid grid-cols-6 gap-6 flex-1 content-start">
              {config?.installedApps.map(app => (
                <button key={app.id} onClick={()=>openApp(app)} className="flex flex-col items-center gap-2 group">
                  <div className="w-12 h-12 bg-white/5 hover:bg-white/10 rounded-2xl flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform">
-                    {app.icon === 'folder' ? <Folder size={24} className="text-blue-400"/> : app.icon === 'settings' ? <Settings size={24}/> : app.icon === 'shopping-bag' ? <ShoppingBag size={24} className="text-pink-400"/> : <Globe size={24} className="text-emerald-400"/>}
+                    {app.icon === 'folder' ? <Folder size={24} className="text-blue-400"/> : app.icon === 'settings' ? <Settings size={24}/> : <Globe size={24} className="text-emerald-400"/>}
                  </div>
-                 <span className="text-[10px] text-white font-medium truncate w-full text-center group-hover:text-blue-400 transition-colors">{app.name}</span>
+                 <span className="text-[10px] text-white font-medium truncate w-full text-center group-hover:text-blue-400">{app.name}</span>
                </button>
              ))}
           </div>
@@ -966,40 +927,30 @@ const App = () => {
       )}
 
       {/* TASKBAR */}
-      <div className="absolute bottom-0 w-full h-12 glass border-t border-white/5 flex items-center justify-between px-4 z-[70] shadow-2xl">
+      <div className="absolute bottom-0 w-full h-12 glass border-t border-white/5 flex items-center justify-between px-4 z-[70]">
         <div className="w-24"></div> 
         <div className="flex items-center gap-1.5">
-           <button onClick={() => setStartMenuOpen(!startMenuOpen)} 
-                   className={`p-2.5 rounded-xl hover:bg-white/10 transition-all active:scale-90 ${startMenuOpen ? 'bg-white/10 shadow-inner' : ''}`}>
-             <Grid size={24} className="text-blue-400 fill-blue-400/20"/>
-           </button>
+           <button onClick={() => setStartMenuOpen(!startMenuOpen)} className={`p-2.5 rounded-xl hover:bg-white/10 transition-all ${startMenuOpen ? 'bg-white/10' : ''}`}><Grid size={24} className="text-blue-400"/></button>
            <div className="w-px h-6 bg-white/5 mx-2"></div>
            {windows.map(win => (
              <button key={win.instanceId} onClick={() => { if (win.isMinimized) toggleMinimize(win.instanceId); setActiveWindowId(win.instanceId); }}
-                     className={`p-2 rounded-xl hover:bg-white/10 transition-all relative group ${activeWindowId === win.instanceId && !win.isMinimized ? 'bg-white/10 scale-105' : 'opacity-60'}`}>
-                <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-white text-[10px] font-bold shadow-lg ${win.appId === 'file-explorer' ? 'bg-blue-600' : 'bg-slate-700'}`}>
-                   {win.appId === 'file-explorer' ? <Folder size={16}/> : win.title.charAt(0)}
-                </div>
+                     className={`p-2 rounded-xl hover:bg-white/10 transition-all relative group ${activeWindowId === win.instanceId && !win.isMinimized ? 'bg-white/10' : 'opacity-60'}`}>
+                <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-white text-[10px] font-bold shadow-lg ${win.appId === 'file-explorer' ? 'bg-blue-600' : 'bg-slate-700'}`}>{win.title.charAt(0)}</div>
                 {!win.isMinimized && activeWindowId === win.instanceId && <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-3 h-1 bg-blue-400 rounded-full"></div>}
-                {win.isMinimized && <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1.5 h-1 bg-slate-400 rounded-full"></div>}
              </button>
            ))}
         </div>
-        <div className="flex items-center gap-4 text-white">
-           <div className="flex items-center gap-3 p-1 px-3 hover:bg-white/5 rounded-xl transition-colors cursor-default">
+        <div className="flex items-center gap-3 text-white">
              <div className="flex flex-col items-end leading-none font-bold">
-               <span className="text-[10px] tracking-tight">{clock.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
-               <span className="text-[9px] text-slate-400">{clock.toLocaleDateString([], {day:'2-digit', month:'2-digit', year:'numeric'})}</span>
+               <span className="text-[10px]">{clock.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+               <span className="text-[8px] text-slate-400">{clock.toLocaleDateString([], {day:'2-digit', month:'2-digit'})}</span>
              </div>
-           </div>
         </div>
       </div>
 
-      {/* GLOBAL CONTEXT MENU RENDERING (Outside any Window Container) */}
+      {/* GLOBAL CONTEXT MENU */}
       {globalContextMenu && (
-        <div className="fixed inset-0 z-[1000] overflow-hidden" 
-             onClick={() => setGlobalContextMenu(null)} 
-             onContextMenu={(e) => { e.preventDefault(); setGlobalContextMenu(null); }}>
+        <div className="fixed inset-0 z-[1000]" onClick={() => setGlobalContextMenu(null)} onContextMenu={(e) => { e.preventDefault(); setGlobalContextMenu(null); }}>
           <div className="absolute z-[1001] bg-slate-800 border border-slate-700 rounded-lg shadow-2xl py-1 min-w-[160px] animate-in zoom-in-95 duration-100" 
                style={{ top: globalContextMenu.y, left: globalContextMenu.x }} onClick={(e) => e.stopPropagation()}>
             {globalContextMenu.targetItem ? (
@@ -1011,7 +962,7 @@ const App = () => {
                   <button onClick={() => { executeAction('rename'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-700 text-xs flex items-center gap-2 text-slate-200"><Edit size={14}/> Rename</button>
                   <button onClick={() => { executeAction('move'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-700 text-xs flex items-center gap-2 text-slate-200"><Move size={14}/> Move</button>
                   <div className="h-px bg-slate-700 my-1"></div>
-                  <button onClick={() => { executeAction('delete'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-500 text-xs flex items-center gap-2"><Trash2 size={14}/> {globalContextMenu.isRecycleBin ? 'Delete Permanently' : 'Delete'}</button>
+                  <button onClick={() => { executeAction('delete'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-500 text-xs flex items-center gap-2"><Trash2 size={14}/> Delete</button>
                 </>
             ) : (
                 <>
@@ -1023,62 +974,54 @@ const App = () => {
         </div>
       )}
 
-      {/* SHARED MODALS & OVERLAYS */}
+      {/* OVERLAYS */}
       <UploadProgress uploads={uploadQueue} onClose={() => setUploadQueue([])} onRemove={(id) => setUploadQueue(prev => prev.filter(u => u.id !== id))} />
       <DownloadProgress downloads={downloadQueue} onClose={() => setDownloadQueue([])} onClearCompleted={() => setDownloadQueue(prev => prev.filter(d => d.status !== 'completed'))} />
-      
-      {previewImage && (<div className="fixed inset-0 z-[150] bg-black/95 backdrop-blur flex items-center justify-center p-4 animate-in fade-in" onClick={() => setPreviewImage(null)}><div className="absolute top-4 right-4 z-10 flex gap-2"><button onClick={() => setPreviewImage(null)} className="p-2 bg-white/10 rounded-full hover:bg-white/20 text-white"><X size={24}/></button></div><img src={previewImage} className="max-w-full max-h-full object-contain rounded-lg shadow-2xl" onClick={(e) => e.stopPropagation()} referrerPolicy="no-referrer" /></div>)}
+      {previewImage && (<div className="fixed inset-0 z-[150] bg-black/95 flex items-center justify-center p-4" onClick={() => setPreviewImage(null)}><button onClick={() => setPreviewImage(null)} className="absolute top-4 right-4 text-white"><X size={32}/></button><img src={previewImage} className="max-w-full max-h-full object-contain" referrerPolicy="no-referrer" /></div>)}
       {editingNote && <TextEditor note={editingNote} onSave={handleSaveNote} onClose={() => setEditingNote(null)} />}
       
       {modal && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => { if (!isPostingComment) setModal(null); }} />
-          <div className={`relative w-full ${modal.type === 'comment' ? 'max-w-2xl' : 'max-w-sm'} bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden animate-in zoom-in-95`}>
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => !isPostingComment && setModal(null)} />
+          <div className={`relative w-full ${modal.type === 'comment' ? 'max-w-2xl' : 'max-w-sm'} bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden`}>
             {modal.type === 'comment' ? (
-              <div className="flex flex-col h-[600px] max-h-[80vh] bg-slate-900 relative">
-                {isPostingComment && <div className="absolute inset-0 z-50 bg-slate-950/80 flex items-center justify-center flex-col"><Loader2 size={48} className="animate-spin text-blue-500 mb-4"/><p className="text-xs font-bold text-blue-400 uppercase">Saving to Cloud...</p></div>}
-                <div className="p-4 bg-slate-950 flex items-center justify-between border-b border-slate-800"><h3 className="text-sm font-bold flex items-center gap-2"><MessageSquare size={16} className="text-blue-400"/> {modal.title}</h3><button onClick={() => setModal(null)} className="p-1 hover:bg-slate-800 rounded-lg text-slate-500"><X size={18}/></button></div>
+              <div className="flex flex-col h-[500px] max-h-[70vh]">
+                <div className="p-4 bg-slate-950 flex items-center justify-between"><h3 className="text-sm font-bold">{modal.title}</h3><button onClick={() => setModal(null)}><X size={18}/></button></div>
                 <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                   {(comments[modal.targetItem!.id] || []).length === 0 ? <p className="text-center py-10 text-slate-600 italic">No comments yet</p> : 
-                    comments[modal.targetItem!.id].map((c: any) => (
+                   {(comments[modal.targetItem!.id] || []).map((c: any) => (
                       <div key={c.id} className="flex gap-3">
-                         <div className="w-8 h-8 rounded-full bg-blue-600 flex-shrink-0 flex items-center justify-center text-[10px] font-bold text-white uppercase">{c.author?.[0] || 'A'}</div>
-                         <div className="flex-1 bg-slate-800/50 p-3 rounded-2xl rounded-tl-none border border-slate-700">
-                           <div className="flex justify-between items-center mb-1"><span className="text-[10px] font-bold text-blue-400">{c.author}</span><span className="text-[8px] text-slate-500">{new Date(c.timestamp).toLocaleString()}</span></div>
+                         <div className="w-8 h-8 rounded-full bg-blue-600 flex-shrink-0 flex items-center justify-center text-[10px] font-bold text-white uppercase">{c.author?.[0]}</div>
+                         <div className="flex-1 bg-slate-800/50 p-3 rounded-xl border border-slate-700">
+                           <div className="flex justify-between items-center mb-1"><span className="text-[10px] font-bold text-blue-400">{c.author}</span><span className="text-[8px] text-slate-500">{new Date(c.timestamp).toLocaleTimeString()}</span></div>
                            <p className="text-xs text-slate-200">{c.text}</p>
                          </div>
                       </div>
                     ))}
                 </div>
-                <div className="p-4 bg-slate-950 border-t border-slate-800 flex gap-2">
-                   <input className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-3 py-2 text-xs outline-none focus:border-blue-500" placeholder="Type comment..." value={commentText} onChange={e=>setCommentText(e.target.value)} />
-                   <input className="w-20 bg-slate-900 border border-slate-800 rounded-lg px-2 py-2 text-xs outline-none focus:border-blue-500" placeholder="Name" value={commentName} onChange={e=>setCommentName(e.target.value)} />
+                <div className="p-4 border-t border-slate-800 flex gap-2">
+                   <input className="flex-1 bg-slate-800 rounded-lg px-3 py-2 text-xs" placeholder="Komentar..." value={commentText} onChange={e=>setCommentText(e.target.value)} />
+                   <input className="w-20 bg-slate-800 rounded-lg px-2 py-2 text-xs" placeholder="Nama" value={commentName} onChange={e=>setCommentName(e.target.value)} />
                    <button onClick={handleAddComment} className="p-2 bg-blue-600 text-white rounded-lg"><Send size={16}/></button>
                 </div>
               </div>
             ) : (
               <div className="p-6">
                 <h3 className="text-lg font-bold text-white mb-2">{modal.title}</h3>
-                {modal.message && <p className="text-xs text-slate-400 mb-4">{modal.message}</p>}
-                {modal.type === 'input' && <input className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-sm text-white focus:outline-none focus:border-blue-500" defaultValue={modal.inputValue} onChange={e=>setModal({...modal, inputValue: e.target.value})} />}
-                {modal.type === 'password' && <input className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-sm text-white focus:outline-none focus:border-blue-500" type="password" placeholder="Password" onChange={e=>setModal({...modal, inputValue: e.target.value})} />}
-                {modal.type === 'select' && <select className="w-full bg-slate-950 border border-slate-700 rounded-lg p-3 text-sm text-white focus:outline-none focus:border-blue-500" onChange={e=>setModal({...modal, inputValue: e.target.value})}>{modal.options?.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}</select>}
-                <div className="mt-6 flex gap-3">
-                   <button onClick={() => setModal(null)} className="flex-1 py-2 rounded-lg text-xs font-bold text-slate-400 hover:bg-slate-800">Cancel</button>
-                   <button onClick={() => modal.onConfirm?.(modal.inputValue)} className={`flex-1 py-2 rounded-lg text-xs font-bold text-white ${modal.isDanger ? 'bg-red-600' : 'bg-blue-600'}`}>{modal.confirmText || 'OK'}</button>
-                </div>
+                {modal.type === 'input' && <input className="w-full bg-slate-800 p-3 rounded-lg text-sm text-white" defaultValue={modal.inputValue} onChange={e=>setModal({...modal, inputValue: e.target.value})} />}
+                {modal.type === 'password' && <input className="w-full bg-slate-800 p-3 rounded-lg text-sm" type="password" placeholder="Password" onChange={e=>setModal({...modal, inputValue: e.target.value})} />}
+                <div className="mt-6 flex gap-3"><button onClick={() => setModal(null)} className="flex-1 py-2 text-slate-400">Cancel</button><button onClick={() => modal.onConfirm?.(modal.inputValue)} className={`flex-1 py-2 rounded-lg text-white ${modal.isDanger ? 'bg-red-600' : 'bg-blue-600'}`}>{modal.confirmText || 'OK'}</button></div>
               </div>
             )}
           </div>
         </div>
       )}
 
-      {/* OS NOTIFICATIONS */}
+      {/* NOTIFICATIONS */}
       <div className="fixed bottom-14 right-4 z-[300] flex flex-col gap-2">
         {notifications.map(n => (
-          <div key={n.id} className="bg-slate-900/90 backdrop-blur-md border border-slate-700 p-3 rounded-xl shadow-2xl flex items-center gap-3 animate-in slide-in-from-right-5">
+          <div key={n.id} className="bg-slate-900/90 border border-slate-700 p-3 rounded-xl shadow-2xl flex items-center gap-3 animate-in slide-in-from-right-5">
              {n.type === 'loading' ? <Loader2 size={16} className="animate-spin text-blue-400"/> : n.type === 'success' ? <CheckCircle size={16} className="text-green-400"/> : <XCircle size={16} className="text-red-400"/>}
-             <span className="text-[10px] font-bold text-white tracking-wide uppercase">{n.message}</span>
+             <span className="text-[10px] font-bold text-white uppercase">{n.message}</span>
           </div>
         ))}
       </div>
