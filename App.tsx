@@ -1434,9 +1434,35 @@ const App = () => {
   const toggleMinimize = (instanceId: string) => setWindows(prev => prev.map(w => w.instanceId === instanceId ? {...w, isMinimized: !w.isMinimized} : w));
 
   if (isGlobalLoading) return (
-    <div className="fixed inset-0 bg-slate-950 flex flex-col items-center justify-center gap-6 z-[9999]">
-      <div className="relative w-16 h-16"><Loader2 className="animate-spin text-blue-500 absolute w-full h-full"/><Database size={32} className="absolute inset-0 m-auto text-blue-400 opacity-50"/></div>
-      <p className="text-white font-bold tracking-widest uppercase text-xs animate-pulse">{globalLoadingMessage}</p>
+    <div className="fixed inset-0 bg-slate-950 flex flex-col items-center justify-center z-[9999] select-none cursor-wait">
+      
+      {/* Main Center Logo Area */}
+      <div className="flex flex-col items-center gap-6 animate-in fade-in zoom-in-95 duration-1000">
+         {/* Icon */}
+         <div className="w-24 h-24 bg-blue-600 rounded-2xl flex items-center justify-center shadow-[0_0_40px_rgba(37,99,235,0.5)]">
+            <Cloud size={48} className="text-white fill-white" />
+         </div>
+         
+         {/* Title */}
+         <h1 className="text-3xl font-bold text-white tracking-widest font-sans">CLOUD OS</h1>
+         
+         {/* Spinner */}
+         <div className="mt-4">
+            <Loader2 size={32} className="animate-spin text-blue-500" />
+         </div>
+      </div>
+
+      {/* Bottom Status Text */}
+      <div className="absolute bottom-20 flex flex-col items-center gap-2">
+         <p className="text-slate-500 text-xs font-mono uppercase tracking-widest animate-pulse">
+            {globalLoadingMessage}
+         </p>
+      </div>
+      
+      {/* Copyright/Footer (Optional) */}
+      <div className="absolute bottom-6 text-[10px] text-slate-700">
+         © 2025 Zombio Systems
+      </div>
     </div>
   );
 
