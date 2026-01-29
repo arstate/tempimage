@@ -340,49 +340,55 @@ const GalleryApp = ({ items, onUpload, onDelete, loading }: any) => {
 };
 
 // --- CANVA APP COMPONENT ---
-const CanvaApp = () => {
+const CanvaApp = ({ onLaunch }: { onLaunch: () => void }) => {
   const handleLaunch = () => {
-    const width = 1200;
-    const height = 800;
-    const left = (window.screen.width - width) / 2;
-    const top = (window.screen.height - height) / 2;
+    // 1. Hitung Tinggi Taskbar (Misal 48px)
+    const taskbarHeight = 48; 
+    
+    // 2. Hitung Ukuran Layar Tersedia
+    const screenWidth = window.screen.availWidth;
+    const screenHeight = window.screen.availHeight;
+    
+    // 3. Tentukan Ukuran Jendela Canva (Full Screen minus Taskbar)
+    const width = screenWidth;
+    const height = screenHeight - taskbarHeight;
+    
+    // 4. Buka Jendela di Posisi Paling Atas (Top: 0, Left: 0)
     window.open(
-      'https://www.canva.com',
-      'CanvaWindow',
-      `width=${width},height=${height},top=${top},left=${left},resizable=yes,scrollbars=yes,status=yes`
+      'https://www.canva.com', 
+      'CanvaWindow', 
+      `width=${width},height=${height},top=0,left=0,toolbar=no,menubar=no,location=no,status=no`
     );
+
+    if (onLaunch) onLaunch();
   };
 
   return (
-    <div className="h-full w-full flex flex-col items-center justify-center bg-gradient-to-br from-[#00c4cc] to-[#7d2ae8] relative overflow-hidden text-white">
-      <div className="absolute top-0 left-0 w-full h-full bg-white/10 backdrop-blur-sm z-0"></div>
-      
-      <div className="z-10 flex flex-col items-center animate-in zoom-in-95 duration-500">
-        <div className="w-24 h-24 bg-white rounded-full flex items-center justify-center shadow-2xl mb-6">
-           <img 
-             src="https://upload.wikimedia.org/wikipedia/commons/0/08/Canva_icon_2021.svg" 
-             alt="Canva" 
-             className="w-16 h-16"
-           />
-        </div>
+    <div className="h-full w-full flex flex-col items-center justify-center bg-[#7d2ae8] relative text-white overflow-hidden">
+       {/* Background Animation */}
+       <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-10"></div>
+       
+       <div className="z-10 text-center animate-in zoom-in-95 duration-500 p-8">
+          <div className="w-24 h-24 mx-auto mb-6 bg-white rounded-full flex items-center justify-center shadow-2xl">
+             <img 
+                src="https://upload.wikimedia.org/wikipedia/commons/thumb/0/08/Canva_icon_2021.svg/600px-Canva_icon_2021.svg.png" 
+                className="w-16 h-16 object-contain"
+                alt="Canva Logo"
+             />
+          </div>
+          <h1 className="text-4xl font-bold mb-2 text-shadow">Canva Designer</h1>
+          <p className="text-white/80 mb-8 max-w-md mx-auto text-sm drop-shadow">
+            Aplikasi ini akan berjalan di jendela khusus agar performa maksimal. Taskbar Cloud OS akan tetap aktif di window utama.
+          </p>
 
-        <h1 className="text-3xl font-bold mb-2 drop-shadow-md">Canva Design</h1>
-        <p className="text-white/80 mb-8 text-center max-w-md">
-           Create beautiful designs, presentations, and social media posts directly from your Cloud OS.
-        </p>
-
-        <button 
-          onClick={handleLaunch}
-          className="bg-white text-[#7d2ae8] px-8 py-3 rounded-full font-bold text-lg shadow-xl hover:scale-105 transition-transform hover:bg-gray-100 flex items-center gap-2"
-        >
-          <span>Start Designing</span>
-          <ExternalLink size={20} />
-        </button>
-        
-        <p className="mt-4 text-xs text-white/60">
-           *Canva runs in a secure popup window for best performance.
-        </p>
-      </div>
+          <button 
+            onClick={handleLaunch}
+            className="bg-white text-[#7d2ae8] px-8 py-4 rounded-full font-bold text-xl shadow-xl hover:scale-105 transition-transform flex items-center gap-3 mx-auto"
+          >
+            <span>Buka Jendela Canva</span>
+            <ExternalLink size={24} />
+          </button>
+       </div>
     </div>
   );
 };
@@ -953,6 +959,7 @@ const App = () => {
   const [clock, setClock] = useState(new Date());
   const [globalContextMenu, setGlobalContextMenu] = useState<{x:number, y:number, targetItem?: Item | API.AppDefinition, isRecycleBin?: boolean, type?: 'desktop' | 'item' | 'app' | 'folder-background'} | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isCanvaRunning, setIsCanvaRunning] = useState(false);
 
   // EXPLORER STATE
   const [currentFolderId, setCurrentFolderId] = useState<string>(""); 
@@ -1757,7 +1764,7 @@ const App = () => {
                 }}
               />
             )}
-            {win.appId === 'canva' && <CanvaApp />}
+            {win.appId === 'canva' && <CanvaApp onLaunch={() => setIsCanvaRunning(true)} />}
             {win.appData.url === 'internal://gallery' && (
               <GalleryApp 
                 items={items} 
@@ -1867,6 +1874,24 @@ const App = () => {
              </button>
            ))}
         </div>
+        
+        {/* Indikator Spesial Canva */}
+        {isCanvaRunning && (
+            <div className="px-4 flex items-center gap-2 border-l border-white/10 ml-2 animate-in fade-in duration-300">
+                <span className="relative flex h-3 w-3">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-3 w-3 bg-purple-500"></span>
+                </span>
+                <span className="text-xs text-purple-300 font-bold hidden sm:inline">Canva Active</span>
+                
+                <button 
+                onClick={() => alert("Gunakan Alt+Tab (PC) atau Recent Apps (HP) untuk pindah antar window.")}
+                className="text-[10px] bg-white/10 px-2 py-1 rounded hover:bg-white/20 text-white ml-2 whitespace-nowrap"
+                >
+                Switch Window
+                </button>
+            </div>
+        )}
 
         <div className="flex items-center gap-3 text-white w-24 justify-end hidden sm:flex">
              <div className="flex flex-col items-end leading-none font-bold">
