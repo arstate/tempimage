@@ -346,6 +346,8 @@ const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId }: any
    const [customIconFile, setCustomIconFile] = useState<File | null>(null);
    const [isInstalling, setIsInstalling] = useState(false);
    const [useProxy, setUseProxy] = useState(false);
+   // State to track apps currently being uninstalled
+   const [uninstallingIds, setUninstallingIds] = useState<Set<string>>(new Set());
  
    const popularApps = [
      { id: 'notes', name: 'Notes', url: 'internal://notes', icon: 'file-text' },
@@ -377,8 +379,25 @@ const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId }: any
     if (!config) return;
     const app = config.installedApps.find((a: any) => a.id === appId);
     if ((app?.type === 'system' && (app?.id === 'file-explorer' || app?.id === 'notes')) || app?.id === 'youtube') return;
-    const updatedConfig = { ...config, installedApps: config.installedApps.filter((a: any) => a.id !== appId) };
-    try { await API.saveSystemConfig(updatedConfig); setConfig(updatedConfig); addNotification("Aplikasi berhasil dihapus", "success"); } catch (e) {}
+    
+    // Set loading state for this specific app
+    setUninstallingIds(prev => new Set(prev).add(appId));
+
+    try {
+        const updatedConfig = { ...config, installedApps: config.installedApps.filter((a: any) => a.id !== appId) };
+        await API.saveSystemConfig(updatedConfig);
+        setConfig(updatedConfig);
+        addNotification("Aplikasi berhasil dihapus", "success");
+    } catch (e) {
+        addNotification("Gagal menghapus aplikasi", "error");
+    } finally {
+        // Remove loading state
+        setUninstallingIds(prev => {
+            const next = new Set(prev);
+            next.delete(appId);
+            return next;
+        });
+    }
    };
 
    return (
@@ -395,7 +414,37 @@ const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId }: any
           <div className="flex items-end"><button onClick={() => { if(!appName || !appUrl) return; handleInstall({ id: 'custom-'+Date.now(), name: appName, url: appUrl, icon: 'globe', type: 'webapp' }); }} disabled={isInstalling} className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold">{isInstalling ? <Loader2 className="animate-spin"/> : 'Instal'}</button></div>
         </div>
       </section>
-      <section className="space-y-4"><h2 className="text-lg font-bold text-slate-300">Terpasang</h2><div className="space-y-2">{config?.installedApps.map((app: any) => (<div key={app.id} className="flex justify-between items-center p-4 bg-slate-800/40 border border-slate-700/50 rounded-xl"><div className="flex items-center gap-4"><div className="w-12 h-12 bg-slate-950 rounded-xl flex items-center justify-center border border-slate-800">{app.icon.startsWith('http') ? <img src={app.icon} className="w-full h-full object-cover"/> : <Globe size={24}/>}</div><div className="font-bold text-sm">{app.name}</div></div>{app.type === 'webapp' && <button onClick={() => handleUninstall(app.id)} className="p-2 text-red-500"><Trash2 size={18}/></button>}</div>))}</div></section>
+      <section className="space-y-4">
+        <h2 className="text-lg font-bold text-slate-300">Terpasang</h2>
+        <div className="space-y-2">
+            {config?.installedApps.map((app: any) => (
+                <div key={app.id} className="flex justify-between items-center p-4 bg-slate-800/40 border border-slate-700/50 rounded-xl">
+                    <div className="flex items-center gap-4">
+                        <div className="w-12 h-12 bg-slate-950 rounded-xl flex items-center justify-center border border-slate-800">
+                            {app.icon.startsWith('http') ? <img src={app.icon} className="w-full h-full object-cover"/> : <Globe size={24}/>}
+                        </div>
+                        <div className="font-bold text-sm">{app.name}</div>
+                    </div>
+                    {app.type === 'webapp' && (
+                        <button 
+                            onClick={() => handleUninstall(app.id)} 
+                            className="p-2 text-red-500 hover:bg-red-500/10 rounded-lg flex items-center gap-2 disabled:opacity-50"
+                            disabled={uninstallingIds.has(app.id)}
+                        >
+                            {uninstallingIds.has(app.id) ? (
+                                <>
+                                    <Loader2 size={18} className="animate-spin"/>
+                                    <span className="text-xs font-bold">Uninstalling...</span>
+                                </>
+                            ) : (
+                                <Trash2 size={18}/>
+                            )}
+                        </button>
+                    )}
+                </div>
+            ))}
+        </div>
+      </section>
       <section className="space-y-4"><h2 className="text-lg font-bold text-slate-300">Rekomendasi</h2><div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">{popularApps.map(app => (<div key={app.id} className="bg-slate-800/40 p-4 rounded-2xl flex flex-col items-center gap-4"><div className="w-16 h-16 bg-slate-950 rounded-2xl flex items-center justify-center"><Globe size={32}/></div><p className="font-bold text-sm">{app.name}</p><button onClick={() => handleInstall(app)} className="w-full py-2 bg-blue-600/20 text-blue-400 rounded-lg text-xs font-bold">Instal</button></div>))}</div></section>
     </div>
    );
@@ -702,8 +751,36 @@ const FileExplorerApp = ({
 };
 
 // --- SETTINGS APP COMPONENT ---
-const SettingsApp = ({ config, onSave }: any) => {
+const SettingsApp = ({ config, onSave, systemFolderId, addNotification }: any) => {
   const [localConfig, setLocalConfig] = useState(config);
+  const [isUploading, setIsUploading] = useState(false);
+
+  const handleWallpaperUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+      if (!systemFolderId) {
+          addNotification("System folder not found", "error");
+          return;
+      }
+
+      setIsUploading(true);
+      try {
+          const res = await API.uploadToDrive(file, systemFolderId);
+          if (res && (res.url || res.thumbnail)) {
+              const newWallpaperUrl = res.url || res.thumbnail;
+              const newConfig = { ...localConfig, wallpaper: newWallpaperUrl };
+              setLocalConfig(newConfig);
+              await onSave(newConfig);
+              addNotification("Wallpaper Uploaded", "success");
+          }
+      } catch (e) {
+          console.error(e);
+          addNotification("Failed to upload wallpaper", "error");
+      } finally {
+          setIsUploading(false);
+      }
+  };
+
   return (
     <div className="h-full bg-slate-900 text-white p-6 flex flex-col gap-6 overflow-auto">
       <h2 className="text-2xl font-bold flex items-center gap-3 text-white"><Settings size={28} className="text-blue-600"/> Settings</h2>
@@ -712,8 +789,36 @@ const SettingsApp = ({ config, onSave }: any) => {
           <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-3">Appearance</h3>
           <div className="space-y-4">
             <div>
-              <label className="block text-xs font-bold text-slate-400 mb-1">Wallpaper URL</label>
-              <input className="w-full p-2 border border-slate-700 rounded-lg text-sm bg-slate-950 text-white focus:outline-none focus:border-blue-500" value={localConfig.wallpaper} onChange={(e) => setLocalConfig({...localConfig, wallpaper: e.target.value})} />
+              <label className="block text-xs font-bold text-slate-400 mb-2">Wallpaper Image</label>
+              
+              <div className="flex flex-col gap-3">
+                  <div className="relative aspect-video rounded-lg overflow-hidden border border-slate-700 bg-slate-950">
+                      {isUploading ? (
+                          <div className="absolute inset-0 flex items-center justify-center bg-slate-900/50">
+                              <Loader2 className="animate-spin text-blue-400"/>
+                          </div>
+                      ) : (
+                          <img src={localConfig.wallpaper} className="w-full h-full object-cover"/>
+                      )}
+                  </div>
+                  
+                  <div className="flex gap-2">
+                       <label className={`flex-1 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs font-bold text-white text-center cursor-pointer transition-colors ${isUploading ? 'opacity-50 pointer-events-none' : ''}`}>
+                           <input type="file" accept="image/*" className="hidden" onChange={handleWallpaperUpload} disabled={isUploading} />
+                           {isUploading ? "Uploading..." : "Upload New Image"}
+                       </label>
+                  </div>
+              </div>
+
+              <div className="mt-4">
+                  <label className="block text-[10px] font-bold text-slate-500 mb-1">OR ENTER URL</label>
+                  <input 
+                      className="w-full p-2 border border-slate-700 rounded-lg text-sm bg-slate-950 text-white focus:outline-none focus:border-blue-500" 
+                      value={localConfig.wallpaper} 
+                      onChange={(e) => setLocalConfig({...localConfig, wallpaper: e.target.value})} 
+                      placeholder="https://..."
+                  />
+              </div>
             </div>
           </div>
         </section>
@@ -1444,7 +1549,9 @@ const App = () => {
         <div key={win.instanceId} id={`window-${win.instanceId}`}
              className={`absolute flex flex-col glass rounded-xl shadow-2xl overflow-hidden transition-none animate-window-open ${win.isMaximized ? 'inset-0 !top-0 !left-0 !w-full !h-[calc(100%-48px)] rounded-none' : ''} ${activeWindowId === win.instanceId ? 'z-40 ring-1 ring-white/20 shadow-[0_30px_60px_rgba(0,0,0,0.5)]' : 'z-10'} ${win.isMinimized ? 'hidden' : ''}`}
              style={!win.isMaximized ? { top: win.position.y, left: win.position.x, width: win.size.w, height: win.size.h } : {}}
-             onPointerDown={() => setActiveWindowId(win.instanceId)}>
+             onPointerDown={() => setActiveWindowId(win.instanceId)}
+             onContextMenu={(e) => e.stopPropagation()}
+        >
           
           <div className="h-10 bg-slate-950/40 border-b border-white/5 flex items-center justify-between px-3 select-none cursor-default touch-none"
                onDoubleClick={() => toggleMaximize(win.instanceId)}
@@ -1518,7 +1625,7 @@ const App = () => {
               />
             )}
             {win.appId === 'youtube' && <YouTubeApp customKeys={config?.youtubeApiKeys} />}
-            {win.appId === 'settings' && <SettingsApp config={config!} onSave={async (c:any)=>{ try { await API.saveSystemConfig(c); setConfig(c); addNotification("Pengaturan disimpan", "success"); } catch(e) { addNotification("Gagal menyimpan", "error"); } }}/>}
+            {win.appId === 'settings' && <SettingsApp config={config!} systemFolderId={systemFolderId} addNotification={addNotification} onSave={async (c:any)=>{ try { await API.saveSystemConfig(c); setConfig(c); addNotification("Pengaturan disimpan", "success"); } catch(e) { addNotification("Gagal menyimpan", "error"); } }}/>}
             {(win.appId === 'app-store' || win.appId === 'store') && <AppStoreApp config={config!} setConfig={setConfig} addNotification={addNotification} systemFolderId={systemFolderId}/>}
             {(win.appData.type === 'webapp') && win.appId !== 'youtube' && (
               <div className="h-full flex flex-col bg-white">

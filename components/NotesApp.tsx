@@ -3,7 +3,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import { 
   Save, Download, Trash2, Plus, FileText, 
   ChevronLeft, CloudUpload, Folder, AlertTriangle, X,
-  ArrowUp, ArrowLeft, Search, Home, Loader2
+  ArrowUp, ArrowLeft, Search, Home, Loader2,
+  Copy, Scissors, MousePointerClick
 } from 'lucide-react';
 import * as API from '../services/api';
 import { Item, FolderMap } from '../types';
@@ -56,6 +57,7 @@ export const NotesApp: React.FC<NotesAppProps> = ({
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [showExitPrompt, setShowExitPrompt] = useState(false);
   const [recentNotes, setRecentNotes] = useState<{id: string, name: string}[]>([]);
+  const [selectionMenu, setSelectionMenu] = useState<{x: number, y: number} | null>(null);
   
   // Picker State
   const [pickerCurrentFolderId, setPickerCurrentFolderId] = useState<string>('root');
@@ -135,6 +137,7 @@ export const NotesApp: React.FC<NotesAppProps> = ({
   const handleContentChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setContent(e.target.value);
     setIsDirty(true);
+    setSelectionMenu(null); // Hide menu on type
   };
 
   const handleTitleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -215,6 +218,69 @@ export const NotesApp: React.FC<NotesAppProps> = ({
   const confirmExitWithoutSaving = () => {
       setShowExitPrompt(false);
       onClose();
+  };
+
+  // --- SELECTION POPUP LOGIC ---
+  const handleSelection = (e: React.SyntheticEvent) => {
+    const textarea = editorRef.current;
+    if (!textarea) return;
+
+    // We can't easily get X/Y from selectionStart/End in a textarea without a mirror div.
+    // So we'll use mouse coordinates from onMouseUp.
+    // onSelect fires on keyboard select too, but we can't get coordinates easily there.
+    // We will rely on onMouseUp for position.
+  };
+
+  const handleMouseUp = (e: React.MouseEvent) => {
+     const textarea = editorRef.current;
+     if (!textarea) return;
+     
+     const start = textarea.selectionStart;
+     const end = textarea.selectionEnd;
+
+     if (start !== end) {
+         // Has selection
+         // Position popup near mouse
+         const rect = textarea.getBoundingClientRect();
+         // Ensure inside window bounds logic handled by absolute positioning
+         setSelectionMenu({ x: e.clientX, y: e.clientY - 40 });
+     } else {
+         setSelectionMenu(null);
+     }
+  };
+
+  const handleKeyUp = (e: React.KeyboardEvent) => {
+      // Hide menu on key press unless it's a selection key, 
+      // but calculating position is hard without mouse. 
+      // We'll just hide it to be safe.
+      setSelectionMenu(null);
+  }
+
+  const performEditAction = (action: 'copy' | 'cut' | 'delete') => {
+      const textarea = editorRef.current;
+      if (!textarea) return;
+
+      const start = textarea.selectionStart;
+      const end = textarea.selectionEnd;
+      const text = textarea.value;
+      const selectedText = text.substring(start, end);
+
+      if (action === 'copy' || action === 'cut') {
+          navigator.clipboard.writeText(selectedText);
+      }
+
+      if (action === 'cut' || action === 'delete') {
+          const newText = text.substring(0, start) + text.substring(end);
+          setContent(newText);
+          setIsDirty(true);
+          // Restore cursor
+          setTimeout(() => {
+              textarea.focus();
+              textarea.setSelectionRange(start, start);
+          }, 0);
+      }
+      
+      setSelectionMenu(null);
   };
 
   // --- PICKER NAVIGATION HELPERS ---
@@ -367,10 +433,34 @@ export const NotesApp: React.FC<NotesAppProps> = ({
                  ref={editorRef}
                  value={content}
                  onChange={handleContentChange}
+                 onSelect={handleSelection}
+                 onMouseUp={handleMouseUp}
+                 onKeyUp={handleKeyUp}
                  placeholder="Ketik sesuatu..."
                  className="flex-1 w-full bg-transparent px-8 py-4 text-base text-gray-300 outline-none resize-none leading-relaxed scrollbar-thin scrollbar-thumb-[#444]"
                  spellCheck={false}
                />
+
+               {/* FLOATING ACTION MENU */}
+               {selectionMenu && (
+                   <div 
+                      className="fixed z-50 flex items-center gap-1 bg-slate-800 border border-slate-600 p-1.5 rounded-full shadow-2xl animate-in fade-in zoom-in-95 duration-100"
+                      style={{ top: selectionMenu.y, left: selectionMenu.x, transform: 'translateX(-50%)' }}
+                      onMouseDown={(e) => e.preventDefault()} // Prevent losing focus
+                   >
+                      <button onClick={() => performEditAction('copy')} className="flex items-center gap-2 px-3 py-1.5 hover:bg-slate-700 rounded-full text-xs font-bold text-slate-200 transition-colors">
+                        <Copy size={12} className="text-blue-400" /> Copy
+                      </button>
+                      <div className="w-px h-3 bg-slate-600"></div>
+                      <button onClick={() => performEditAction('cut')} className="flex items-center gap-2 px-3 py-1.5 hover:bg-slate-700 rounded-full text-xs font-bold text-slate-200 transition-colors">
+                        <Scissors size={12} className="text-yellow-400" /> Cut
+                      </button>
+                      <div className="w-px h-3 bg-slate-600"></div>
+                      <button onClick={() => performEditAction('delete')} className="flex items-center gap-2 px-3 py-1.5 hover:bg-red-500/20 rounded-full text-xs font-bold text-red-400 transition-colors">
+                        <Trash2 size={12} /> Delete
+                      </button>
+                   </div>
+               )}
             </div>
         ) : (
             <div className="flex-1 flex items-center justify-center text-gray-600 flex-col gap-2">
