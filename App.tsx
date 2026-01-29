@@ -734,15 +734,30 @@ const FileExplorerApp = ({
          </div>
       )}
 
-      {selectedIds.size > 0 && (
+      {selectedIds.size > 0 && !selectedIds.has(systemFolderId) && (
           <div className="absolute bottom-4 left-1/2 -translate-x-1/2 glass rounded-full px-4 py-2 flex items-center gap-3 shadow-2xl z-[80] animate-in slide-in-from-bottom-5">
               <span className="text-xs font-bold text-blue-400">{selectedIds.size} Selected</span>
               <div className="w-px h-4 bg-slate-700"></div>
-              <button onClick={() => executeAction('comment')} className="p-1.5 hover:bg-slate-800 rounded-lg text-yellow-400" title="Comment"><MessageSquare size={16}/></button>
-              <button onClick={() => executeAction('download')} className="p-1.5 hover:bg-slate-800 rounded-lg text-emerald-400" title="Download"><Download size={16}/></button>
-              <button onClick={() => executeAction('move')} className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-300" title="Move"><Move size={16}/></button>
-              <button onClick={() => executeAction('duplicate')} className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-300" title="Duplicate"><Copy size={16}/></button>
-              <button onClick={() => executeAction('delete')} className="p-1.5 hover:bg-red-500/10 rounded-lg text-red-500" title="Delete"><Trash2 size={16}/></button>
+              
+              {selectedIds.has(recycleBinId) ? (
+                  <>
+                    <button onClick={() => executeAction('restore_all')} className="p-1.5 hover:bg-slate-800 rounded-lg text-green-400 flex items-center gap-2" title="Restore All">
+                        <RotateCcw size={16}/> <span className="text-xs font-bold">Restore All</span>
+                    </button>
+                    <button onClick={() => executeAction('empty_bin')} className="p-1.5 hover:bg-red-500/10 rounded-lg text-red-500 flex items-center gap-2" title="Empty Recycle Bin">
+                        <Trash2 size={16}/> <span className="text-xs font-bold">Empty Bin</span>
+                    </button>
+                  </>
+              ) : (
+                  <>
+                    <button onClick={() => executeAction('comment')} className="p-1.5 hover:bg-slate-800 rounded-lg text-yellow-400" title="Comment"><MessageSquare size={16}/></button>
+                    <button onClick={() => executeAction('download')} className="p-1.5 hover:bg-slate-800 rounded-lg text-emerald-400" title="Download"><Download size={16}/></button>
+                    <button onClick={() => executeAction('move')} className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-300" title="Move"><Move size={16}/></button>
+                    <button onClick={() => executeAction('duplicate')} className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-300" title="Duplicate"><Copy size={16}/></button>
+                    <button onClick={() => executeAction('delete')} className="p-1.5 hover:bg-red-500/10 rounded-lg text-red-500" title="Delete"><Trash2 size={16}/></button>
+                  </>
+              )}
+              
               <button onClick={() => setSelectedIds(new Set())} className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-500" title="Cancel Selection"><X size={16}/></button>
           </div>
       )}
@@ -1167,7 +1182,7 @@ const App = () => {
 
   const executeAction = async (action: string, specificIds?: string[], targetFolderId?: string) => {
     const ids = specificIds || Array.from(selectedIds);
-    if (ids.length === 0 && action !== 'new_folder' && action !== 'native_upload') return;
+    if (ids.length === 0 && action !== 'new_folder' && action !== 'native_upload' && action !== 'empty_bin' && action !== 'restore_all') return;
 
     switch (action) {
       case 'comment':
@@ -1262,18 +1277,69 @@ const App = () => {
               setItems(prev => prev.map(i => ids.includes(i.id) ? { ...i, status: 'idle' } : i));
           }
           break;
+      case 'restore_all':
+          const notifRestore = addNotification("Restoring all items...", "loading");
+          try {
+              const binItemsRes = await API.getFolderContents(recycleBinId);
+              if(binItemsRes.status === 'success' && Array.isArray(binItemsRes.data)) {
+                  const itemsToRestore = binItemsRes.data;
+                  if (itemsToRestore.length === 0) {
+                      updateNotification(notifRestore, "Bin is empty", "success");
+                      return;
+                  }
+                  const restoreIds = itemsToRestore.map((i: any) => i.id);
+                  
+                  // Use existing restore logic but manually since we are outside valid selection scope
+                  const restoreAllPromises = restoreIds.map(async (id) => {
+                      const originalParent = await DB.getDeletedMeta(id);
+                      if (originalParent) {
+                          await API.moveItems([id], originalParent);
+                          await DB.removeDeletedMeta(id);
+                      } else {
+                          await API.moveItems([id], ""); 
+                      }
+                  });
+                  await Promise.all(restoreAllPromises);
+                  
+                  updateNotification(notifRestore, "All items restored", "success");
+                  // If we are currently viewing the bin, refresh it
+                  if (currentFolderId === recycleBinId) loadFolder(recycleBinId);
+              } else {
+                  throw new Error("Failed to fetch bin contents");
+              }
+          } catch(e) {
+              updateNotification(notifRestore, "Restore all failed", "error");
+          }
+          break;
       case 'empty_bin':
           setModal({ type: 'confirm', title: 'Empty Recycle Bin?', message: 'All files will be permanently deleted.', isDanger: true, confirmText: 'Empty Bin', onConfirm: async () => {
              setModal(null);
-             const allIds = items.map(i => i.id);
-             setItems(prev => prev.map(i => ({ ...i, status: 'deleting' })));
+             
+             // If we are not inside the bin, we need to fetch items first to clear view if needed
+             // But simpler is to call delete on all items found in bin
+             const notifEmpty = addNotification("Emptying bin...", "loading");
              try {
-                 await API.deleteItems(allIds);
-                 setItems([]);
-                 addNotification("Recycle Bin emptied", "success");
+                 // First get items to delete
+                 let itemsToDelete: string[] = [];
+                 if (currentFolderId === recycleBinId && items.length > 0) {
+                     itemsToDelete = items.map(i => i.id);
+                 } else {
+                     const binRes = await API.getFolderContents(recycleBinId);
+                     if (binRes.status === 'success' && Array.isArray(binRes.data)) {
+                         itemsToDelete = binRes.data.map((i: any) => i.id);
+                     }
+                 }
+
+                 if (itemsToDelete.length > 0) {
+                     await API.deleteItems(itemsToDelete);
+                     for (const id of itemsToDelete) { await DB.removeDeletedMeta(id); }
+                 }
+                 
+                 if (currentFolderId === recycleBinId) setItems([]);
+                 updateNotification(notifEmpty, "Recycle Bin emptied", "success");
              } catch(e) {
-                 addNotification("Failed to empty bin", "error");
-                 loadFolder(recycleBinId);
+                 updateNotification(notifEmpty, "Failed to empty bin", "error");
+                 if (currentFolderId === recycleBinId) loadFolder(recycleBinId);
              }
           }});
           break;
@@ -1724,23 +1790,38 @@ const App = () => {
                       setGlobalContextMenu(null); 
                   }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-white font-bold"><ExternalLink size={14}/> Open</button>
                   
-                  {!globalContextMenu.isRecycleBin && (
+                  {/* System Folder Protection - Only show Open */}
+                  {globalContextMenu.targetItem.id !== systemFolderId && globalContextMenu.targetItem.name !== SYSTEM_FOLDER_NAME && (
                       <>
-                        <button onClick={() => { executeAction('rename', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><Edit size={14}/> Rename</button>
-                        <button onClick={() => { executeAction('download', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-emerald-400"><Download size={14}/> Download</button>
-                        <button onClick={() => { executeAction('comment', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><MessageSquare size={14}/> Comment</button>
-                        <button onClick={() => { executeAction('move', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><Move size={14}/> Move</button>
+                        {globalContextMenu.targetItem.id === recycleBinId || globalContextMenu.targetItem.name === RECYCLE_BIN_NAME ? (
+                            <>
+                                <div className="h-px bg-slate-800 my-1"></div>
+                                <button onClick={() => { executeAction('restore_all'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-green-400"><RotateCcw size={14}/> Restore All</button>
+                                <button onClick={() => { executeAction('empty_bin'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-500 text-xs flex items-center gap-2"><Trash2 size={14}/> Empty Recycle Bin</button>
+                            </>
+                        ) : (
+                            <>
+                                {!globalContextMenu.isRecycleBin && (
+                                    <>
+                                        <button onClick={() => { executeAction('rename', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><Edit size={14}/> Rename</button>
+                                        <button onClick={() => { executeAction('download', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-emerald-400"><Download size={14}/> Download</button>
+                                        <button onClick={() => { executeAction('comment', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><MessageSquare size={14}/> Comment</button>
+                                        <button onClick={() => { executeAction('move', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><Move size={14}/> Move</button>
+                                    </>
+                                )}
+                                {globalContextMenu.isRecycleBin ? (
+                                    <>
+                                        <div className="h-px bg-slate-800 my-1"></div>
+                                        <button onClick={() => { executeAction('restore', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-green-400"><RotateCcw size={14}/> Restore</button>
+                                    </>
+                                ) : (
+                                    <div className="h-px bg-slate-800 my-1"></div>
+                                )}
+                                <button onClick={() => { executeAction('delete', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-500 text-xs flex items-center gap-2"><Trash2 size={14}/> {globalContextMenu.isRecycleBin ? 'Delete Permanent' : 'Delete'}</button>
+                            </>
+                        )}
                       </>
                   )}
-                  {globalContextMenu.isRecycleBin ? (
-                      <>
-                        <div className="h-px bg-slate-800 my-1"></div>
-                        <button onClick={() => { executeAction('restore', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-green-400"><RotateCcw size={14}/> Restore</button>
-                      </>
-                  ) : (
-                      <div className="h-px bg-slate-800 my-1"></div>
-                  )}
-                  <button onClick={() => { executeAction('delete', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-500 text-xs flex items-center gap-2"><Trash2 size={14}/> {globalContextMenu.isRecycleBin ? 'Delete Permanent' : 'Delete'}</button>
                 </>
             ) : globalContextMenu.type === 'app' ? (
                 <>
@@ -1751,6 +1832,7 @@ const App = () => {
                    {globalContextMenu.targetItem?.id === 'recycle-bin' && (
                        <>
                          <div className="h-px bg-slate-800 my-1"></div>
+                         <button onClick={() => { executeAction('restore_all'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-green-400"><RotateCcw size={14}/> Restore All</button>
                          <button onClick={() => { executeAction('empty_bin'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-500 text-xs flex items-center gap-2"><Trash2 size={14}/> Empty Recycle Bin</button>
                        </>
                    )}
@@ -1758,6 +1840,7 @@ const App = () => {
             ) : globalContextMenu.type === 'folder-background' ? (
                 globalContextMenu.isRecycleBin ? (
                    <>
+                     <button onClick={() => { executeAction('restore_all'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-green-400"><RotateCcw size={14}/> Restore All</button>
                      <button onClick={() => { executeAction('empty_bin'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-500 text-xs flex items-center gap-2"><Trash2 size={14}/> Empty Recycle Bin</button>
                      <div className="h-px bg-slate-800 my-1"></div>
                      <button onClick={() => { loadFolder(currentFolderId); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><RefreshCw size={14}/> Refresh</button>
