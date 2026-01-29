@@ -1266,6 +1266,32 @@ const App = () => {
     catch (e) { addNotification("Failed", "error"); } finally { setIsPostingComment(false); }
   };
 
+  const handleWebAppPropertyChange = async (appId: string, key: string, value: any) => {
+     if(!config) return;
+     
+     // 1. Update Config State
+     const updatedApps = config.installedApps.map(app => 
+         app.id === appId ? { ...app, [key]: value } : app
+     );
+     const updatedConfig = { ...config, installedApps: updatedApps };
+     setConfig(updatedConfig);
+
+     // 2. Update Active Windows State (Immediate Feedback)
+     setWindows(prev => prev.map(w => w.appId === appId ? { ...w, appData: { ...w.appData, [key]: value } } : w));
+
+     // 3. Update Modal State (if open)
+     if (modal && modal.targetItem && modal.targetItem.id === appId) {
+         setModal({ ...modal, targetItem: { ...modal.targetItem, [key]: value } as any });
+     }
+
+     // 4. Save to Cloud
+     try { 
+         await API.saveSystemConfig(updatedConfig); 
+     } catch(e) { 
+         addNotification("Failed to save settings", "error"); 
+     }
+  };
+
   const executeAction = async (action: string, specificIds?: string[], targetFolderId?: string) => {
     const ids = specificIds || Array.from(selectedIds);
     if (ids.length === 0 && action !== 'new_folder' && action !== 'native_upload' && action !== 'empty_bin' && action !== 'restore_all') return;
@@ -1583,18 +1609,12 @@ const App = () => {
 
   if (isGlobalLoading) return (
     <div className="fixed inset-0 bg-slate-950 flex flex-col items-center justify-center z-[9999] select-none cursor-wait">
-      
-      {/* Main Center Logo Area */}
+      {/* ... loading UI ... */}
       <div className="flex flex-col items-center gap-6 animate-in fade-in zoom-in-95 duration-1000">
-         {/* Icon */}
          <div className="w-24 h-24 bg-blue-600 rounded-2xl flex items-center justify-center shadow-[0_0_40px_rgba(37,99,235,0.5)]">
             <Cloud size={48} className="text-white fill-white" />
          </div>
-         
-         {/* Title */}
          <h1 className="text-3xl font-bold text-white tracking-widest font-sans">CLOUD OS</h1>
-         
-         {/* Progress Bar */}
          <div className="w-64 h-1 bg-gray-800 rounded-full overflow-hidden mt-2">
             <div 
                 className="h-full bg-blue-500 transition-all duration-500 ease-out" 
@@ -1603,18 +1623,12 @@ const App = () => {
          </div>
          <div className="text-xs font-mono text-blue-400">{bootProgress}%</div>
       </div>
-
-      {/* Bottom Status Text */}
       <div className="absolute bottom-20 flex flex-col items-center gap-2">
          <p className="text-slate-500 text-xs font-mono uppercase tracking-widest animate-pulse">
             {globalLoadingMessage}
          </p>
       </div>
-      
-      {/* Copyright/Footer */}
-      <div className="absolute bottom-6 text-[10px] text-slate-700">
-         © 2025 Zombio Systems
-      </div>
+      <div className="absolute bottom-6 text-[10px] text-slate-700">© 2025 Zombio Systems</div>
     </div>
   );
 
@@ -1734,7 +1748,7 @@ const App = () => {
                 initialFolderId={win.args?.folderId}
                 currentFolderId={currentFolderId} 
                 filesInFolder={items} 
-                systemMap={systemMap} // Passing full system map for picker
+                systemMap={systemMap} 
                 onClose={() => closeWindow(win.instanceId)}
                 onRefresh={() => loadFolder(win.args?.folderId || currentFolderId)}
                 onSaveToCloud={async (id: string, title: string, content: string, targetFolderId?: string) => {
@@ -1761,10 +1775,12 @@ const App = () => {
             {(win.appId === 'app-store' || win.appId === 'store') && <AppStoreApp config={config!} setConfig={setConfig} addNotification={addNotification} systemFolderId={systemFolderId}/>}
             {(win.appData.type === 'webapp') && win.appId !== 'youtube' && win.appId !== 'canva' && (
               <div className="h-full flex flex-col bg-white">
-                <div className="p-1 bg-slate-100 flex items-center justify-between gap-2 border-b">
-                   <div className="flex items-center gap-2 flex-1 min-w-0"><Globe size={12} className="text-slate-400 ml-2 flex-shrink-0"/><input className="flex-1 bg-white px-3 py-1 rounded-lg border-none text-[10px] outline-none text-slate-800" value={win.appData.url} readOnly /></div>
-                   <button onClick={() => window.open(win.appData.url, '_blank')} className="p-1.5 hover:bg-slate-200 rounded text-slate-500"><ExternalLink size={14}/></button>
-                </div>
+                {!win.appData.hideAddressBar && (
+                    <div className="p-1 bg-slate-100 flex items-center justify-between gap-2 border-b">
+                       <div className="flex items-center gap-2 flex-1 min-w-0"><Globe size={12} className="text-slate-400 ml-2 flex-shrink-0"/><input className="flex-1 bg-white px-3 py-1 rounded-lg border-none text-[10px] outline-none text-slate-800" value={win.appData.url} readOnly /></div>
+                       <button onClick={() => window.open(win.appData.url, '_blank')} className="p-1.5 hover:bg-slate-200 rounded text-slate-500"><ExternalLink size={14}/></button>
+                    </div>
+                )}
                 <iframe src={win.appData.url} className="flex-1 w-full border-none" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation" />
               </div>
             )}
@@ -1914,8 +1930,8 @@ const App = () => {
             ) : globalContextMenu.type === 'app' ? (
                 <>
                    <button onClick={() => { openApp(globalContextMenu.targetItem as API.AppDefinition); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><ExternalLink size={14}/> Open</button>
-                   {globalContextMenu.targetItem?.id === 'youtube' && (
-                       <button onClick={() => { setModal({ type: 'properties', title: 'YouTube Properties', targetItem: globalContextMenu.targetItem as any }); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><Settings size={14}/> Properties</button>
+                   {(globalContextMenu.targetItem?.type === 'webapp' || globalContextMenu.targetItem?.id === 'youtube') && (
+                       <button onClick={() => { setModal({ type: 'properties', title: `${globalContextMenu.targetItem?.name} Properties`, targetItem: globalContextMenu.targetItem as any }); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><Settings size={14}/> Properties</button>
                    )}
                    {globalContextMenu.targetItem?.id === 'recycle-bin' && (
                        <>
@@ -1982,27 +1998,56 @@ const App = () => {
                    <button disabled={isPostingComment} onClick={handleAddComment} className="p-2 bg-blue-600 text-white rounded-lg disabled:opacity-50"><Send size={16}/></button>
                 </div>
               </div>
-            ) : modal.type === 'properties' && modal.targetItem?.id === 'youtube' ? (
+            ) : modal.type === 'properties' ? (
                 <div className="p-6">
-                   <h3 className="text-lg font-bold text-white mb-4">YouTube API Configuration</h3>
-                   <div className="space-y-4">
-                        <div className="bg-slate-800 p-4 rounded-xl border border-slate-700">
-                            <h4 className="text-xs text-slate-400 uppercase font-bold mb-2">Custom API Keys</h4>
-                            <div className="space-y-2 mb-3 max-h-40 overflow-y-auto">
-                                {(config?.youtubeApiKeys || []).map((key, idx) => (
-                                    <div key={idx} className="flex justify-between items-center bg-slate-900 p-2 rounded border border-slate-800">
-                                        <span className="text-xs font-mono text-slate-500">{key.substring(0, 4)}...{key.substring(key.length-4)}</span>
-                                        <button onClick={() => handlePropertiesSave((config?.youtubeApiKeys || []).filter((_, i) => i !== idx))} className="text-red-500 hover:text-red-400"><X size={14}/></button>
-                                    </div>
-                                ))}
+                   <h3 className="text-lg font-bold text-white mb-4">{modal.title}</h3>
+                   
+                   {modal.targetItem?.id === 'youtube' ? (
+                        <div className="space-y-4">
+                            <div className="bg-slate-800 p-4 rounded-xl border border-slate-700">
+                                <h4 className="text-xs text-slate-400 uppercase font-bold mb-2">Custom API Keys</h4>
+                                <div className="space-y-2 mb-3 max-h-40 overflow-y-auto">
+                                    {(config?.youtubeApiKeys || []).map((key, idx) => (
+                                        <div key={idx} className="flex justify-between items-center bg-slate-900 p-2 rounded border border-slate-800">
+                                            <span className="text-xs font-mono text-slate-500">{key.substring(0, 4)}...{key.substring(key.length-4)}</span>
+                                            <button onClick={() => handlePropertiesSave((config?.youtubeApiKeys || []).filter((_, i) => i !== idx))} className="text-red-500 hover:text-red-400"><X size={14}/></button>
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="flex gap-2">
+                                    <input className="flex-1 bg-slate-900 border border-slate-700 rounded px-3 py-2 text-xs text-white" placeholder="Enter new API Key" id="new-api-key-input"/>
+                                    <button onClick={() => { const input = document.getElementById('new-api-key-input') as HTMLInputElement; if(input.value) { handlePropertiesSave([...(config?.youtubeApiKeys || []), input.value]); input.value = ""; } }} className="px-3 bg-blue-600 rounded text-xs text-white font-bold">Add</button>
+                                </div>
                             </div>
-                            <div className="flex gap-2">
-                                <input className="flex-1 bg-slate-900 border border-slate-700 rounded px-3 py-2 text-xs text-white" placeholder="Enter new API Key" id="new-api-key-input"/>
-                                <button onClick={() => { const input = document.getElementById('new-api-key-input') as HTMLInputElement; if(input.value) { handlePropertiesSave([...(config?.youtubeApiKeys || []), input.value]); input.value = ""; } }} className="px-3 bg-blue-600 rounded text-xs text-white font-bold">Add</button>
-                            </div>
-                        </div>
-                        <div className="flex justify-end pt-2"><button onClick={() => setModal(null)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs font-bold text-white">Close</button></div>
-                   </div>
+                            <div className="flex justify-end pt-2"><button onClick={() => setModal(null)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs font-bold text-white">Close</button></div>
+                       </div>
+                   ) : modal.targetItem?.type === 'webapp' ? (
+                       <div className="space-y-4">
+                           <div className="bg-slate-800 p-4 rounded-xl border border-slate-700">
+                               <h4 className="text-xs text-slate-400 uppercase font-bold mb-3">Tampilan Aplikasi</h4>
+                               <div className="flex items-center justify-between">
+                                   <div className="flex flex-col">
+                                       <label className="text-sm text-white font-medium">Sembunyikan Address Bar</label>
+                                       <span className="text-[10px] text-slate-500">Menghilangkan bar URL untuk tampilan seperti native app.</span>
+                                   </div>
+                                   <label className="relative inline-flex items-center cursor-pointer">
+                                      <input 
+                                        type="checkbox" 
+                                        className="sr-only peer"
+                                        checked={!!modal.targetItem.hideAddressBar}
+                                        onChange={(e) => handleWebAppPropertyChange(modal.targetItem!.id, 'hideAddressBar', e.target.checked)}
+                                      />
+                                      <div className="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                                    </label>
+                               </div>
+                           </div>
+                           <div className="flex justify-end pt-2">
+                               <button onClick={() => setModal(null)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs font-bold text-white">Tutup</button>
+                           </div>
+                       </div>
+                   ) : (
+                       <p className="text-slate-400 text-sm">Tidak ada pengaturan tambahan untuk item ini.</p>
+                   )}
                 </div>
             ) : (
               <div className="p-6">

@@ -16,6 +16,7 @@ export interface AppDefinition {
   icon: string; // can be icon name or URL
   type: 'system' | 'webapp';
   url?: string;
+  hideAddressBar?: boolean;
 }
 
 export interface SystemConfig {
