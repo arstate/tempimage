@@ -9,7 +9,7 @@ import {
   CheckCheck, MessageSquare, Reply, Send, User, Clock,
   Grid, Monitor, Globe, Settings, ShoppingBag, Minus, Square, Search, Wifi,
   Maximize2, MonitorCheck, ExternalLink, Minimize2, LayoutGrid, Youtube, Play, Pause, SkipForward, Music,
-  UploadCloud, RefreshCcw, Hand, Power, Focus
+  UploadCloud, RefreshCcw, Hand, Power, Focus, LayoutTemplate
 } from 'lucide-react';
 import * as API from './services/api';
 import * as DB from './services/db';
@@ -340,19 +340,22 @@ const GalleryApp = ({ items, onUpload, onDelete, loading }: any) => {
 };
 
 // --- CANVA APP COMPONENT WITH REMOTE CONTROLLER UI ---
-const CanvaApp = ({ onLaunch, onCloseApp }: { onLaunch: () => void, onCloseApp: () => void }) => {
+const CanvaApp = ({ onLaunch, onCloseApp, onMinimize }: { onLaunch: () => void, onCloseApp: () => void, onMinimize: () => void }) => {
   const [isRunning, setIsRunning] = useState(false);
   const externalWindowRef = useRef<Window | null>(null);
 
   const handleLaunch = () => {
-    // Calculate Dimensions
-    const width = window.screen.availWidth;
-    const height = window.screen.availHeight - 48; // Leave room for taskbar hint
+    // 1. Hitung Ukuran Layar Tersedia dengan GAP LEBIH BESAR
+    // Menggunakan gap 100px agar taskbar di desktop tidak tertutup
+    const taskbarGap = 100;
+    const screenWidth = window.screen.availWidth;
+    const screenHeight = window.screen.availHeight - taskbarGap;
     
+    // 2. Buka Jendela
     externalWindowRef.current = window.open(
       'https://www.canva.com', 
       'CanvaWindow', 
-      `width=${width},height=${height},top=0,left=0,toolbar=no,menubar=no,location=no,status=no`
+      `width=${screenWidth},height=${screenHeight},top=0,left=0,toolbar=no,menubar=no,location=no,status=no,resizable=yes,scrollbars=yes`
     );
 
     setIsRunning(true);
@@ -403,7 +406,7 @@ const CanvaApp = ({ onLaunch, onCloseApp }: { onLaunch: () => void, onCloseApp: 
 
             <h2 className="text-xl font-bold text-slate-300">Canva Remote Control</h2>
             <p className="text-slate-500 text-center max-w-xs text-sm">
-               Aplikasi berjalan di jendela terpisah. Gunakan kontrol ini untuk mengelola sesi.
+               Aplikasi berjalan di jendela terpisah.
             </p>
 
             <div className="flex gap-4 mt-4">
@@ -418,13 +421,23 @@ const CanvaApp = ({ onLaunch, onCloseApp }: { onLaunch: () => void, onCloseApp: 
                </button>
 
                <button 
+                 onClick={onMinimize}
+                 className="flex flex-col items-center gap-2 group"
+               >
+                  <div className="w-14 h-14 bg-yellow-500/10 group-hover:bg-yellow-500 text-yellow-500 group-hover:text-white rounded-2xl flex items-center justify-center transition-all shadow-lg border border-yellow-500/20">
+                     <Minus size={24} />
+                  </div>
+                  <span className="text-xs font-bold text-slate-400 group-hover:text-yellow-400">Minimize</span>
+               </button>
+
+               <button 
                  onClick={handleFocus}
                  className="flex flex-col items-center gap-2 group"
                >
                   <div className="w-14 h-14 bg-blue-500/10 group-hover:bg-blue-500 text-blue-500 group-hover:text-white rounded-2xl flex items-center justify-center transition-all shadow-lg border border-blue-500/20">
                      <Focus size={24} />
                   </div>
-                  <span className="text-xs font-bold text-slate-400 group-hover:text-blue-400">Buka Kembali</span>
+                  <span className="text-xs font-bold text-slate-400 group-hover:text-blue-400">Ke Canva</span>
                </button>
             </div>
          </div>
@@ -448,7 +461,7 @@ const CanvaApp = ({ onLaunch, onCloseApp }: { onLaunch: () => void, onCloseApp: 
           </div>
           <h1 className="text-4xl font-bold mb-2 text-shadow">Canva Designer</h1>
           <p className="text-white/80 mb-8 max-w-md mx-auto text-sm drop-shadow">
-            Aplikasi ini akan berjalan di jendela khusus agar performa maksimal. Taskbar Cloud OS akan tetap aktif di window utama.
+            Aplikasi ini akan berjalan di jendela khusus agar performa maksimal.
           </p>
 
           <button 
@@ -1834,7 +1847,7 @@ const App = () => {
                 }}
               />
             )}
-            {win.appId === 'canva' && <CanvaApp onLaunch={() => setIsCanvaRunning(true)} onCloseApp={() => setIsCanvaRunning(false)} />}
+            {win.appId === 'canva' && <CanvaApp onLaunch={() => setIsCanvaRunning(true)} onCloseApp={() => setIsCanvaRunning(false)} onMinimize={() => toggleMinimize(win.instanceId)} />}
             {win.appData.url === 'internal://gallery' && (
               <GalleryApp 
                 items={items} 
@@ -1917,8 +1930,8 @@ const App = () => {
         </div>
       )}
 
-      {/* TASKBAR */}
-      <div className="absolute bottom-0 w-full h-12 glass border-t border-white/5 flex items-center justify-between px-4 z-[70]"
+      {/* TASKBAR - FIXED POSITION */}
+      <div className="fixed bottom-0 left-0 right-0 h-12 glass border-t border-white/5 flex items-center justify-between px-4 z-[9999]"
            style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
         <div className="w-24 flex items-center gap-2 hidden sm:flex">
             <button onClick={toggleFullscreen} className="p-2 rounded-xl hover:bg-white/10 transition-all text-white/50 hover:text-white" title="Toggle Fullscreen">
@@ -1945,18 +1958,18 @@ const App = () => {
            ))}
         </div>
         
-        {/* Indikator Spesial Canva */}
+        {/* Indikator Spesial Canva - Visible on Mobile */}
         {isCanvaRunning && (
-            <div className="px-4 flex items-center gap-2 border-l border-white/10 ml-2 animate-in fade-in duration-300 hidden sm:flex">
-                <span className="relative flex h-3 w-3">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-3 w-3 bg-purple-500"></span>
+            <div className="px-2 sm:px-4 flex items-center gap-2 border-l border-white/10 ml-2 animate-in fade-in duration-300">
+                <span className="relative flex h-3 w-3 flex-shrink-0">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-3 w-3 bg-purple-500"></span>
                 </span>
-                <span className="text-xs text-purple-300 font-bold whitespace-nowrap">Canva Active</span>
+                <span className="text-xs text-purple-300 font-bold whitespace-nowrap hidden md:inline">Canva Active</span>
                 
                 <button 
-                onClick={() => alert("Tekan tombol Home/Recent Apps di HP Anda untuk kembali ke Canva.")}
-                className="text-[10px] bg-white/10 px-2 py-1 rounded hover:bg-white/20 text-white ml-2 whitespace-nowrap"
+                onClick={() => alert("Gunakan task switcher untuk kembali ke Canva.")}
+                className="text-[10px] bg-white/10 px-2 py-1 rounded hover:bg-white/20 text-white ml-1 whitespace-nowrap"
                 >
                 Switch
                 </button>
