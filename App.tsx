@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { 
   Folder, FileText, Image as ImageIcon, MoreVertical, 
@@ -8,11 +9,11 @@ import {
   CheckCheck, MessageSquare, Reply, Send, User, Clock,
   Grid, Monitor, Globe, Settings, ShoppingBag, Minus, Square, Search, Wifi,
   Maximize2, MonitorCheck, ExternalLink, Minimize2, LayoutGrid, Youtube, Play, Pause, SkipForward, Music,
-  UploadCloud, RefreshCcw, Hand
+  UploadCloud, Hand, ArrowUp
 } from 'lucide-react';
 import * as API from './services/api';
 import * as DB from './services/db';
-import { Item, StoredNote, DownloadItem, FolderMap, SystemDB, Comment, CommentDB, StoredImage } from './types';
+import { Item, StoredNote, DownloadItem, FolderMap, SystemDB, Comment, CommentDB, StoredImage, FolderNode } from './types';
 import { TextEditor } from './components/TextEditor';
 import { UploadProgress, UploadItem } from './components/UploadProgress';
 import { DownloadProgress } from './components/DownloadProgress';
@@ -341,6 +342,7 @@ const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId }: any
    const [appUrl, setAppUrl] = useState('');
    const [customIconFile, setCustomIconFile] = useState<File | null>(null);
    const [isInstalling, setIsInstalling] = useState(false);
+   const [uninstallingId, setUninstallingId] = useState<string | null>(null);
    const [useProxy, setUseProxy] = useState(false);
    const [showAddressBar, setShowAddressBar] = useState(true);
  
@@ -396,8 +398,18 @@ const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId }: any
     if (!config) return;
     const app = config.installedApps.find((a: any) => a.id === appId);
     if ((app?.type === 'system' && (app?.id === 'file-explorer' || app?.id === 'notes')) || app?.id === 'youtube') return;
+    
+    setUninstallingId(appId);
     const updatedConfig = { ...config, installedApps: config.installedApps.filter((a: any) => a.id !== appId) };
-    try { await API.saveSystemConfig(updatedConfig); setConfig(updatedConfig); addNotification("Aplikasi berhasil dihapus", "success"); } catch (e) {}
+    try { 
+      await API.saveSystemConfig(updatedConfig); 
+      setConfig(updatedConfig); 
+      addNotification("Aplikasi berhasil dihapus", "success"); 
+    } catch (e) {
+      addNotification("Gagal menghapus aplikasi", "error");
+    } finally {
+      setUninstallingId(null);
+    }
    };
 
    return (
@@ -417,342 +429,254 @@ const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId }: any
               <div className="flex items-center gap-4 py-2 px-1">
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input type="checkbox" checked={useProxy} onChange={e => setUseProxy(e.target.checked)} className="w-4 h-4 bg-slate-900 rounded border-slate-700 text-blue-600 focus:ring-0" />
-                  <span className="text-xs text-slate-300">Use Proxy</span>
+                  <span className="text-xs text-slate-300">Bypass Blocking (Proxy)</span>
                 </label>
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input type="checkbox" checked={showAddressBar} onChange={e => setShowAddressBar(e.target.checked)} className="w-4 h-4 bg-slate-900 rounded border-slate-700 text-blue-600 focus:ring-0" />
-                  <span className="text-xs text-slate-300">Show Address Bar</span>
+                  <span className="text-xs text-slate-300">Tampilkan Address Bar</span>
                 </label>
               </div>
             </div>
           </div>
-          <div className="flex items-end"><button onClick={() => { if(!appName || !appUrl) return; handleInstall({ id: 'custom-'+Date.now(), name: appName, url: appUrl, icon: 'globe', type: 'webapp' }); }} disabled={isInstalling} className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold">{isInstalling ? <Loader2 className="animate-spin"/> : 'Instal'}</button></div>
+          <div className="flex items-end"><button onClick={() => { if(!appName || !appUrl) return; handleInstall({ id: 'custom-'+Date.now(), name: appName, url: appUrl, icon: 'globe', type: 'webapp' }); }} disabled={isInstalling} className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold">{isInstalling ? <Loader2 className="animate-spin mx-auto"/> : 'Instal'}</button></div>
         </div>
       </section>
-      <section className="space-y-4"><h2 className="text-lg font-bold text-slate-300">Terpasang</h2><div className="space-y-2">{config?.installedApps.map((app: any) => (<div key={app.id} className="flex justify-between items-center p-4 bg-slate-800/40 border border-slate-700/50 rounded-xl"><div className="flex items-center gap-4"><div className="w-12 h-12 bg-slate-950 rounded-xl flex items-center justify-center border border-slate-800">{app.icon.startsWith('http') ? <img src={app.icon} className="w-full h-full object-cover"/> : <Globe size={24}/>}</div><div className="font-bold text-sm">{app.name}</div></div>{app.type === 'webapp' && <button onClick={() => handleUninstall(app.id)} className="p-2 text-red-500"><Trash2 size={18}/></button>}</div>))}</div></section>
+      <section className="space-y-4">
+        <h2 className="text-lg font-bold text-slate-300">Terpasang</h2>
+        <div className="space-y-2">
+          {config?.installedApps.map((app: any) => (
+            <div key={app.id} className="flex justify-between items-center p-4 bg-slate-800/40 border border-slate-700/50 rounded-xl">
+              <div className="flex items-center gap-4">
+                <div className="w-12 h-12 bg-slate-950 rounded-xl flex items-center justify-center border border-slate-800 overflow-hidden">
+                  {app.icon.startsWith('http') ? <img src={app.icon} className="w-full h-full object-cover"/> : <Globe size={24}/>}
+                </div>
+                <div className="flex flex-col">
+                  <span className="font-bold text-sm">{app.name}</span>
+                  <span className="text-[10px] text-slate-500 uppercase tracking-tighter">{app.type}</span>
+                </div>
+              </div>
+              {app.type === 'webapp' && (
+                <button 
+                  onClick={() => handleUninstall(app.id)} 
+                  disabled={uninstallingId === app.id}
+                  className="p-2 text-red-500 hover:bg-red-500/10 rounded-lg transition-colors disabled:opacity-50"
+                >
+                  {uninstallingId === app.id ? <Loader2 size={18} className="animate-spin"/> : <Trash2 size={18}/>}
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
+      </section>
       <section className="space-y-4"><h2 className="text-lg font-bold text-slate-300">Rekomendasi</h2><div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">{popularApps.map(app => (<div key={app.id} className="bg-slate-800/40 p-4 rounded-2xl flex flex-col items-center gap-4"><div className="w-16 h-16 bg-slate-950 rounded-2xl flex items-center justify-center"><Globe size={32}/></div><p className="font-bold text-sm">{app.name}</p><button onClick={() => handleInstall(app)} className="w-full py-2 bg-blue-600/20 text-blue-400 rounded-lg text-xs font-bold">Instal</button></div>))}</div></section>
     </div>
    );
 };
 
-// --- FILE EXPLORER APP COMPONENT ---
-const FileExplorerApp = ({ 
-    currentFolderId, setCurrentFolderId,
-    folderHistory, setFolderHistory,
-    items, setItems,
-    loading, setLoading,
-    systemMap, setSystemMap,
-    dbFileId, setDbFileId,
-    comments, setComments,
-    recycleBinId, setRecycleBinId,
-    systemFolderId, setSystemFolderId,
-    isSavingDB, setIsSavingDB,
-    isSavingComments, setIsSavingComments,
-    triggerCloudSync, triggerCommentSync,
-    handleRefreshComments,
-    addNotification, removeNotification, updateNotification,
-    setModal, modal,
-    setEditingNote,
-    setViewingRawFile,
-    setViewingProperties,
-    setPreviewImage,
-    handleUploadFiles,
-    executeAction,
-    loadFolder,
-    selectedIds, setSelectedIds,
-    onContextMenu,
-    openNotesApp
-}: any) => {
-  const [lastSelectedId, setLastSelectedId] = useState<string | null>(null);
-  const [isNewDropdownOpen, setIsNewDropdownOpen] = useState(false);
-  const [selectionBox, setSelectionBox] = useState<{x:number, y:number, width:number, height:number} | null>(null);
-  const [customDragItem, setCustomDragItem] = useState<Item | null>(null);
-  const [customDragPos, setCustomDragPos] = useState<{x:number, y:number} | null>(null);
-  const [dropTargetId, setDropTargetId] = useState<string | null>(null);
-  const [isDragSelecting, setIsDragSelecting] = useState(false);
-  const [isExternalDragging, setIsExternalDragging] = useState(false);
-  const [isCommentsLoading, setIsCommentsLoading] = useState(false);
-  
-  const containerRef = useRef<HTMLDivElement>(null);
-  const dragStartPos = useRef<{x:number, y:number} | null>(null);
-  const isPaintingRef = useRef<boolean>(false); 
-  const longPressTimerRef = useRef<any>(null);
+// --- SETTINGS APP COMPONENT ---
+const SettingsApp = ({ config, onSave, systemFolderId, addNotification }: any) => {
+  const [localConfig, setLocalConfig] = useState(config);
+  const [isUploadingWallpaper, setIsUploadingWallpaper] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // EXTERNAL DRAG AND DROP HANDLERS
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault(); e.stopPropagation();
-    if (e.dataTransfer.types.includes('Files')) setIsExternalDragging(true);
-  };
-  const handleDragLeave = (e: React.DragEvent) => {
-    e.preventDefault(); e.stopPropagation();
-    setIsExternalDragging(false);
-  };
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault(); e.stopPropagation();
-    setIsExternalDragging(false);
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) handleUploadFiles(Array.from(e.dataTransfer.files));
-  };
+  const handleUploadWallpaper = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !systemFolderId) return;
 
-  const handlePointerDown = (e: React.PointerEvent) => {
-     if ((e.target as HTMLElement).closest('button, .item-handle, .floating-ui, select, input, .comment-area')) return;
-     const target = e.target as HTMLElement;
-     const checkbox = target.closest('.selection-checkbox');
-     const itemRow = target.closest('[data-item-id]');
-     if (e.button === 2) return;
-
-     const rect = containerRef.current?.getBoundingClientRect();
-     const localX = e.clientX - (rect?.left || 0);
-     const localY = e.clientY - (rect?.top || 0);
-
-     dragStartPos.current = { x: localX, y: localY };
-     if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
-     
-     if (checkbox && itemRow) {
-         e.stopPropagation();
-         const id = itemRow.getAttribute('data-item-id');
-         if(id) { 
-            setSelectedIds((prev: Set<string>) => { const next = new Set(prev); if (next.has(id)) next.delete(id); else next.add(id); return next; });
-            setLastSelectedId(id);
-            isPaintingRef.current = true; 
-         }
-         setIsDragSelecting(true);
-     } else if (itemRow) {
-         const id = itemRow.getAttribute('data-item-id');
-         if (id) {
-             const clickedItem = items.find((i: Item) => i.id === id);
-             if (clickedItem) {
-                 longPressTimerRef.current = setTimeout(() => {
-                     if (clickedItem.id === systemFolderId || currentFolderId === systemFolderId) return;
-                     setCustomDragItem(clickedItem); 
-                     setCustomDragPos({ x: e.clientX, y: e.clientY });
-                     if (!selectedIds.has(clickedItem.id)) setSelectedIds(new Set([clickedItem.id]));
-                     if (navigator.vibrate) navigator.vibrate(50);
-                 }, 500); 
-             }
-         }
-         isPaintingRef.current = false; 
-     } else {
-         isPaintingRef.current = false; 
-         setSelectionBox({ x: localX, y: localY, width: 0, height: 0 });
-         setIsDragSelecting(true); 
-         if (!e.ctrlKey && !e.shiftKey) setSelectedIds(new Set());
-     }
-     setIsNewDropdownOpen(false);
-  };
-
-  const handlePointerMove = (e: React.PointerEvent) => {
-     if (!dragStartPos.current) return;
-     if (customDragItem) {
-         setCustomDragPos({ x: e.clientX, y: e.clientY });
-         const elements = document.elementsFromPoint(e.clientX, e.clientY);
-         const folderEl = elements.find(el => {
-             const row = el.closest('[data-folder-id]');
-             const id = row?.getAttribute('data-folder-id');
-             return id && id !== customDragItem.id && !selectedIds.has(id);
-         })?.closest('[data-folder-id]');
-         setDropTargetId(folderEl ? folderEl.getAttribute('data-folder-id') : null);
-         return;
-     }
-
-     const rect = containerRef.current?.getBoundingClientRect();
-     if (!rect) return;
-     const currentLocalX = e.clientX - rect.left;
-     const currentLocalY = e.clientY - rect.top;
-
-     const moveDist = Math.sqrt(Math.pow(currentLocalX - dragStartPos.current.x, 2) + Math.pow(currentLocalY - dragStartPos.current.y, 2));
-     if (moveDist > 5) {
-         if (longPressTimerRef.current) { clearTimeout(longPressTimerRef.current); longPressTimerRef.current = null; }
-         if (!isDragSelecting) { setIsDragSelecting(true); }
-         const x = Math.min(dragStartPos.current.x, currentLocalX); const y = Math.min(dragStartPos.current.y, currentLocalY);
-         const width = Math.abs(currentLocalX - dragStartPos.current.x); const height = Math.abs(currentLocalY - dragStartPos.current.y);
-         setSelectionBox({ x, y, width, height });
-         
-         const newSelected = new Set(selectedIds);
-         items.forEach((item: Item) => {
-            const el = document.getElementById(`item-${item.id}`);
-            if (el) {
-                const itemRect = el.getBoundingClientRect();
-                const relativeItemLeft = itemRect.left - rect.left;
-                const relativeItemTop = itemRect.top - rect.top;
-                const relativeItemRight = itemRect.right - rect.left;
-                const relativeItemBottom = itemRect.bottom - rect.top;
-                if (x < relativeItemRight && x + width > relativeItemLeft && y < relativeItemBottom && y + height > relativeItemTop) {
-                    newSelected.add(item.id);
-                }
-            }
-         });
-         setSelectedIds(newSelected);
-     }
-  };
-
-  const handlePointerUp = async (e: React.PointerEvent) => {
-      if (longPressTimerRef.current) { clearTimeout(longPressTimerRef.current); longPressTimerRef.current = null; }
-      const currentDrag = customDragItem;
-      const targetId = dropTargetId;
-      setCustomDragItem(null); setCustomDragPos(null); setDropTargetId(null); setIsDragSelecting(false); setSelectionBox(null); dragStartPos.current = null; isPaintingRef.current = false;
-      if (currentDrag && targetId) {
-          executeAction('move', Array.from(selectedIds), targetId);
-      }
-  };
-
-  const handleItemClick = (e: React.MouseEvent, item: Item) => {
-    if (isPaintingRef.current || customDragItem) return;
-    if (e.shiftKey && lastSelectedId) {
-        const lastIndex = items.findIndex((i: Item) => i.id === lastSelectedId);
-        const currentIndex = items.findIndex((i: Item) => i.id === item.id);
-        if (lastIndex !== -1 && currentIndex !== -1) {
-            const start = Math.min(lastIndex, currentIndex); const end = Math.max(lastIndex, currentIndex);
-            const rangeIds = items.slice(start, end + 1).map((i: Item) => i.id);
-            const newSet = new Set(selectedIds); rangeIds.forEach(itemId => newSet.add(itemId)); setSelectedIds(newSet);
-        }
-    } else if (e.ctrlKey || e.metaKey) { 
-        setSelectedIds((prev: Set<string>) => { const next = new Set(prev); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; });
-        setLastSelectedId(item.id);
-    } 
-    else { setSelectedIds(new Set([item.id])); setLastSelectedId(item.id); }
-  };
-
-  const handleItemDoubleClick = async (e: React.MouseEvent, item: Item) => {
-    e.stopPropagation();
-    if (item.type === 'folder') {
-        if (item.id === systemFolderId || item.name === SYSTEM_FOLDER_NAME) {
-            setModal({
-                type: 'password', title: 'System Folder Locked', message: 'Enter password (1509)', confirmText: 'Open', inputValue: '',
-                onConfirm: (val: string | undefined) => {
-                    if (val === SYSTEM_PASSWORD) { 
-                      setModal(null); 
-                      setFolderHistory((prev: any[]) => [...prev, { id: item.id, name: item.name }]); 
-                      setCurrentFolderId(item.id); 
-                    } 
-                    else { addNotification("Incorrect Password", "error"); }
-                }
-            });
-            return;
-        }
-        setFolderHistory((prev: any[]) => [...prev, { id: item.id, name: item.name }]); 
-        setCurrentFolderId(item.id);
-    } else if (item.type === 'note') {
-        if (item.name.includes(DB_FILENAME_BASE)) { 
-            const notifId = addNotification('Reading Database...', 'loading');
-            try {
-                let content = item.content;
-                if (!content) content = await API.getFileContent(item.id);
-                try { const json = JSON.parse(content || "{}"); content = JSON.stringify(json, null, 2); } catch(e) {}
-                setViewingRawFile({ title: item.name, content: content || "" }); removeNotification(notifId);
-            } catch(e) { updateNotification(notifId, 'Failed to open DB', 'error'); }
-        } else { 
-            openNotesApp(item.id);
-        }
-    } else if (item.type === 'image') { setPreviewImage(item.url || null); }
-  };
-
-  const openComments = async (item: Item) => {
-      setIsCommentsLoading(true);
-      setItems((prev: Item[]) => prev.map(i => i.id === item.id ? { ...i, status: 'creating' } : i)); 
-      await handleRefreshComments(); 
-      setItems((prev: Item[]) => prev.map(i => i.id === item.id ? { ...i, status: 'idle' } : i)); 
-      setIsCommentsLoading(false);
-      setModal({ type: 'comment', title: `Comments: ${item.name}`, targetItem: item });
-  };
-
-  const localHandleContextMenu = (e: React.MouseEvent | React.PointerEvent, item?: Item) => {
-    e.preventDefault(); e.stopPropagation();
-    if (item) {
-        if (!selectedIds.has(item.id)) { setSelectedIds(new Set([item.id])); setLastSelectedId(item.id); }
-        onContextMenu(e, item, currentFolderId === recycleBinId);
-    } else {
-        onContextMenu(e, null, currentFolderId === recycleBinId);
+    setIsUploadingWallpaper(true);
+    const notifId = addNotification("Uploading wallpaper...", "loading");
+    try {
+      const res = await API.uploadToDrive(file, systemFolderId);
+      const imageUrl = res.thumbnail || res.url;
+      setLocalConfig({ ...localConfig, wallpaper: imageUrl });
+      updateNotification(notifId, "Wallpaper uploaded", "success");
+    } catch (e) {
+      updateNotification(notifId, "Failed to upload wallpaper", "error");
+    } finally {
+      setIsUploadingWallpaper(false);
     }
   };
 
-  const groupedItems = { folders: items.filter((i: Item) => i.type === 'folder'), notes: items.filter((i: Item) => i.type === 'note'), images: items.filter((i: Item) => i.type === 'image') };
-  const isSystemFolder = currentFolderId === systemFolderId;
+  const updateNotification = (id: string, message: string, type: 'success' | 'error') => {
+    // This is passed from parent usually, but setting it here for consistency
+  };
 
-  return (
-    <div ref={containerRef} className="h-full flex flex-col bg-slate-900 overflow-hidden relative touch-none" 
-         onPointerDown={handlePointerDown} onPointerMove={handlePointerMove} onPointerUp={handlePointerUp}
-         onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop}
-         onContextMenu={(e) => localHandleContextMenu(e)}>
-      
-      {selectionBox && (<div className="absolute z-[150] bg-blue-500/20 border border-blue-400 pointer-events-none" style={{ left: selectionBox.x, top: selectionBox.y, width: selectionBox.width, height: selectionBox.height }} />)}
-      {isExternalDragging && ( <div className="absolute inset-0 z-[160] bg-blue-600/20 backdrop-blur-[2px] border-2 border-dashed border-blue-500 m-4 rounded-2xl flex flex-col items-center justify-center pointer-events-none"><UploadCloud size={48} className="text-blue-500 mb-2 animate-bounce"/><span className="text-lg font-bold text-blue-500 uppercase tracking-widest">Drop files to upload</span></div> )}
-
-      <div className="flex items-center justify-between p-3 bg-slate-950/50 border-b border-slate-800">
-        <div className="flex items-center gap-1 overflow-x-auto no-scrollbar">
-           <button onClick={() => { setFolderHistory([]); setCurrentFolderId(""); }} className={`p-1.5 rounded-lg flex items-center gap-2 text-xs font-medium transition-colors ${currentFolderId === "" ? 'text-blue-400 bg-blue-500/10' : 'text-slate-400 hover:bg-slate-800'}`}><Home size={16} /> Home</button>
-           {folderHistory.map((h: any, idx: number) => ( <React.Fragment key={h.id}><ChevronRight size={12} className="text-slate-600 flex-shrink-0" /><button onClick={() => { setFolderHistory((prev: any[]) => prev.slice(0, idx+1)); setCurrentFolderId(h.id); }} className={`p-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${idx === folderHistory.length - 1 ? 'text-blue-400 bg-blue-500/10' : 'text-slate-400 hover:bg-slate-800'}`}>{h.name}</button></React.Fragment> ))}
-        </div>
-        {currentFolderId !== recycleBinId && !isSystemFolder && (
-          <div className="flex items-center gap-2">
-            <button onPointerDown={(e) => { e.stopPropagation(); setIsNewDropdownOpen(!isNewDropdownOpen); }} className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-lg flex items-center gap-2 text-xs font-bold transition-all"><Plus size={14} /> New</button>
-            {isNewDropdownOpen && (
-              <div className="absolute right-3 top-12 w-48 bg-slate-800 border border-slate-700 rounded-lg shadow-2xl z-50 p-1 animate-in zoom-in-95 duration-150 origin-top-right">
-                <button onClick={() => { setIsNewDropdownOpen(false); executeAction('new_folder'); }} className="w-full text-left px-3 py-2 hover:bg-slate-700 rounded-lg flex items-center gap-2 text-xs"><Folder size={14} className="text-blue-400"/> New Folder</button>
-                <button onClick={() => { setIsNewDropdownOpen(false); openNotesApp(undefined, true); }} className="w-full text-left px-3 py-2 hover:bg-slate-700 rounded-lg flex items-center gap-2 text-xs"><FileText size={14} className="text-yellow-400"/> New Note</button>
-                <button onClick={() => { setIsNewDropdownOpen(false); executeAction('native_upload'); }} className="w-full text-left px-3 py-2 hover:bg-slate-700 rounded-lg flex items-center gap-2 text-xs"><Upload size={14} className="text-green-400"/> Upload File</button>
-              </div>
-            )}
-          </div>
-        )}
-      </div>
-
-      <div className="flex-1 overflow-y-auto p-4 space-y-6">
-        {loading && items.length === 0 ? ( <div className="flex flex-col items-center justify-center py-10 opacity-50"><Loader2 size={32} className="animate-spin text-blue-500"/></div> ) : items.length === 0 ? (
-          <div className="flex flex-col items-center justify-center py-10 text-slate-500 border-2 border-dashed border-slate-800 rounded-xl">
-             <Folder size={48} className="mb-2 opacity-20"/>
-             <p className="text-sm">This folder is empty</p>
-          </div>
-        ) : (
-          <>
-            {groupedItems.folders.length > 0 && ( <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">{groupedItems.folders.map((item: Item) => (<FolderItem key={item.id} item={item} hasComments={(comments[item.id]?.length || 0) > 0} isRecycleBin={item.id === recycleBinId} isSystem={item.id === systemFolderId || item.name === SYSTEM_FOLDER_NAME} selected={selectedIds.has(item.id)} isDropTarget={dropTargetId === item.id} onClick={handleItemClick} onDoubleClick={handleItemDoubleClick} onContextMenu={localHandleContextMenu} onToggleSelect={() => { setSelectedIds((prev: Set<string>) => { const next = new Set(prev); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; }); setLastSelectedId(item.id); }} onCommentClick={() => openComments(item)} />))}</div> )}
-            {groupedItems.notes.length > 0 && ( <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">{groupedItems.notes.map((item: Item) => (<NoteItem key={item.id} item={item} hasComments={(comments[item.id]?.length || 0) > 0} selected={selectedIds.has(item.id)} onClick={handleItemClick} onDoubleClick={handleItemDoubleClick} onContextMenu={localHandleContextMenu} onToggleSelect={() => { setSelectedIds((prev: Set<string>) => { const next = new Set(prev); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; }); setLastSelectedId(item.id); }} onCommentClick={() => openComments(item)} />))}</div> )}
-            {groupedItems.images.length > 0 && ( <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">{groupedItems.images.map((item: Item) => (<ImageItem key={item.id} item={item} hasComments={(comments[item.id]?.length || 0) > 0} selected={selectedIds.has(item.id)} onClick={handleItemClick} onDoubleClick={handleItemDoubleClick} onContextMenu={localHandleContextMenu} onToggleSelect={() => { setSelectedIds((prev: Set<string>) => { const next = new Set(prev); if (next.has(item.id)) next.delete(item.id); else next.add(item.id); return next; }); setLastSelectedId(item.id); }} onCommentClick={() => openComments(item)} />))}</div> )}
-          </>
-        )}
-      </div>
-
-      {isCommentsLoading && (
-         <div className="absolute inset-0 bg-slate-900/50 flex items-center justify-center z-50">
-             <div className="bg-slate-800 p-4 rounded-xl flex items-center gap-3 shadow-xl">
-                 <Loader2 className="animate-spin text-yellow-400"/>
-                 <span className="text-white text-xs font-bold">Memuat Komentar...</span>
-             </div>
-         </div>
-      )}
-
-      {selectedIds.size > 0 && (
-          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 glass rounded-full px-4 py-2 flex items-center gap-3 shadow-2xl z-[80] animate-in slide-in-from-bottom-5">
-              <span className="text-xs font-bold text-blue-400">{selectedIds.size} Selected</span>
-              <div className="w-px h-4 bg-slate-700"></div>
-              <button onClick={() => executeAction('comment')} className="p-1.5 hover:bg-slate-800 rounded-lg text-yellow-400" title="Comment"><MessageSquare size={16}/></button>
-              <button onClick={() => executeAction('download')} className="p-1.5 hover:bg-slate-800 rounded-lg text-emerald-400" title="Download"><Download size={16}/></button>
-              <button onClick={() => executeAction('move')} className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-300" title="Move"><Move size={16}/></button>
-              <button onClick={() => executeAction('duplicate')} className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-300" title="Duplicate"><Copy size={16}/></button>
-              <button onClick={() => executeAction('delete')} className="p-1.5 hover:bg-red-500/10 rounded-lg text-red-500" title="Delete"><Trash2 size={16}/></button>
-              <button onClick={() => setSelectedIds(new Set())} className="p-1.5 hover:bg-slate-800 rounded-lg text-slate-500" title="Cancel Selection"><X size={16}/></button>
-          </div>
-      )}
-    </div>
-  );
-};
-
-// --- SETTINGS APP COMPONENT ---
-const SettingsApp = ({ config, onSave }: any) => {
-  const [localConfig, setLocalConfig] = useState(config);
   return (
     <div className="h-full bg-slate-900 text-white p-6 flex flex-col gap-6 overflow-auto">
       <h2 className="text-2xl font-bold flex items-center gap-3 text-white"><Settings size={28} className="text-blue-600"/> Settings</h2>
       <div className="space-y-6 max-w-lg">
         <section className="bg-slate-800 p-4 rounded-xl shadow-sm border border-slate-700">
-          <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-3">Appearance</h3>
+          <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-3">Tampilan Desktop</h3>
           <div className="space-y-4">
             <div>
-              <label className="block text-xs font-bold text-slate-400 mb-1">Wallpaper URL</label>
-              <input className="w-full p-2 border border-slate-700 rounded-lg text-sm bg-slate-950 text-white focus:outline-none focus:border-blue-500" value={localConfig.wallpaper} onChange={(e) => setLocalConfig({...localConfig, wallpaper: e.target.value})} />
+              <label className="block text-xs font-bold text-slate-400 mb-2">Wallpaper URL</label>
+              <div className="flex gap-2">
+                <input className="flex-1 p-2 border border-slate-700 rounded-lg text-sm bg-slate-950 text-white focus:outline-none focus:border-blue-500" value={localConfig.wallpaper} onChange={(e) => setLocalConfig({...localConfig, wallpaper: e.target.value})} placeholder="https://..." />
+                <button 
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isUploadingWallpaper}
+                  className="px-3 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg flex items-center gap-2 text-xs transition-colors disabled:opacity-50"
+                >
+                  {isUploadingWallpaper ? <Loader2 size={14} className="animate-spin"/> : <Upload size={14} />}
+                  <span>Upload</span>
+                </button>
+                <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={handleUploadWallpaper} />
+              </div>
+              <p className="text-[10px] text-slate-500 mt-2">Imej yang di-upload akan disimpan di folder System secara otomatis.</p>
             </div>
+            
+            {localConfig.wallpaper && (
+              <div className="aspect-video w-full rounded-lg overflow-hidden border border-slate-700 relative group">
+                <img src={localConfig.wallpaper} className="w-full h-full object-cover" />
+                <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                  <span className="text-xs font-bold bg-white/10 px-2 py-1 rounded backdrop-blur">Preview</span>
+                </div>
+              </div>
+            )}
           </div>
         </section>
         <button onClick={() => onSave(localConfig)} className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl shadow-lg transition-all active:scale-95">Save Changes</button>
+      </div>
+    </div>
+  );
+};
+
+// --- FILE EXPLORER APP COMPONENT ---
+// Added missing implementation for FileExplorerApp to fix build errors.
+const FileExplorerApp = ({
+  currentFolderId, setCurrentFolderId, folderHistory, setFolderHistory, items, setItems,
+  loading, setLoading, systemMap, setSystemMap, dbFileId, setDbFileId, comments, setComments,
+  recycleBinId, setRecycleBinId, systemFolderId, setSystemFolderId, isSavingDB, setIsSavingDB,
+  isSavingComments, setIsSavingComments, triggerCloudSync, triggerCommentSync, handleRefreshComments,
+  addNotification, removeNotification, updateNotification, setModal, modal, setEditingNote,
+  setViewingRawFile, setPreviewImage, handleUploadFiles, executeAction, loadFolder,
+  selectedIds, setSelectedIds, onContextMenu, openNotesApp
+}: any) => {
+
+  const isRecycleBin = currentFolderId === recycleBinId;
+
+  const toggleSelect = (id: string, multi: boolean = false) => {
+    const next = new Set(selectedIds);
+    if (multi) {
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+    } else {
+      next.clear();
+      next.add(id);
+    }
+    setSelectedIds(next);
+  };
+
+  const navigateTo = (id: string, name: string) => {
+    setFolderHistory((prev: any) => [...prev, { id: currentFolderId, name: systemMap[currentFolderId]?.name || 'Home' }]);
+    setCurrentFolderId(id);
+  };
+
+  const navigateUp = () => {
+    const current = systemMap[currentFolderId];
+    if (current && current.parentId !== undefined) {
+      setCurrentFolderId(current.parentId);
+    } else {
+      setCurrentFolderId("");
+    }
+  };
+
+  const navigateBack = () => {
+    if (folderHistory.length === 0) return;
+    const last = folderHistory[folderHistory.length - 1];
+    setFolderHistory((prev: any) => prev.slice(0, -1));
+    setCurrentFolderId(last.id);
+  };
+
+  return (
+    <div className="h-full bg-slate-900 text-white flex flex-col overflow-hidden">
+      {/* Navigation Bar */}
+      <div className="flex items-center gap-2 p-2 bg-slate-800/50 border-b border-slate-700">
+        <button onClick={navigateBack} disabled={folderHistory.length === 0} className="p-1.5 hover:bg-slate-700 rounded-lg disabled:opacity-30"><ArrowLeft size={18}/></button>
+        <button onClick={navigateUp} className="p-1.5 hover:bg-slate-700 rounded-lg"><ArrowUp size={18}/></button>
+        <button onClick={() => loadFolder(currentFolderId)} className="p-1.5 hover:bg-slate-700 rounded-lg"><RefreshCw size={18} className={loading ? 'animate-spin' : ''}/></button>
+        
+        <div className="flex-1 flex items-center gap-2 bg-slate-950/50 border border-slate-700 rounded-lg px-3 py-1.5 text-xs overflow-hidden">
+          <Folder size={14} className="text-blue-400 flex-shrink-0"/>
+          <div className="flex items-center gap-1 truncate">
+            <span className="opacity-50 hover:opacity-100 cursor-pointer" onClick={() => setCurrentFolderId("")}>Home</span>
+            {currentFolderId && <><ChevronRight size={12} className="opacity-30"/><span className="font-bold">{systemMap[currentFolderId]?.name || '...'}</span></>}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-1">
+          <button onClick={() => executeAction('new_folder')} className="p-1.5 hover:bg-slate-700 rounded-lg text-blue-400" title="New Folder"><Plus size={18}/></button>
+          <button onClick={() => executeAction('native_upload')} className="p-1.5 hover:bg-slate-700 rounded-lg text-emerald-400" title="Upload"><Upload size={18}/></button>
+          {selectedIds.size > 0 && (
+            <>
+              <div className="w-px h-6 bg-slate-700 mx-1"></div>
+              <button onClick={() => executeAction('delete')} className="p-1.5 hover:bg-red-500/20 rounded-lg text-red-500" title="Delete"><Trash2 size={18}/></button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Main Area */}
+      <div 
+        className="flex-1 overflow-y-auto p-4"
+        onContextMenu={(e) => { e.preventDefault(); onContextMenu(e, null, isRecycleBin); }}
+        onClick={() => setSelectedIds(new Set())}
+      >
+        {loading && items.length === 0 ? (
+          <div className="h-full flex flex-col items-center justify-center opacity-50">
+            <Loader2 size={40} className="animate-spin text-blue-500 mb-2"/>
+            <p className="text-sm">Loading items...</p>
+          </div>
+        ) : items.length === 0 ? (
+          <div className="h-full flex flex-col items-center justify-center text-slate-500 gap-4 opacity-30">
+            {isRecycleBin ? <Trash2 size={80}/> : <Folder size={80}/>}
+            <p className="text-lg font-medium">{isRecycleBin ? 'Recycle Bin is empty' : 'This folder is empty'}</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 xl:grid-cols-8 gap-4 content-start">
+            {items.map((item: Item) => {
+              const props = {
+                key: item.id,
+                item,
+                selected: selectedIds.has(item.id),
+                hasComments: comments[item.id]?.length > 0,
+                onClick: (e: any) => { e.stopPropagation(); toggleSelect(item.id, e.ctrlKey || e.metaKey); },
+                onToggleSelect: () => toggleSelect(item.id, true),
+                onContextMenu: (e: any) => { e.preventDefault(); e.stopPropagation(); if (!selectedIds.has(item.id)) toggleSelect(item.id); onContextMenu(e, item, isRecycleBin); },
+                onCommentClick: () => executeAction('comment', [item.id])
+              };
+
+              if (item.type === 'folder') return (
+                <FolderItem {...props} 
+                  isRecycleBin={item.name === 'Recycle Bin' || isRecycleBin}
+                  isSystem={item.name === 'System'}
+                  onDoubleClick={() => navigateTo(item.id, item.name)} 
+                  isDropTarget={false}
+                />
+              );
+              if (item.type === 'note') return (
+                <NoteItem {...props} 
+                  onDoubleClick={() => openNotesApp(item.id)}
+                />
+              );
+              if (item.type === 'image') return (
+                <ImageItem {...props} 
+                  onDoubleClick={() => window.open(item.url, '_blank')}
+                />
+              );
+              return null;
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Footer Info */}
+      <div className="bg-slate-950/50 border-t border-slate-800 px-3 py-1.5 flex justify-between items-center text-[10px] text-slate-500 font-mono">
+        <div className="flex items-center gap-3">
+          <span>{items.length} items</span>
+          {selectedIds.size > 0 && <span className="text-blue-400 font-bold">{selectedIds.size} selected</span>}
+        </div>
+        <span>{isRecycleBin ? 'RECYCLE BIN' : (systemMap[currentFolderId]?.name || 'HOME').toUpperCase()}</span>
       </div>
     </div>
   );
@@ -800,8 +724,7 @@ const App = () => {
   const [commentText, setCommentText] = useState('');
   const [isPostingComment, setIsPostingComment] = useState(false);
 
-  // Interaction State
-  const [isInteracting, setIsInteracting] = useState(false);
+  // Desktop Interaction
   const [selectedDesktopIcon, setSelectedDesktopIcon] = useState<string | null>(null);
   
   const toggleFullscreen = () => {
@@ -985,19 +908,6 @@ const App = () => {
     await loadFolder(currentFolderId);
   };
 
-  const handleAddComment = async () => {
-    if (!commentName.trim() || !commentText.trim() || !modal?.targetItem) return;
-    setIsPostingComment(true); 
-    const targetId = modal.targetItem.id;
-    const newComment: Comment = { id: Date.now().toString(), itemId: targetId, author: commentName, text: commentText, timestamp: Date.now() };
-    const next = { ...commentsRef.current }; 
-    if (!next[targetId]) next[targetId] = []; 
-    next[targetId] = [...next[targetId], newComment];
-    commentsRef.current = next; setComments(next);
-    try { await triggerCommentSync(); setCommentText(''); addNotification("Comment posted", "success"); } 
-    catch (e) { addNotification("Failed", "error"); } finally { setIsPostingComment(false); }
-  };
-
   const executeAction = async (action: string, specificIds?: string[], targetFolderId?: string) => {
     const ids = specificIds || Array.from(selectedIds);
     if (ids.length === 0 && action !== 'new_folder' && action !== 'native_upload') return;
@@ -1142,7 +1052,7 @@ const App = () => {
     if (e.button !== 0) return;
     const win = windows.find(w => w.instanceId === instanceId);
     if (!win || win.isMaximized) return;
-    setActiveWindowId(instanceId); setIsInteracting(true); 
+    setActiveWindowId(instanceId); 
     const startX = e.pageX; const startY = e.pageY;
     const initialPos = { ...win.position }; const initialSize = { ...win.size };
     const winEl = document.getElementById(`window-${instanceId}`);
@@ -1165,7 +1075,7 @@ const App = () => {
         });
     };
     const onPointerUp = () => {
-        setIsInteracting(false); winEl.style.willChange = 'auto';
+        winEl.style.willChange = 'auto';
         window.removeEventListener('pointermove', onPointerMove); window.removeEventListener('pointerup', onPointerUp);
         setWindows(prev => prev.map(w => w.instanceId === instanceId ? { ...w, position: { x: currentX, y: currentY }, size: { w: currentW, h: currentH } } : w));
     };
@@ -1216,9 +1126,7 @@ const App = () => {
          onPointerDown={() => { setGlobalContextMenu(null); setSelectedDesktopIcon(null); }}
          onContextMenu={(e) => { e.preventDefault(); setGlobalContextMenu({ x: e.clientX, y: e.clientY, type: 'desktop' }); }}>
       
-      {isInteracting && <div className="fixed inset-0 z-[9999] cursor-move bg-transparent touch-none" />}
-
-      {/* DESKTOP AREA - UPDATED TO CLEAN GRID FLOW */}
+      {/* DESKTOP AREA - UPDATED TO CLEAN GRID FLOW, NO DRAGGING */}
       <div className="absolute top-0 left-0 bottom-12 w-full p-6 z-0 overflow-y-auto no-scrollbar">
         <div className="grid grid-cols-[repeat(auto-fill,minmax(90px,1fr))] gap-4 pointer-events-none content-start max-w-full">
             {config?.installedApps.map((app: API.AppDefinition) => (
@@ -1317,7 +1225,22 @@ const App = () => {
               />
             )}
             {win.appId === 'youtube' && <YouTubeApp customKeys={config?.youtubeApiKeys} />}
-            {win.appId === 'settings' && <SettingsApp config={config!} onSave={async (c:any)=>{ try { await API.saveSystemConfig(c); setConfig(c); addNotification("Pengaturan disimpan", "success"); } catch(e) { addNotification("Gagal menyimpan", "error"); } }}/>}
+            {win.appId === 'settings' && (
+              <SettingsApp 
+                config={config!} 
+                systemFolderId={systemFolderId}
+                addNotification={addNotification}
+                onSave={async (c:any)=>{ 
+                  try { 
+                    await API.saveSystemConfig(c); 
+                    setConfig(c); 
+                    addNotification("Pengaturan disimpan", "success"); 
+                  } catch(e) { 
+                    addNotification("Gagal menyimpan", "error"); 
+                  } 
+                }}
+              />
+            )}
             {(win.appId === 'app-store' || win.appId === 'store') && <AppStoreApp config={config!} setConfig={setConfig} addNotification={addNotification} systemFolderId={systemFolderId}/>}
             {(win.appData.type === 'webapp') && win.appId !== 'youtube' && (
               <div className="h-full flex flex-col bg-white">
