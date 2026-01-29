@@ -339,6 +339,54 @@ const GalleryApp = ({ items, onUpload, onDelete, loading }: any) => {
   );
 };
 
+// --- CANVA APP COMPONENT ---
+const CanvaApp = () => {
+  const handleLaunch = () => {
+    const width = 1200;
+    const height = 800;
+    const left = (window.screen.width - width) / 2;
+    const top = (window.screen.height - height) / 2;
+    window.open(
+      'https://www.canva.com',
+      'CanvaWindow',
+      `width=${width},height=${height},top=${top},left=${left},resizable=yes,scrollbars=yes,status=yes`
+    );
+  };
+
+  return (
+    <div className="h-full w-full flex flex-col items-center justify-center bg-gradient-to-br from-[#00c4cc] to-[#7d2ae8] relative overflow-hidden text-white">
+      <div className="absolute top-0 left-0 w-full h-full bg-white/10 backdrop-blur-sm z-0"></div>
+      
+      <div className="z-10 flex flex-col items-center animate-in zoom-in-95 duration-500">
+        <div className="w-24 h-24 bg-white rounded-full flex items-center justify-center shadow-2xl mb-6">
+           <img 
+             src="https://upload.wikimedia.org/wikipedia/commons/0/08/Canva_icon_2021.svg" 
+             alt="Canva" 
+             className="w-16 h-16"
+           />
+        </div>
+
+        <h1 className="text-3xl font-bold mb-2 drop-shadow-md">Canva Design</h1>
+        <p className="text-white/80 mb-8 text-center max-w-md">
+           Create beautiful designs, presentations, and social media posts directly from your Cloud OS.
+        </p>
+
+        <button 
+          onClick={handleLaunch}
+          className="bg-white text-[#7d2ae8] px-8 py-3 rounded-full font-bold text-lg shadow-xl hover:scale-105 transition-transform hover:bg-gray-100 flex items-center gap-2"
+        >
+          <span>Start Designing</span>
+          <ExternalLink size={20} />
+        </button>
+        
+        <p className="mt-4 text-xs text-white/60">
+           *Canva runs in a secure popup window for best performance.
+        </p>
+      </div>
+    </div>
+  );
+};
+
 // --- APP STORE COMPONENT ---
 const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId }: any) => {
    const [appName, setAppName] = useState('');
@@ -354,7 +402,7 @@ const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId }: any
      { id: 'gallery', name: 'Gallery', url: 'internal://gallery', icon: 'image' },
      { id: 'youtube', name: 'YouTube', url: 'internal://youtube', icon: 'youtube' },
      { id: 'spotify', name: 'Spotify', url: 'https://open.spotify.com/embed', icon: 'music' },
-     { id: 'canva', name: 'Canva', url: 'https://www.canva.com', icon: 'globe' },
+     { id: 'canva', name: 'Canva', url: 'https://www.canva.com', icon: 'https://upload.wikimedia.org/wikipedia/commons/0/08/Canva_icon_2021.svg' },
      { id: 'google-maps', name: 'Maps', url: 'https://www.google.com/maps/embed', icon: 'globe' }
    ];
 
@@ -445,7 +493,7 @@ const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId }: any
             ))}
         </div>
       </section>
-      <section className="space-y-4"><h2 className="text-lg font-bold text-slate-300">Rekomendasi</h2><div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">{popularApps.map(app => (<div key={app.id} className="bg-slate-800/40 p-4 rounded-2xl flex flex-col items-center gap-4"><div className="w-16 h-16 bg-slate-950 rounded-2xl flex items-center justify-center"><Globe size={32}/></div><p className="font-bold text-sm">{app.name}</p><button onClick={() => handleInstall(app)} className="w-full py-2 bg-blue-600/20 text-blue-400 rounded-lg text-xs font-bold">Instal</button></div>))}</div></section>
+      <section className="space-y-4"><h2 className="text-lg font-bold text-slate-300">Rekomendasi</h2><div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">{popularApps.map(app => (<div key={app.id} className="bg-slate-800/40 p-4 rounded-2xl flex flex-col items-center gap-4"><div className="w-16 h-16 bg-slate-950 rounded-2xl flex items-center justify-center">{app.icon.startsWith('http') ? <img src={app.icon} className="w-full h-full object-cover rounded-xl"/> : <Globe size={32}/>}</div><p className="font-bold text-sm">{app.name}</p><button onClick={() => handleInstall(app)} className="w-full py-2 bg-blue-600/20 text-blue-400 rounded-lg text-xs font-bold">Instal</button></div>))}</div></section>
     </div>
    );
 };
@@ -1695,7 +1743,7 @@ const App = () => {
                 }}
               />
             )}
-            {/* ... Other Apps ... */}
+            {win.appId === 'canva' && <CanvaApp />}
             {win.appData.url === 'internal://gallery' && (
               <GalleryApp 
                 items={items} 
@@ -1711,7 +1759,7 @@ const App = () => {
             {win.appId === 'youtube' && <YouTubeApp customKeys={config?.youtubeApiKeys} />}
             {win.appId === 'settings' && <SettingsApp config={config!} systemFolderId={systemFolderId} addNotification={addNotification} onSave={async (c:any)=>{ try { await API.saveSystemConfig(c); setConfig(c); addNotification("Pengaturan disimpan", "success"); } catch(e) { addNotification("Gagal menyimpan", "error"); } }} installPrompt={deferredPrompt} onInstallPWA={handleInstallClick} />}
             {(win.appId === 'app-store' || win.appId === 'store') && <AppStoreApp config={config!} setConfig={setConfig} addNotification={addNotification} systemFolderId={systemFolderId}/>}
-            {(win.appData.type === 'webapp') && win.appId !== 'youtube' && (
+            {(win.appData.type === 'webapp') && win.appId !== 'youtube' && win.appId !== 'canva' && (
               <div className="h-full flex flex-col bg-white">
                 <div className="p-1 bg-slate-100 flex items-center justify-between gap-2 border-b">
                    <div className="flex items-center gap-2 flex-1 min-w-0"><Globe size={12} className="text-slate-400 ml-2 flex-shrink-0"/><input className="flex-1 bg-white px-3 py-1 rounded-lg border-none text-[10px] outline-none text-slate-800" value={win.appData.url} readOnly /></div>
