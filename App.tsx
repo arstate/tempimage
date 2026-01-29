@@ -769,6 +769,19 @@ const FileExplorerApp = ({
 const SettingsApp = ({ config, onSave, systemFolderId, addNotification, installPrompt, onInstallPWA }: any) => {
   const [localConfig, setLocalConfig] = useState(config);
   const [isUploading, setIsUploading] = useState(false);
+  const [installStatus, setInstallStatus] = useState<'hidden' | 'available' | 'installed'>('hidden');
+
+  useEffect(() => {
+    // Check if running in standalone mode (PWA installed)
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone;
+    if (isStandalone) {
+      setInstallStatus('installed');
+    } else if (installPrompt) {
+      setInstallStatus('available');
+    } else {
+      setInstallStatus('hidden');
+    }
+  }, [installPrompt]);
 
   const handleWallpaperUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
@@ -816,10 +829,25 @@ const SettingsApp = ({ config, onSave, systemFolderId, addNotification, installP
                     </div>
                     <button 
                         onClick={onInstallPWA}
-                        disabled={!installPrompt}
-                        className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-lg text-xs font-bold transition-colors"
+                        disabled={installStatus !== 'available'}
+                        className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2
+                          ${installStatus === 'available' ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg active:scale-95' : 
+                            installStatus === 'installed' ? 'bg-green-500/20 text-green-400' : 
+                            'bg-slate-700/50 text-slate-500 cursor-not-allowed'}`}
                     >
-                        {installPrompt ? 'Install' : 'Installed / Unsupported'}
+                        {installStatus === 'available' ? (
+                           <>
+                             <Download size={14} />
+                             <span>Install App</span>
+                           </>
+                        ) : installStatus === 'installed' ? (
+                           <>
+                             <CheckCircle size={14} />
+                             <span>Installed</span>
+                           </>
+                        ) : (
+                           <span>Unavailable / Installed</span>
+                        )}
                     </button>
                 </div>
             </div>
@@ -1662,7 +1690,8 @@ const App = () => {
                 onClose={() => closeWindow(win.instanceId)}
                 onRefresh={() => loadFolder(win.args?.folderId || currentFolderId)}
                 onSaveToCloud={async (id: string, title: string, content: string, targetFolderId?: string) => {
-                   await API.saveNoteToDrive(title, content, targetFolderId || win.args?.folderId || currentFolderId, id.startsWith('new-') ? undefined : id);
+                   const res = await API.saveNoteToDrive(title, content, targetFolderId || win.args?.folderId || currentFolderId, id.startsWith('new-') ? undefined : id);
+                   return res?.id;
                 }}
               />
             )}

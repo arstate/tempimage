@@ -18,7 +18,7 @@ interface NotesAppProps {
   systemMap: FolderMap;
   onClose: () => void;
   onRefresh: () => void;
-  onSaveToCloud: (id: string, title: string, content: string, targetFolderId?: string) => Promise<void>;
+  onSaveToCloud: (id: string, title: string, content: string, targetFolderId?: string) => Promise<string | undefined>;
 }
 
 // Local history helper
@@ -173,18 +173,33 @@ export const NotesApp: React.FC<NotesAppProps> = ({
       // Fix: If picker is at 'root', send empty string to API for home folder
       const finalFolderId = pickerCurrentFolderId === 'root' ? '' : pickerCurrentFolderId;
 
-      await onSaveToCloud(
+      const savedId = await onSaveToCloud(
         idToSave, 
         title || 'Untitled Note', 
         content,
         finalFolderId
       );
+
       initialContentRef.current = content;
       setIsDirty(false);
       setShowSaveModal(false);
       
-      // Update Recents
-      saveToRecent(idToSave, title || 'Untitled Note');
+      // Handle ID Update (Transition from 'new-...' to real ID)
+      const finalId = savedId || idToSave;
+      
+      if (activeNoteId !== finalId) {
+          // If we had a temporary ID, remove it from recents locally before adding the new one
+          if (activeNoteId?.startsWith('new-')) {
+              const currentRecents = getRecentNotes();
+              const filteredRecents = currentRecents.filter(r => r.id !== activeNoteId);
+              localStorage.setItem('zombio_notes_recent', JSON.stringify(filteredRecents));
+              setRecentNotes(filteredRecents);
+          }
+          setActiveNoteId(finalId);
+      }
+      
+      // Update Recents with the final (real) ID
+      saveToRecent(finalId, title || 'Untitled Note');
       setRecentNotes(getRecentNotes());
       
       onRefresh(); // Refresh file list in parent
@@ -211,24 +226,25 @@ export const NotesApp: React.FC<NotesAppProps> = ({
     if (isDirty) {
       setShowExitPrompt(true);
     } else {
-        onClose(); // Close the window directly now
+        // Clear active note (go back to empty state), but keep window open
+        setActiveNoteId(null);
+        setTitle('');
+        setContent('');
     }
   };
   
   const confirmExitWithoutSaving = () => {
       setShowExitPrompt(false);
-      onClose();
+      // Clear active note (go back to empty state), but keep window open
+      setActiveNoteId(null);
+      setTitle('');
+      setContent('');
   };
 
   // --- SELECTION POPUP LOGIC ---
   const handleSelection = (e: React.SyntheticEvent) => {
     const textarea = editorRef.current;
     if (!textarea) return;
-
-    // We can't easily get X/Y from selectionStart/End in a textarea without a mirror div.
-    // So we'll use mouse coordinates from onMouseUp.
-    // onSelect fires on keyboard select too, but we can't get coordinates easily there.
-    // We will rely on onMouseUp for position.
   };
 
   const handleMouseUp = (e: React.MouseEvent) => {
