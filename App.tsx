@@ -751,7 +751,7 @@ const FileExplorerApp = ({
 };
 
 // --- SETTINGS APP COMPONENT ---
-const SettingsApp = ({ config, onSave, systemFolderId, addNotification }: any) => {
+const SettingsApp = ({ config, onSave, systemFolderId, addNotification, installPrompt, onInstallPWA }: any) => {
   const [localConfig, setLocalConfig] = useState(config);
   const [isUploading, setIsUploading] = useState(false);
 
@@ -785,6 +785,31 @@ const SettingsApp = ({ config, onSave, systemFolderId, addNotification }: any) =
     <div className="h-full bg-slate-900 text-white p-6 flex flex-col gap-6 overflow-auto">
       <h2 className="text-2xl font-bold flex items-center gap-3 text-white"><Settings size={28} className="text-blue-600"/> Settings</h2>
       <div className="space-y-6 max-w-lg">
+        {/* --- SYSTEM SETTINGS (PWA) --- */}
+        <section className="bg-slate-800 p-4 rounded-xl shadow-sm border border-slate-700">
+            <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-3">System</h3>
+            <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-slate-900 rounded-lg flex items-center justify-center border border-slate-700">
+                            <Monitor size={20} className="text-blue-400"/>
+                        </div>
+                        <div>
+                            <div className="text-sm font-bold text-white">Install Web App</div>
+                            <div className="text-[10px] text-slate-400">Install as PWA on Device</div>
+                        </div>
+                    </div>
+                    <button 
+                        onClick={onInstallPWA}
+                        disabled={!installPrompt}
+                        className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:text-slate-500 text-white rounded-lg text-xs font-bold transition-colors"
+                    >
+                        {installPrompt ? 'Install' : 'Installed / Unsupported'}
+                    </button>
+                </div>
+            </div>
+        </section>
+
         <section className="bg-slate-800 p-4 rounded-xl shadow-sm border border-slate-700">
           <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-3">Appearance</h3>
           <div className="space-y-4">
@@ -874,6 +899,9 @@ const App = () => {
   const [isInteracting, setIsInteracting] = useState(false);
   const [selectedDesktopIcon, setSelectedDesktopIcon] = useState<string | null>(null);
   
+  // PWA Install Prompt State
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) { document.documentElement.requestFullscreen().catch(e => console.error(e)); } 
     else { if (document.exitFullscreen) document.exitFullscreen(); }
@@ -884,6 +912,32 @@ const App = () => {
     document.addEventListener('fullscreenchange', handleFsChange);
     return () => document.removeEventListener('fullscreenchange', handleFsChange);
   }, []);
+
+  // --- PWA INSTALL HANDLER ---
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e: any) => {
+      // Prevent the mini-infobar from appearing on mobile
+      e.preventDefault();
+      // Stash the event so it can be triggered later.
+      setDeferredPrompt(e);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    };
+  }, []);
+
+  const handleInstallClick = async () => {
+    if (!deferredPrompt) return;
+    // Show the install prompt
+    deferredPrompt.prompt();
+    // Wait for the user to respond to the prompt
+    const { outcome } = await deferredPrompt.userChoice;
+    // We've used the prompt, and can't use it again, throw it away
+    setDeferredPrompt(null);
+  };
 
   // --- OS BOOT ---
   useEffect(() => {
@@ -1523,7 +1577,7 @@ const App = () => {
               />
             )}
             {win.appId === 'youtube' && <YouTubeApp customKeys={config?.youtubeApiKeys} />}
-            {win.appId === 'settings' && <SettingsApp config={config!} systemFolderId={systemFolderId} addNotification={addNotification} onSave={async (c:any)=>{ try { await API.saveSystemConfig(c); setConfig(c); addNotification("Pengaturan disimpan", "success"); } catch(e) { addNotification("Gagal menyimpan", "error"); } }}/>}
+            {win.appId === 'settings' && <SettingsApp config={config!} systemFolderId={systemFolderId} addNotification={addNotification} onSave={async (c:any)=>{ try { await API.saveSystemConfig(c); setConfig(c); addNotification("Pengaturan disimpan", "success"); } catch(e) { addNotification("Gagal menyimpan", "error"); } }} installPrompt={deferredPrompt} onInstallPWA={handleInstallClick} />}
             {(win.appId === 'app-store' || win.appId === 'store') && <AppStoreApp config={config!} setConfig={setConfig} addNotification={addNotification} systemFolderId={systemFolderId}/>}
             {(win.appData.type === 'webapp') && win.appId !== 'youtube' && (
               <div className="h-full flex flex-col bg-white">
