@@ -7,7 +7,6 @@ const API_URL = "https://script.google.com/macros/s/AKfycbxppo1lC_7BdI7ToceKqNHR
 const DB_FILENAME_KEYWORD = "system_zombio_db.json"; 
 const COMMENT_DB_FILENAME = "COMENTDATABASE.json";
 const CONFIG_FILENAME = "system_config.json";
-const NOTE_HISTORY_FILENAME = "NOTESHISTORY.json";
 const SYSTEM_FOLDER_NAME = "System";
 const APPS_ICON_FOLDER_NAME = "Apps Icon";
 
@@ -17,8 +16,6 @@ export interface AppDefinition {
   icon: string; // can be icon name or URL
   type: 'system' | 'webapp';
   url?: string;
-  useProxy?: boolean;
-  showAddressBar?: boolean;
 }
 
 export interface SystemConfig {
@@ -26,6 +23,7 @@ export interface SystemConfig {
   theme: 'dark' | 'light';
   installedApps: AppDefinition[];
   youtubeApiKeys?: string[]; // Custom user keys
+  desktopLayout?: { [appId: string]: { x: number; y: number } }; // Icon positions
 }
 
 interface ApiResponse {
@@ -80,26 +78,6 @@ export const getSystemConfig = async (): Promise<SystemConfig> => {
 export const saveSystemConfig = async (config: SystemConfig): Promise<void> => {
   const res = await callGoogleScript({ action: "saveSystemConfig", config });
   if (res.status !== "success") throw new Error("Failed to save OS config");
-};
-
-// --- NOTE HISTORY ---
-
-export const getNoteHistory = async (systemFolderId: string): Promise<any[]> => {
-  try {
-    const sysRes = await getFolderContents(systemFolderId);
-    const file = sysRes.data.find((i: any) => i.name === NOTE_HISTORY_FILENAME);
-    if (!file) return [];
-    const content = await getFileContent(file.id);
-    return JSON.parse(content || "[]");
-  } catch (e) { return []; }
-};
-
-export const saveNoteHistory = async (history: any[], systemFolderId: string): Promise<void> => {
-  try {
-    const sysRes = await getFolderContents(systemFolderId);
-    const file = sysRes.data.find((i: any) => i.name === NOTE_HISTORY_FILENAME);
-    await saveNoteToDrive(NOTE_HISTORY_FILENAME, JSON.stringify(history), systemFolderId, file?.id);
-  } catch (e) { console.error(e); }
 };
 
 // --- FILE MANAGER API ACTIONS ---
