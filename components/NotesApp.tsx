@@ -6,7 +6,7 @@ import {
   ArrowUp, ArrowLeft, Search, Home, Loader2
 } from 'lucide-react';
 import * as API from '../services/api';
-import { Item, FolderMap } from '../types';
+import { Item, FolderMap, FolderNode } from '../types';
 
 interface NotesAppProps {
   initialFileId?: string;
@@ -221,7 +221,9 @@ export const NotesApp: React.FC<NotesAppProps> = ({
   const getPickerSubfolders = () => {
     // If picker is at root, we show top level folders from systemMap that have parentId ""
     const pid = pickerCurrentFolderId === 'root' ? "" : pickerCurrentFolderId;
-    return Object.values(systemMap).filter(f => 
+    // Fix: Explicitly type the values from systemMap to FolderNode to avoid 'unknown' errors
+    const allFolders = Object.values(systemMap) as FolderNode[];
+    return allFolders.filter(f => 
       f.parentId === pid && 
       f.name !== 'System' && 
       f.name !== 'Recycle Bin'

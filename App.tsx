@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { 
   Folder, FileText, Image as ImageIcon, MoreVertical, 
@@ -29,9 +28,6 @@ const DEFAULT_YOUTUBE_KEYS = [
   "AIzaSyDkoRMEP5tvCnujASCkCsDXLhruyieAds4",
   "AIzaSyC1V-c8uxlnyDI7ZqUjK5KoJb1wYeZcdg4"
 ];
-
-const GRID_SIZE_X = 100;
-const GRID_SIZE_Y = 120;
 
 // --- TYPES ---
 type ModalType = 'input' | 'confirm' | 'alert' | 'select' | 'password' | 'comment' | 'properties' | null;
@@ -346,6 +342,7 @@ const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId }: any
    const [customIconFile, setCustomIconFile] = useState<File | null>(null);
    const [isInstalling, setIsInstalling] = useState(false);
    const [useProxy, setUseProxy] = useState(false);
+   const [showAddressBar, setShowAddressBar] = useState(true);
  
    const popularApps = [
      { id: 'notes', name: 'Notes', url: 'internal://notes', icon: 'file-text' },
@@ -368,9 +365,31 @@ const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId }: any
             finalIcon = uploadRes.thumbnail || uploadRes.url; 
         } catch (e) { console.error(e); }
     }
-    const updatedConfig = { ...config, installedApps: [...config.installedApps, { ...app, icon: finalIcon, type: app.url?.startsWith('internal') ? 'system' : 'webapp' }] };
-    try { await API.saveSystemConfig(updatedConfig); setConfig(updatedConfig); addNotification(`${app.name} berhasil ditambahkan`, "success"); } 
-    catch (e) { addNotification("Gagal menyimpan konfigurasi", "error"); } finally { setIsInstalling(false); setCustomIconFile(null); }
+    const updatedConfig = { 
+      ...config, 
+      installedApps: [
+        ...config.installedApps, 
+        { 
+          ...app, 
+          icon: finalIcon, 
+          type: app.url?.startsWith('internal') ? 'system' : 'webapp',
+          useProxy: useProxy,
+          showAddressBar: showAddressBar
+        }
+      ] 
+    };
+    try { 
+      await API.saveSystemConfig(updatedConfig); 
+      setConfig(updatedConfig); 
+      addNotification(`${app.name} berhasil ditambahkan`, "success"); 
+    } 
+    catch (e) { addNotification("Gagal menyimpan konfigurasi", "error"); } 
+    finally { 
+      setIsInstalling(false); 
+      setCustomIconFile(null); 
+      setAppName('');
+      setAppUrl('');
+    }
    };
 
    const handleUninstall = async (appId: string) => {
@@ -391,7 +410,22 @@ const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId }: any
         <h2 className="text-lg font-bold flex items-center gap-2 text-blue-400"><Plus size={20} /> Install Web App</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 bg-slate-800/40 p-5 rounded-2xl border border-slate-700/50 backdrop-blur-md">
           <div className="space-y-1"><label className="text-[10px] uppercase font-bold text-slate-500 ml-1">Nama Aplikasi</label><input className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-sm" placeholder="Contoh: ChatGPT" value={appName} onChange={e => setAppName(e.target.value)}/></div>
-          <div className="space-y-1 lg:col-span-2"><label className="text-[10px] uppercase font-bold text-slate-500 ml-1">URL Web</label><div className="flex flex-col gap-2"><input className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-sm" placeholder="Contoh: chat.openai.com" value={appUrl} onChange={e => setAppUrl(e.target.value)}/><div className="flex items-center gap-2"><input type="checkbox" checked={useProxy} onChange={e => setUseProxy(e.target.checked)} className="bg-slate-900"/><label className="text-xs text-slate-400">Bypass Blokir</label></div></div></div>
+          <div className="space-y-1 lg:col-span-2">
+            <label className="text-[10px] uppercase font-bold text-slate-500 ml-1">URL Web</label>
+            <div className="flex flex-col gap-2">
+              <input className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-sm" placeholder="Contoh: https://chat.openai.com" value={appUrl} onChange={e => setAppUrl(e.target.value)}/>
+              <div className="flex items-center gap-4 py-2 px-1">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={useProxy} onChange={e => setUseProxy(e.target.checked)} className="w-4 h-4 bg-slate-900 rounded border-slate-700 text-blue-600 focus:ring-0" />
+                  <span className="text-xs text-slate-300">Use Proxy</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input type="checkbox" checked={showAddressBar} onChange={e => setShowAddressBar(e.target.checked)} className="w-4 h-4 bg-slate-900 rounded border-slate-700 text-blue-600 focus:ring-0" />
+                  <span className="text-xs text-slate-300">Show Address Bar</span>
+                </label>
+              </div>
+            </div>
+          </div>
           <div className="flex items-end"><button onClick={() => { if(!appName || !appUrl) return; handleInstall({ id: 'custom-'+Date.now(), name: appName, url: appUrl, icon: 'globe', type: 'webapp' }); }} disabled={isInstalling} className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold">{isInstalling ? <Loader2 className="animate-spin"/> : 'Instal'}</button></div>
         </div>
       </section>
@@ -420,6 +454,7 @@ const FileExplorerApp = ({
     setModal, modal,
     setEditingNote,
     setViewingRawFile,
+    setViewingProperties,
     setPreviewImage,
     handleUploadFiles,
     executeAction,
@@ -735,7 +770,7 @@ const App = () => {
 
   // EXPLORER STATE
   const [currentFolderId, setCurrentFolderId] = useState<string>(""); 
-  const currentFolderIdRef = useRef<string>(""); // Ref to track current folder accurately during async ops
+  const currentFolderIdRef = useRef<string>(""); 
   const [folderHistory, setFolderHistory] = useState<{id:string, name:string}[]>([]);
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(false); 
@@ -767,15 +802,8 @@ const App = () => {
 
   // Interaction State
   const [isInteracting, setIsInteracting] = useState(false);
-  const [iconLayout, setIconLayout] = useState<{ [appId: string]: {x: number, y: number} }>({});
   const [selectedDesktopIcon, setSelectedDesktopIcon] = useState<string | null>(null);
   
-  // DRAG & DROP LOGIC (Hold to Move)
-  const [draggingAppId, setDraggingAppId] = useState<string | null>(null);
-  const longPressTimerRef = useRef<any>(null);
-  const dragStartPosRef = useRef<{ x: number, y: number } | null>(null);
-  const iconRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
-
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) { document.documentElement.requestFullscreen().catch(e => console.error(e)); } 
     else { if (document.exitFullscreen) document.exitFullscreen(); }
@@ -800,7 +828,6 @@ const App = () => {
         if (!osConfig.installedApps.some(app => app.id === 'recycle-bin')) { osConfig.installedApps.push({ id: 'recycle-bin', name: 'Recycle Bin', url: 'internal://recycle-bin', icon: 'trash', type: 'system' }); configUpdated = true; }
 
         setConfig(osConfig);
-        if(osConfig.desktopLayout) setIconLayout(osConfig.desktopLayout);
 
         setGlobalLoadingMessage("Locating Cloud Storage...");
         const cloudLocation = await API.locateSystemDB();
@@ -838,41 +865,21 @@ const App = () => {
 
   useEffect(() => { const timer = setInterval(() => setClock(new Date()), 1000); return () => clearInterval(timer); }, []);
 
-  // --- SHARED EXPLORER ACTIONS ---
-  // Fix Explorer Bug: Ensure we are only updating state if the folder hasn't changed during fetch
   const handleSetCurrentFolderId = (id: string) => {
       setCurrentFolderId(id);
       currentFolderIdRef.current = id;
   };
 
   const loadFolder = useCallback(async (folderId: string = "") => {
-    // If the requested folder is not the one currently tracked, we might be lagging, but usually we want to respect the call
-    // However, when multiple rapid clicks happen, we need to ensure the final result matches the final intent
-    
-    // Clear items immediately to show loading state for the NEW folder
     setItems([]); 
     setLoading(true);
-    
     const cacheKey = folderId || "root";
     const cached = await DB.getCachedFolder(cacheKey);
-    
-    // Race condition check: If folder changed while DB fetch happened
-    if (folderId !== currentFolderIdRef.current && isSystemInitialized) {
-        // This check is a bit tricky because loadFolder might be called alongside setCurrentFolderId
-        // But assuming consistent usage...
-    }
-
     if (cached) setItems(cached); 
-    
     setSelectedIds(new Set());
     try {
       const res = await API.getFolderContents(folderId);
-      
-      // CRITICAL FIX: Only update state if we are still looking at the requested folder
-      if (currentFolderIdRef.current !== folderId) {
-          return;
-      }
-
+      if (currentFolderIdRef.current !== folderId) return;
       if (res.status === 'success') {
         const freshItems: Item[] = (Array.isArray(res.data) ? res.data : []);
         freshItems.sort((a, b) => a.name.localeCompare(b.name, undefined, { numeric: true, sensitivity: 'base' }));
@@ -896,7 +903,6 @@ const App = () => {
 
   useEffect(() => { 
       if (isSystemInitialized) {
-          // Ensure ref matches state on init/change
           currentFolderIdRef.current = currentFolderId;
           loadFolder(currentFolderId); 
       }
@@ -1052,10 +1058,7 @@ const App = () => {
             if (!isPerm) {
                  const binId = recycleBinId || (await API.createFolder("", RECYCLE_BIN_NAME)).data.id;
                  if (!recycleBinId) setRecycleBinId(binId);
-                 // Save meta for restore
-                 for (const id of idsToDelete) {
-                     await DB.saveDeletedMeta(id, currentFolderId);
-                 }
+                 for (const id of idsToDelete) { await DB.saveDeletedMeta(id, currentFolderId); }
                  await API.moveItems(idsToDelete, binId); 
             } else {
                  await API.deleteItems(idsToDelete);
@@ -1072,13 +1075,8 @@ const App = () => {
           setItems(prev => prev.map(i => ids.includes(i.id) ? { ...i, status: 'moving' } : i));
           const restorePromises = ids.map(async (id) => {
               const originalParent = await DB.getDeletedMeta(id);
-              if (originalParent) {
-                  await API.moveItems([id], originalParent);
-                  await DB.removeDeletedMeta(id);
-              } else {
-                  // Fallback to root if unknown
-                  await API.moveItems([id], ""); 
-              }
+              if (originalParent) { await API.moveItems([id], originalParent); await DB.removeDeletedMeta(id); } 
+              else { await API.moveItems([id], ""); }
           });
           try {
               await Promise.all(restorePromises);
@@ -1112,7 +1110,7 @@ const App = () => {
       case 'move':
         const finalTarget = targetFolderId;
         if (!finalTarget) {
-            const opts = Object.values(systemMap).map(f => ({ label: f.name, value: f.id }));
+            const opts = Object.values(systemMap as FolderMap).map(f => ({ label: f.name, value: f.id }));
             setModal({ type: 'select', title: 'Move to...', options: opts, onConfirm: async (tid) => {
                 if(!tid) return; setModal(null); executeAction('move', ids, tid);
             }});
@@ -1131,139 +1129,15 @@ const App = () => {
     }
   };
 
-  const handlePropertiesSave = async (updatedKeys: string[]) => {
-     if(!config) return;
-     const updatedConfig = { ...config, youtubeApiKeys: updatedKeys };
-     try { await API.saveSystemConfig(updatedConfig); setConfig(updatedConfig); addNotification("API Keys updated", "success"); setModal(null); } 
-     catch(e) { addNotification("Failed to save keys", "error"); }
-  };
-
-  // --- DESKTOP ICON DRAG & DROP LOGIC (HOLD TO MOVE) ---
-  const handleIconPointerDown = (app: API.AppDefinition, e: React.PointerEvent) => {
-      // 1. Instant Select (Normal Click Behavior)
-      setSelectedDesktopIcon(app.id);
-      
-      if (e.button !== 0) return;
-      e.stopPropagation();
-
-      const el = iconRefs.current[app.id];
-      if (!el) return;
-
-      const rect = el.getBoundingClientRect();
-      dragStartPosRef.current = { x: e.clientX, y: e.clientY };
-
-      // 2. Start Long Press Timer
-      longPressTimerRef.current = setTimeout(() => {
-          // Timer Finished -> Enable Drag Mode
-          setDraggingAppId(app.id);
-          setIsInteracting(true); // Blocks interaction with iframes/windows
-          if (navigator.vibrate) navigator.vibrate(50); // Haptic feedback
-      }, 500); // 500ms Hold Threshold
-  };
-
-  const handleGlobalPointerMove = (e: PointerEvent) => {
-      // Check for jitter/scroll intent during Hold phase
-      if (longPressTimerRef.current && dragStartPosRef.current) {
-          const dist = Math.hypot(e.clientX - dragStartPosRef.current.x, e.clientY - dragStartPosRef.current.y);
-          if (dist > 10) {
-              // User moved too much before Hold time was up -> Cancel Hold
-              clearTimeout(longPressTimerRef.current);
-              longPressTimerRef.current = null;
-          }
-      }
-
-      // Handle Active Dragging
-      if (draggingAppId && dragStartPosRef.current) {
-          const el = iconRefs.current[draggingAppId];
-          if (el) {
-              const dx = e.clientX - dragStartPosRef.current.x;
-              const dy = e.clientY - dragStartPosRef.current.y;
-              
-              // Apply transform directly for performance
-              el.style.transform = `translate(${dx}px, ${dy}px) scale(1.1)`;
-              el.style.zIndex = '100';
-              el.style.transition = 'none';
-              el.style.pointerEvents = 'none'; 
-          }
-      }
-  };
-
-  const handleGlobalPointerUp = (e: PointerEvent) => {
-      // Clean up timer if released early (It was just a click)
-      if (longPressTimerRef.current) {
-          clearTimeout(longPressTimerRef.current);
-          longPressTimerRef.current = null;
-      }
-
-      if (draggingAppId) {
-          // Drop Logic
-          const el = iconRefs.current[draggingAppId];
-          if (el && dragStartPosRef.current) {
-              // Reset styles
-              el.style.transform = '';
-              el.style.zIndex = '';
-              el.style.pointerEvents = '';
-
-              // Calculate final position
-              const rect = el.getBoundingClientRect();
-              
-              // Snap to Grid (20px margin + grid size)
-              const snappedX = Math.round(rect.left / GRID_SIZE_X) * GRID_SIZE_X + 20;
-              const snappedY = Math.round(rect.top / GRID_SIZE_Y) * GRID_SIZE_Y + 20;
-
-              // Save new position
-              const newLayout = { ...iconLayout, [draggingAppId]: { x: snappedX, y: snappedY } };
-              setIconLayout(newLayout);
-              
-              // Sync to Cloud
-              if (config) {
-                 const updatedConfig = { ...config, desktopLayout: newLayout };
-                 setConfig(updatedConfig);
-                 API.saveSystemConfig(updatedConfig).catch(console.error);
-              }
-          }
-          setDraggingAppId(null);
-          setIsInteracting(false);
-      }
-      
-      dragStartPosRef.current = null;
-  };
-
-  // Bind global pointer events
-  useEffect(() => {
-      window.addEventListener('pointermove', handleGlobalPointerMove);
-      window.addEventListener('pointerup', handleGlobalPointerUp);
-      return () => {
-          window.removeEventListener('pointermove', handleGlobalPointerMove);
-          window.removeEventListener('pointerup', handleGlobalPointerUp);
-      }
-  }, [draggingAppId, iconLayout]); // Re-bind when dragging state changes to ensure closure captures correctly
-
-  const handleDesktopIconClick = (appId: string, e: React.MouseEvent) => {
-      e.stopPropagation();
-      // Click logic is handled by PointerDown (for selection)
-      // Double click logic handles Open
-  };
-  
   const handleRefreshDesktop = async () => {
      const notifId = addNotification("Refreshing System...", "loading");
      try {
          const osConfig = await API.getSystemConfig();
-         let configUpdated = false;
-         // Ensure system apps exist
-         if (!osConfig.installedApps.some(app => app.id === 'youtube')) { osConfig.installedApps.push({ id: 'youtube', name: 'YouTube', url: 'internal://youtube', icon: 'youtube', type: 'system' }); configUpdated = true; }
-         if (!osConfig.installedApps.some(app => app.id === 'notes')) { osConfig.installedApps.push({ id: 'notes', name: 'Notes', url: 'internal://notes', icon: 'file-text', type: 'system' }); configUpdated = true; }
-         if (!osConfig.installedApps.some(app => app.id === 'recycle-bin')) { osConfig.installedApps.push({ id: 'recycle-bin', name: 'Recycle Bin', url: 'internal://recycle-bin', icon: 'trash', type: 'system' }); configUpdated = true; }
-         
          setConfig(osConfig);
-         if(osConfig.desktopLayout) setIconLayout(osConfig.desktopLayout);
          updateNotification(notifId, "System Refreshed", "success");
-     } catch(e) {
-         updateNotification(notifId, "Refresh Failed", "error");
-     }
+     } catch(e) { updateNotification(notifId, "Refresh Failed", "error"); }
   };
 
-  // Window Manager Logic
   const handleWindowAction = (instanceId: string, e: React.PointerEvent, actionType: 'move' | 'resize', corner?: string) => {
     if (e.button !== 0) return;
     const win = windows.find(w => w.instanceId === instanceId);
@@ -1274,9 +1148,7 @@ const App = () => {
     const winEl = document.getElementById(`window-${instanceId}`);
     if (!winEl) return;
     winEl.style.willChange = actionType === 'move' ? 'left, top' : 'width, height, left, top';
-    winEl.style.transform = 'translateZ(0)';
     let currentX = initialPos.x; let currentY = initialPos.y; let currentW = initialSize.w; let currentH = initialSize.h;
-
     const onPointerMove = (moveEvent: PointerEvent) => {
         requestAnimationFrame(() => {
           const dx = moveEvent.pageX - startX; const dy = moveEvent.pageY - startY;
@@ -1297,71 +1169,34 @@ const App = () => {
         window.removeEventListener('pointermove', onPointerMove); window.removeEventListener('pointerup', onPointerUp);
         setWindows(prev => prev.map(w => w.instanceId === instanceId ? { ...w, position: { x: currentX, y: currentY }, size: { w: currentW, h: currentH } } : w));
     };
-    window.addEventListener('pointermove', onPointerMove, { passive: true }); window.addEventListener('pointerup', onPointerUp);
+    window.addEventListener('pointermove', onPointerMove); window.addEventListener('pointerup', onPointerUp);
   };
 
   const openApp = (app: API.AppDefinition, args: any = null) => {
     setStartMenuOpen(false);
     if (!app) { addNotification("App not ready", "error"); return; }
-    
-    // Notes App Single Instance Logic
     if (app.id === 'notes') {
         const existingNoteWindow = windows.find(w => w.appId === 'notes');
         if (existingNoteWindow) {
-            // If window exists, bring to front and update args if provided
-            setWindows(prev => prev.map(w => {
-                if (w.instanceId === existingNoteWindow.instanceId) {
-                    return { ...w, isMinimized: false, args: args || w.args };
-                }
-                return w;
-            }));
-            setActiveWindowId(existingNoteWindow.instanceId);
-            return;
+            setWindows(prev => prev.map(w => w.instanceId === existingNoteWindow.instanceId ? { ...w, isMinimized: false, args: args || w.args } : w));
+            setActiveWindowId(existingNoteWindow.instanceId); return;
         }
     }
-
-    // Recycle Bin is special case (it's a folder view)
     if (app.id === 'recycle-bin') {
         const explorer = config?.installedApps.find(a => a.id === 'file-explorer');
         if (explorer) {
-             const newWindow = {
-                  instanceId: Date.now().toString(), 
-                  appId: 'file-explorer', 
-                  title: 'Recycle Bin', 
-                  appData: explorer, 
-                  args: { folderId: recycleBinId }, 
-                  isMinimized: false, 
-                  isMaximized: false,
-                  position: { x: 100 + (windows.length * 20), y: 100 + (windows.length * 20) }, 
-                  size: { w: 800, h: 500 }
-             };
-             setWindows([...windows, newWindow]); 
-             setActiveWindowId(newWindow.instanceId);
+             const newWindow = { instanceId: Date.now().toString(), appId: 'file-explorer', title: 'Recycle Bin', appData: explorer, args: { folderId: recycleBinId }, isMinimized: false, isMaximized: false, position: { x: 100, y: 100 }, size: { w: 800, h: 500 } };
+             setWindows([...windows, newWindow]); setActiveWindowId(newWindow.instanceId);
         }
         return;
     }
-
-    const newWindow = {
-      instanceId: Date.now().toString() + Math.random(), 
-      appId: app.id, 
-      title: app.name, 
-      appData: app, 
-      args: args, 
-      isMinimized: false, 
-      isMaximized: false,
-      position: { x: 100 + (windows.length * 30), y: 50 + (windows.length * 30) }, 
-      size: { w: 900, h: 600 }
-    };
-    setWindows([...windows, newWindow]); 
-    setActiveWindowId(newWindow.instanceId);
+    const newWindow = { instanceId: Date.now().toString() + Math.random(), appId: app.id, title: app.name, appData: app, args: args, isMinimized: false, isMaximized: false, position: { x: 100 + (windows.length * 30), y: 50 + (windows.length * 30) }, size: { w: 900, h: 600 } };
+    setWindows([...windows, newWindow]); setActiveWindowId(newWindow.instanceId);
   };
 
   const openNotesApp = (fileId?: string, isNew?: boolean) => {
     const notesApp = config?.installedApps.find(a => a.id === 'notes');
-    if (notesApp) {
-        // Pass the fileId and currentFolderId (for context where to save new files)
-        openApp(notesApp, { fileId, isNew, folderId: currentFolderIdRef.current });
-    }
+    if (notesApp) openApp(notesApp, { fileId, isNew, folderId: currentFolderIdRef.current });
   };
   
   const closeWindow = (instanceId: string) => setWindows(prev => prev.filter(w => w.instanceId !== instanceId));
@@ -1379,67 +1214,36 @@ const App = () => {
     <div className="fixed inset-0 w-full h-[100dvh] overflow-hidden bg-slate-900 select-none font-sans touch-none" 
          style={{ backgroundImage: `url(${config?.wallpaper})`, backgroundSize: 'cover', backgroundPosition: 'center' }}
          onPointerDown={() => { setGlobalContextMenu(null); setSelectedDesktopIcon(null); }}
-         onContextMenu={(e) => {
-             e.preventDefault();
-             setGlobalContextMenu({ x: e.clientX, y: e.clientY, type: 'desktop' });
-         }}
-    >
+         onContextMenu={(e) => { e.preventDefault(); setGlobalContextMenu({ x: e.clientX, y: e.clientY, type: 'desktop' }); }}>
+      
       {isInteracting && <div className="fixed inset-0 z-[9999] cursor-move bg-transparent touch-none" />}
 
-      {/* DESKTOP ICONS GRID CONTAINER */}
-      <div className="absolute top-0 left-0 bottom-12 w-full p-4 z-0">
-        <div className="grid grid-cols-[repeat(auto-fill,100px)] grid-rows-[repeat(auto-fill,120px)] h-full gap-2 pointer-events-none">
-            {config?.installedApps.map((app) => {
-                const pos = iconLayout[app.id];
-                // Determine style: Grid Flow vs Absolute (Locked)
-                const isLocked = !!pos;
-                const style: React.CSSProperties = isLocked 
-                    ? { position: 'absolute', left: pos.x, top: pos.y, pointerEvents: 'auto' } 
-                    : { position: 'relative', pointerEvents: 'auto' };
-                
-                const isSelected = selectedDesktopIcon === app.id;
-                const isBeingDragged = draggingAppId === app.id;
-
-                return (
-                <div 
-                    key={app.id} 
-                    ref={el => { iconRefs.current[app.id] = el; }}
-                    style={style}
-                    onDoubleClick={(e) => { 
-                        e.stopPropagation(); 
-                        openApp(app); 
-                    }}
-                    onPointerDown={(e) => handleIconPointerDown(app, e)}
-                    onClick={(e) => handleDesktopIconClick(app.id, e)}
-                    onContextMenu={(e) => {
-                        e.preventDefault(); e.stopPropagation();
-                        setSelectedDesktopIcon(app.id);
-                        setGlobalContextMenu({ x: e.clientX, y: e.clientY, targetItem: app as any, type: 'app' });
-                    }}
-                    className={`w-24 flex flex-col items-center gap-1.5 p-2 rounded-lg cursor-default group transition-all duration-200 select-none 
-                        ${isSelected ? 'bg-white/20 ring-1 ring-white/30' : 'hover:bg-white/10'}
-                        ${isBeingDragged ? 'scale-110 shadow-2xl z-[100] animate-pulse bg-white/30 ring-2 ring-blue-400' : ''}
-                    `}
-                >
-                    <div className="w-12 h-12 glass-light rounded-2xl flex items-center justify-center shadow-lg group-hover:scale-105 transition-transform text-white overflow-hidden pointer-events-none">
+      {/* DESKTOP AREA - UPDATED TO CLEAN GRID FLOW */}
+      <div className="absolute top-0 left-0 bottom-12 w-full p-6 z-0 overflow-y-auto no-scrollbar">
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(90px,1fr))] gap-4 pointer-events-none content-start max-w-full">
+            {config?.installedApps.map((app: API.AppDefinition) => (
+                <div key={app.id} 
+                    onDoubleClick={(e) => { e.stopPropagation(); openApp(app); }}
+                    onPointerDown={() => setSelectedDesktopIcon(app.id)}
+                    onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setSelectedDesktopIcon(app.id); setGlobalContextMenu({ x: e.clientX, y: e.clientY, targetItem: app as any, type: 'app' }); }}
+                    className={`flex flex-col items-center gap-2 p-3 rounded-xl cursor-default group transition-all duration-200 select-none pointer-events-auto ${selectedDesktopIcon === app.id ? 'bg-white/20 ring-1 ring-white/30' : 'hover:bg-white/10'}`}>
+                    <div className="w-14 h-14 glass-light rounded-2xl flex items-center justify-center shadow-lg group-hover:scale-105 transition-transform text-white overflow-hidden pointer-events-none">
                     {app.icon.startsWith('http') ? <img src={app.icon} className="w-full h-full object-cover"/> :
-                    app.icon === 'folder' ? <Folder size={28} className="text-blue-400 drop-shadow-lg"/> :
-                    app.icon === 'settings' ? <Settings size={28} className="text-slate-300 drop-shadow-lg"/> :
-                    app.icon === 'shopping-bag' ? <ShoppingBag size={28} className="text-pink-400 drop-shadow-lg"/> : 
-                    app.icon === 'image' ? <ImageIcon size={28} className="text-pink-400 drop-shadow-lg" /> :
-                    app.icon === 'youtube' ? <Youtube size={28} className="text-red-500 drop-shadow-lg" /> :
-                    app.icon === 'file-text' ? <FileText size={28} className="text-yellow-500 drop-shadow-lg"/> :
-                    app.icon === 'trash' ? <Trash2 size={28} className="text-red-400 drop-shadow-lg"/> :
-                    <Globe size={28} className="text-emerald-400 drop-shadow-lg"/>}
+                    app.icon === 'folder' ? <Folder size={32} className="text-blue-400 drop-shadow-lg"/> :
+                    app.icon === 'settings' ? <Settings size={32} className="text-slate-300 drop-shadow-lg"/> :
+                    app.icon === 'shopping-bag' ? <ShoppingBag size={32} className="text-pink-400 drop-shadow-lg"/> : 
+                    app.icon === 'image' ? <ImageIcon size={32} className="text-pink-400 drop-shadow-lg" /> :
+                    app.icon === 'youtube' ? <Youtube size={32} className="text-red-500 drop-shadow-lg" /> :
+                    app.icon === 'file-text' ? <FileText size={32} className="text-yellow-500 drop-shadow-lg"/> :
+                    app.icon === 'trash' ? <Trash2 size={32} className="text-red-400 drop-shadow-lg"/> :
+                    <Globe size={32} className="text-emerald-400 drop-shadow-lg"/>}
                     </div>
-                    <span className="text-[10px] text-white font-bold text-shadow text-center line-clamp-2 px-1 pointer-events-none">{app.name}</span>
+                    <span className="text-[11px] text-white font-bold text-shadow text-center line-clamp-2 px-1 pointer-events-none leading-tight">{app.name}</span>
                 </div>
-                );
-            })}
+            ))}
         </div>
       </div>
 
-      {/* WINDOWS */}
       {windows.map(win => (
         <div key={win.instanceId} id={`window-${win.instanceId}`}
              className={`absolute flex flex-col glass rounded-xl shadow-2xl overflow-hidden transition-none animate-window-open ${win.isMaximized ? 'inset-0 !top-0 !left-0 !w-full !h-[calc(100%-48px)] rounded-none' : ''} ${activeWindowId === win.instanceId ? 'z-40 ring-1 ring-white/20 shadow-[0_30px_60px_rgba(0,0,0,0.5)]' : 'z-10'} ${win.isMinimized ? 'hidden' : ''}`}
@@ -1452,7 +1256,6 @@ const App = () => {
             <div className="flex items-center gap-2 pointer-events-none">
                <div className="w-4 h-4 flex items-center justify-center text-white">
                  {win.appId === 'file-explorer' ? (win.args?.folderId === recycleBinId ? <Trash2 size={14}/> : <Folder size={14}/>) : 
-                  (win.appId === 'app-store' || win.appId === 'store') ? <ShoppingBag size={14}/> : 
                   win.appId === 'settings' ? <Settings size={14}/> : 
                   win.appId === 'youtube' ? <Youtube size={14}/> :
                   win.appId === 'notes' ? <FileText size={14}/> :
@@ -1471,7 +1274,7 @@ const App = () => {
             {win.appId === 'file-explorer' && (
               <FileExplorerApp {...{
                   currentFolderId: win.args?.folderId !== undefined ? win.args.folderId : currentFolderId, 
-                  setCurrentFolderId: (id: string) => { if(win.args?.folderId !== undefined) { handleSetCurrentFolderId(id); } else handleSetCurrentFolderId(id); }, 
+                  setCurrentFolderId: (id: string) => handleSetCurrentFolderId(id), 
                   folderHistory, setFolderHistory, items, setItems, loading, setLoading,
                   systemMap, setSystemMap, dbFileId, setDbFileId, comments, setComments, recycleBinId, setRecycleBinId,
                   systemFolderId, setSystemFolderId, isSavingDB, setIsSavingDB, isSavingComments, setIsSavingComments,
@@ -1483,11 +1286,7 @@ const App = () => {
                       if (item) { setGlobalContextMenu({ x: e.clientX, y: e.clientY, targetItem: item, isRecycleBin: isBin, type: 'item' }); } 
                       else { setGlobalContextMenu({ x: e.clientX, y: e.clientY, type: 'folder-background', isRecycleBin: (win.args?.folderId === recycleBinId || currentFolderId === recycleBinId) }); }
                   },
-                  openNotesApp: (fileId?: string, isNew?: boolean) => {
-                      // Pass current folder ID so new notes are saved there by default
-                      const targetFolder = win.args?.folderId !== undefined ? win.args.folderId : currentFolderId;
-                      openNotesApp(fileId, isNew);
-                  }
+                  openNotesApp
               }} />
             )}
             {win.appId === 'notes' && (
@@ -1495,7 +1294,7 @@ const App = () => {
                 initialFileId={win.args?.fileId}
                 isNewNote={win.args?.isNew}
                 initialFolderId={win.args?.folderId}
-                currentFolderId={currentFolderId} // Global fallback
+                currentFolderId={currentFolderId} 
                 filesInFolder={items} 
                 systemMap={systemMap}
                 onClose={() => closeWindow(win.instanceId)}
@@ -1522,11 +1321,21 @@ const App = () => {
             {(win.appId === 'app-store' || win.appId === 'store') && <AppStoreApp config={config!} setConfig={setConfig} addNotification={addNotification} systemFolderId={systemFolderId}/>}
             {(win.appData.type === 'webapp') && win.appId !== 'youtube' && (
               <div className="h-full flex flex-col bg-white">
-                <div className="p-1 bg-slate-100 flex items-center justify-between gap-2 border-b">
-                   <div className="flex items-center gap-2 flex-1 min-w-0"><Globe size={12} className="text-slate-400 ml-2 flex-shrink-0"/><input className="flex-1 bg-white px-3 py-1 rounded-lg border-none text-[10px] outline-none text-slate-800" value={win.appData.url} readOnly /></div>
-                   <button onClick={() => window.open(win.appData.url, '_blank')} className="p-1.5 hover:bg-slate-200 rounded text-slate-500"><ExternalLink size={14}/></button>
-                </div>
-                <iframe src={win.appData.url} className="flex-1 w-full border-none" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation" />
+                {win.appData.showAddressBar !== false && (
+                  <div className="p-1.5 bg-slate-100 flex items-center justify-between gap-2 border-b">
+                     <div className="flex items-center gap-2 flex-1 min-w-0 bg-white rounded-lg border border-slate-200 px-2 py-0.5 shadow-sm">
+                        <Globe size={12} className="text-slate-400 flex-shrink-0"/>
+                        <input className="flex-1 border-none text-[10px] outline-none text-slate-800 bg-transparent py-0.5" value={win.appData.url} readOnly />
+                        {win.appData.useProxy && <span className="text-[8px] bg-blue-100 text-blue-600 px-1 rounded font-bold">PROXY</span>}
+                     </div>
+                     <button onClick={() => window.open(win.appData.url, '_blank')} className="p-1 hover:bg-slate-200 rounded text-slate-500 transition-colors" title="Buka di Tab Baru"><ExternalLink size={14}/></button>
+                  </div>
+                )}
+                <iframe 
+                  src={win.appData.useProxy ? `https://wsrv.nl/?url=${encodeURIComponent(win.appData.url)}` : win.appData.url} 
+                  className="flex-1 w-full border-none" 
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation" 
+                />
               </div>
             )}
           </div>
@@ -1541,22 +1350,16 @@ const App = () => {
         </div>
       ))}
 
-      {/* SYNC NOTIFICATION - FLOATING BOTTOM RIGHT */}
       {(isSavingDB || isSavingComments) && (
         <div className="fixed bottom-16 right-4 z-[200] bg-slate-800/90 border border-slate-600 p-3 rounded-xl shadow-2xl flex items-center gap-3 animate-in slide-in-from-right-10 duration-500">
-           <Loader2 size={20} className="animate-spin text-blue-400"/>
-           <div className="flex flex-col">
-              <span className="text-xs font-bold text-white">Syncing Cloud Database...</span>
-              <span className="text-[10px] text-slate-400">Do not close window</span>
-           </div>
+           <Loader2 size={20} className="animate-spin text-blue-400"/><div className="flex flex-col"><span className="text-xs font-bold text-white">Syncing Cloud Database...</span></div>
         </div>
       )}
 
-      {/* START MENU */}
       {startMenuOpen && (
         <div className="absolute bottom-16 left-1/2 -translate-x-1/2 w-[600px] max-w-[95vw] h-[550px] max-h-[80vh] glass rounded-3xl shadow-[0_32px_64px_rgba(0,0,0,0.5)] z-[60] p-8 flex flex-col animate-in slide-in-from-bottom-5 duration-200">
           <div className="grid grid-cols-4 sm:grid-cols-6 gap-6 flex-1 content-start overflow-y-auto pr-2 no-scrollbar">
-             {config?.installedApps.map(app => (
+             {config?.installedApps.map((app: API.AppDefinition) => (
                <button key={app.id} onClick={()=>openApp(app)} className="flex flex-col items-center gap-2 group">
                  <div className="w-12 h-12 bg-white/5 hover:bg-white/10 rounded-2xl flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform overflow-hidden">
                     {app.icon.startsWith('http') ? <img src={app.icon} className="w-full h-full object-cover"/> :
@@ -1573,186 +1376,62 @@ const App = () => {
                </button>
              ))}
           </div>
-          <div className="mt-auto pt-6 border-t border-white/5 flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                 <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center text-xs font-bold text-white shadow-xl">ZD</div>
-                 <div className="flex flex-col">
-                    <span className="text-xs font-bold text-white">Cloud User</span>
-                    <span className="text-[10px] text-slate-400">Personal Account</span>
-                 </div>
-              </div>
-          </div>
         </div>
       )}
 
-      {/* TASKBAR */}
-      <div className="absolute bottom-0 w-full h-12 glass border-t border-white/5 flex items-center justify-between px-4 z-[70]"
-           style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
-        <div className="w-24 flex items-center gap-2 hidden sm:flex">
-            <button onClick={toggleFullscreen} className="p-2 rounded-xl hover:bg-white/10 transition-all text-white/50 hover:text-white" title="Toggle Fullscreen">
-                {isFullscreen ? <Minimize2 size={20}/> : <Maximize2 size={20}/>}
-            </button>
-        </div> 
-
+      <div className="absolute bottom-0 w-full h-12 glass border-t border-white/5 flex items-center justify-between px-4 z-[70]">
+        <div className="w-24 hidden sm:flex"><button onClick={toggleFullscreen} className="p-2 rounded-xl text-white/50">{isFullscreen ? <Minimize2 size={20}/> : <Maximize2 size={20}/>}</button></div> 
         <div className="flex items-center gap-1.5 mx-auto sm:mx-0 overflow-x-auto no-scrollbar max-w-full">
-           <button onClick={() => setStartMenuOpen(!startMenuOpen)} className={`p-2.5 rounded-xl hover:bg-white/10 transition-all flex-shrink-0 ${startMenuOpen ? 'bg-white/10 scale-90' : ''}`}><Grid size={24} className="text-blue-400"/></button>
+           <button onClick={() => setStartMenuOpen(!startMenuOpen)} className="p-2.5 rounded-xl hover:bg-white/10 transition-all flex-shrink-0"><Grid size={24} className="text-blue-400"/></button>
            <div className="w-px h-6 bg-white/5 mx-2 flex-shrink-0"></div>
            {windows.map(win => (
              <button key={win.instanceId} onClick={() => { if (win.isMinimized) toggleMinimize(win.instanceId); setActiveWindowId(win.instanceId); }}
-                     className={`p-2 rounded-xl hover:bg-white/10 transition-all relative group flex-shrink-0 ${activeWindowId === win.instanceId && !win.isMinimized ? 'bg-white/10' : 'opacity-60'}`}>
+                     className={`p-2 rounded-xl hover:bg-white/10 transition-all relative flex-shrink-0 ${activeWindowId === win.instanceId && !win.isMinimized ? 'bg-white/10' : 'opacity-60'}`}>
                 <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-white text-[10px] font-bold shadow-lg ${win.appId === 'file-explorer' ? (win.args?.folderId === recycleBinId ? 'bg-red-900' : 'bg-blue-600') : (win.appId === 'app-store' || win.appId === 'store') ? 'bg-pink-600' : win.appId === 'youtube' ? 'bg-red-600' : win.appId === 'notes' ? 'bg-yellow-600' : win.appData.icon === 'image' ? 'bg-pink-500' : 'bg-slate-700'}`}>
-                   {win.appId === 'file-explorer' ? (win.args?.folderId === recycleBinId ? <Trash2 size={14}/> : <Folder size={14}/>) : 
-                    (win.appId === 'app-store' || win.appId === 'store') ? <ShoppingBag size={14}/> : 
-                    win.appId === 'settings' ? <Settings size={14}/> : 
-                    win.appId === 'youtube' ? <Youtube size={14}/> :
-                    win.appId === 'notes' ? <FileText size={14}/> :
-                    win.appData.icon === 'image' ? <ImageIcon size={14} /> : win.title.charAt(0)}
+                   {win.appId === 'file-explorer' ? (win.args?.folderId === recycleBinId ? <Trash2 size={14}/> : <Folder size={14}/>) : win.appId === 'youtube' ? <Youtube size={14}/> : win.appId === 'notes' ? <FileText size={14}/> : win.title.charAt(0)}
                 </div>
                 {!win.isMinimized && activeWindowId === win.instanceId && <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-3 h-1 bg-blue-400 rounded-full"></div>}
              </button>
            ))}
         </div>
-
         <div className="flex items-center gap-3 text-white w-24 justify-end hidden sm:flex">
              <div className="flex flex-col items-end leading-none font-bold">
                <span className="text-[10px]">{clock.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
-               <span className="text-[8px] text-slate-400">{clock.toLocaleDateString([], {day:'2-digit', month:'2-digit'})}</span>
              </div>
         </div>
       </div>
 
-      {/* GLOBAL CONTEXT MENU */}
       {globalContextMenu && (
-        <div 
-            className="absolute z-[1001] bg-slate-900 border border-slate-700 rounded-lg shadow-2xl py-1 min-w-[180px] animate-in zoom-in-95 duration-100 overflow-hidden" 
-            style={{ top: globalContextMenu.y, left: globalContextMenu.x }}
-            onPointerDown={(e) => e.stopPropagation()} 
-            onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
-        >
+        <div className="absolute z-[1001] bg-slate-900 border border-slate-700 rounded-lg shadow-2xl py-1 min-w-[180px] animate-in zoom-in-95 duration-100" style={{ top: globalContextMenu.y, left: globalContextMenu.x }}>
             {globalContextMenu.type === 'item' && globalContextMenu.targetItem ? (
                 <>
-                  {!globalContextMenu.isRecycleBin && <button onClick={() => { executeAction('comment', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><MessageSquare size={14}/> Comment</button>}
-                  {(globalContextMenu.targetItem as Item).type === 'image' && !globalContextMenu.isRecycleBin && (
-                    <button onClick={() => { executeAction('download', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-emerald-400"><Download size={14}/> Download</button>
-                  )}
-                  {globalContextMenu.isRecycleBin ? (
-                      <button onClick={() => { executeAction('restore', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-green-400"><RotateCcw size={14}/> Restore</button>
-                  ) : (
-                      <>
-                        <button onClick={() => { executeAction('rename', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><Edit size={14}/> Rename</button>
-                        <button onClick={() => { executeAction('move', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><Move size={14}/> Move</button>
-                      </>
-                  )}
-                  <div className="h-px bg-slate-800 my-1"></div>
-                  <button onClick={() => { executeAction('delete', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-500 text-xs flex items-center gap-2"><Trash2 size={14}/> {globalContextMenu.isRecycleBin ? 'Delete Permanent' : 'Delete'}</button>
+                  <button onClick={() => { executeAction('comment', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><MessageSquare size={14}/> Comment</button>
+                  <button onClick={() => { executeAction('delete', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-500 text-xs flex items-center gap-2"><Trash2 size={14}/> Delete</button>
                 </>
             ) : globalContextMenu.type === 'app' ? (
-                <>
-                   <button onClick={() => { openApp(globalContextMenu.targetItem as API.AppDefinition); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><ExternalLink size={14}/> Open</button>
-                   {globalContextMenu.targetItem?.id === 'youtube' && (
-                       <button onClick={() => { setModal({ type: 'properties', title: 'YouTube Properties', targetItem: globalContextMenu.targetItem as any }); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><Settings size={14}/> Properties</button>
-                   )}
-                   {globalContextMenu.targetItem?.id === 'recycle-bin' && (
-                       <>
-                         <div className="h-px bg-slate-800 my-1"></div>
-                         <button onClick={() => { executeAction('empty_bin'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-500 text-xs flex items-center gap-2"><Trash2 size={14}/> Empty Recycle Bin</button>
-                       </>
-                   )}
-                </>
+                <button onClick={() => { openApp(globalContextMenu.targetItem as API.AppDefinition); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><ExternalLink size={14}/> Open</button>
             ) : globalContextMenu.type === 'folder-background' ? (
-                globalContextMenu.isRecycleBin ? (
-                   <>
-                     <button onClick={() => { executeAction('empty_bin'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-500 text-xs flex items-center gap-2"><Trash2 size={14}/> Empty Recycle Bin</button>
-                     <div className="h-px bg-slate-800 my-1"></div>
-                     <button onClick={() => { loadFolder(currentFolderId); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><RefreshCw size={14}/> Refresh</button>
-                   </>
-                ) : (
-                   <>
-                     <button onClick={() => { executeAction('new_folder'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><Folder size={14}/> New Folder</button>
-                     <button onClick={() => { openNotesApp(undefined, true); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><FileText size={14}/> New Note</button>
-                     <button onClick={() => { executeAction('native_upload'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-green-400"><Upload size={14}/> Upload File</button>
-                     <div className="h-px bg-slate-800 my-1"></div>
-                     <button onClick={() => { loadFolder(currentFolderId); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><RefreshCw size={14}/> Refresh</button>
-                   </>
-                )
-            ) : (
                 <>
-                  <button onClick={() => { handleRefreshDesktop(); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><RefreshCcw size={14}/> Refresh System</button>
-                  <div className="h-px bg-slate-800 my-1"></div>
-                  <button onClick={() => { setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-400">Cancel</button>
+                  <button onClick={() => { executeAction('new_folder'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><Folder size={14}/> New Folder</button>
+                  <button onClick={() => { loadFolder(currentFolderId); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><RefreshCw size={14}/> Refresh</button>
                 </>
+            ) : (
+                <button onClick={() => { handleRefreshDesktop(); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><RefreshCcw size={14}/> Refresh System</button>
             )}
         </div>
       )}
 
-      {/* OVERLAYS */}
-      <UploadProgress uploads={uploadQueue} onClose={() => setUploadQueue([])} onRemove={(id) => setUploadQueue(prev => prev.filter(u => u.id !== id))} />
-      <DownloadProgress downloads={downloadQueue} onClose={() => setDownloadQueue([])} onClearCompleted={() => setDownloadQueue(prev => prev.filter(d => d.status !== 'completed'))} />
-      {previewImage && (<div className="fixed inset-0 z-[150] bg-black/95 flex items-center justify-center p-4" onClick={() => setPreviewImage(null)}><button onClick={() => setPreviewImage(null)} className="absolute top-4 right-4 text-white"><X size={32}/></button><img src={previewImage} className="max-w-full max-h-full object-contain" referrerPolicy="no-referrer" /></div>)}
-      {editingNote && <TextEditor note={editingNote} onSave={async (id: string, title: string, content: string) => { await API.saveNoteToDrive(title, content, currentFolderId, id.startsWith('new-') ? undefined : id); setEditingNote(null); }} onClose={() => setEditingNote(null)} />}
-      
       {modal && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => !isPostingComment && setModal(null)} />
-          <div className={`relative w-full ${modal.type === 'comment' || modal.type === 'properties' ? 'max-w-2xl' : 'max-w-sm'} bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden`}>
-            {modal.type === 'comment' ? (
-              <div className="flex flex-col h-[500px] max-h-[70vh]">
-                <div className="p-4 bg-slate-950 flex items-center justify-between"><h3 className="text-sm font-bold">{modal.title}</h3><button disabled={isPostingComment} onClick={() => setModal(null)}><X size={18} className={isPostingComment ? 'opacity-50' : ''}/></button></div>
-                <div className="flex-1 overflow-y-auto p-4 space-y-4">
-                   {(comments[modal.targetItem!.id] || []).map((c: any) => (
-                      <div key={c.id} className="flex gap-3">
-                         <div className="w-8 h-8 rounded-full bg-blue-600 flex-shrink-0 flex items-center justify-center text-[10px] font-bold text-white uppercase">{c.author?.[0]}</div>
-                         <div className="flex-1 bg-slate-800/50 p-3 rounded-xl border border-slate-700">
-                           <div className="flex justify-between items-center mb-1"><span className="text-[10px] font-bold text-blue-400">{c.author}</span><span className="text-[8px] text-slate-500">{new Date(c.timestamp).toLocaleTimeString()}</span></div>
-                           <p className="text-xs text-slate-200">{c.text}</p>
-                         </div>
-                      </div>
-                    ))}
-                    {isPostingComment && <div className="flex justify-center p-4"><Loader2 className="animate-spin text-blue-400"/></div>}
-                </div>
-                <div className="p-4 border-t border-slate-800 flex gap-2">
-                   <input disabled={isPostingComment} className="flex-1 bg-slate-800 rounded-lg px-3 py-2 text-xs" placeholder="Komentar..." value={commentText} onChange={e=>setCommentText(e.target.value)} />
-                   <input disabled={isPostingComment} className="w-20 bg-slate-800 rounded-lg px-2 py-2 text-xs" placeholder="Nama" value={commentName} onChange={e=>setCommentName(e.target.value)} />
-                   <button disabled={isPostingComment} onClick={handleAddComment} className="p-2 bg-blue-600 text-white rounded-lg disabled:opacity-50"><Send size={16}/></button>
-                </div>
-              </div>
-            ) : modal.type === 'properties' && modal.targetItem?.id === 'youtube' ? (
-                <div className="p-6">
-                   <h3 className="text-lg font-bold text-white mb-4">YouTube API Configuration</h3>
-                   <div className="space-y-4">
-                        <div className="bg-slate-800 p-4 rounded-xl border border-slate-700">
-                            <h4 className="text-xs text-slate-400 uppercase font-bold mb-2">Custom API Keys</h4>
-                            <div className="space-y-2 mb-3 max-h-40 overflow-y-auto">
-                                {(config?.youtubeApiKeys || []).map((key, idx) => (
-                                    <div key={idx} className="flex justify-between items-center bg-slate-900 p-2 rounded border border-slate-800">
-                                        <span className="text-xs font-mono text-slate-500">{key.substring(0, 4)}...{key.substring(key.length-4)}</span>
-                                        <button onClick={() => handlePropertiesSave((config?.youtubeApiKeys || []).filter((_, i) => i !== idx))} className="text-red-500 hover:text-red-400"><X size={14}/></button>
-                                    </div>
-                                ))}
-                            </div>
-                            <div className="flex gap-2">
-                                <input className="flex-1 bg-slate-900 border border-slate-700 rounded px-3 py-2 text-xs text-white" placeholder="Enter new API Key" id="new-api-key-input"/>
-                                <button onClick={() => { const input = document.getElementById('new-api-key-input') as HTMLInputElement; if(input.value) { handlePropertiesSave([...(config?.youtubeApiKeys || []), input.value]); input.value = ""; } }} className="px-3 bg-blue-600 rounded text-xs text-white font-bold">Add</button>
-                            </div>
-                        </div>
-                        <div className="flex justify-end pt-2"><button onClick={() => setModal(null)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs font-bold text-white">Close</button></div>
-                   </div>
-                </div>
-            ) : (
-              <div className="p-6">
-                <h3 className="text-lg font-bold text-white mb-2">{modal.title}</h3>
-                {modal.message && <p className="text-sm text-slate-400 mb-4">{modal.message}</p>}
-                {modal.type === 'input' && <input className="w-full bg-slate-800 p-3 rounded-lg text-sm text-white" defaultValue={modal.inputValue} onChange={e=>setModal({...modal, inputValue: e.target.value})} />}
-                {modal.type === 'password' && <input className="w-full bg-slate-800 p-3 rounded-lg text-sm" type="password" placeholder="Password" onChange={e=>setModal({...modal, inputValue: e.target.value})} />}
-                {modal.type === 'select' && <select className="w-full bg-slate-800 p-3 rounded-lg text-sm text-white outline-none" onChange={e=>setModal({...modal, inputValue: e.target.value})}><option value="">Select Folder</option>{modal.options?.map(o=><option key={o.value} value={o.value}>{o.label}</option>)}</select>}
-                <div className="mt-6 flex gap-3"><button onClick={() => setModal(null)} className="flex-1 py-2 text-slate-400">Cancel</button><button onClick={() => modal.onConfirm?.(modal.inputValue)} className={`flex-1 py-2 rounded-lg text-white ${modal.isDanger ? 'bg-red-600' : 'bg-blue-600'}`}>{modal.confirmText || 'OK'}</button></div>
-              </div>
-            )}
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setModal(null)} />
+          <div className="relative w-full max-sm bg-slate-900 border border-slate-700 rounded-2xl p-6 shadow-2xl">
+            <h3 className="text-lg font-bold text-white mb-2">{modal.title}</h3>
+            {modal.type === 'input' && <input className="w-full bg-slate-800 p-3 rounded-lg text-sm text-white" defaultValue={modal.inputValue} onChange={e=>setModal({...modal, inputValue: e.target.value})} />}
+            <div className="mt-6 flex gap-3"><button onClick={() => setModal(null)} className="flex-1 py-2 text-slate-400">Cancel</button><button onClick={() => modal.onConfirm?.(modal.inputValue)} className={`flex-1 py-2 rounded-lg text-white ${modal.isDanger ? 'bg-red-600' : 'bg-blue-600'}`}>OK</button></div>
           </div>
         </div>
       )}
 
-      {/* NOTIFICATIONS */}
       <div className="fixed bottom-20 right-4 z-[300] flex flex-col gap-2">
         {notifications.map(n => (
           <div key={n.id} className="bg-slate-900/90 border border-slate-700 p-3 rounded-xl shadow-2xl flex items-center gap-3 animate-in slide-in-from-right-5">
