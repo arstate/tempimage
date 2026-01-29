@@ -2,8 +2,9 @@
 {
   "name": "Cloud Desktop OS",
   "short_name": "CloudOS",
-  "start_url": "./index.html",
-  "display": "standalone",
+  "start_url": "/",
+  "display": "fullscreen",
+  "orientation": "any",
   "background_color": "#0f172a",
   "theme_color": "#0f172a",
   "description": "Web Based Cloud Operating System",

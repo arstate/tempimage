@@ -5,7 +5,7 @@ import react from '@vitejs/plugin-react';
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
-  base: './', // Memastikan aset menggunakan path relatif
+  // base: './', // Dihapus: Gunakan default '/' untuk PWA root hosting (Vercel) agar routing stabil
   build: {
     outDir: 'dist',
     sourcemap: false,
