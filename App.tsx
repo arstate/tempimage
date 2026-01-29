@@ -204,7 +204,7 @@ const ImageItem = ({ item, hasComments, selected, onClick, onDoubleClick, onCont
   </div>
 );
 
-// --- YOUTUBE APP COMPONENT ---
+// ... (Other components like YouTubeApp, GalleryApp, AppStoreApp remain unchanged, skipping for brevity but assuming they are here) ...
 const YouTubeApp = ({ customKeys }: { customKeys?: string[] }) => {
   const [searchQuery, setSearchQuery] = useState("");
   const [videos, setVideos] = useState<any[]>([]);
@@ -450,7 +450,7 @@ const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId }: any
    );
 };
 
-// --- FILE EXPLORER APP COMPONENT ---
+// ... FileExplorerApp component (no changes needed) ...
 const FileExplorerApp = ({ 
     currentFolderId, setCurrentFolderId,
     folderHistory, setFolderHistory,
@@ -897,6 +897,7 @@ const App = () => {
   const [isSavingComments, setIsSavingComments] = useState(false);
   const [isGlobalLoading, setIsGlobalLoading] = useState(true); 
   const [globalLoadingMessage, setGlobalLoadingMessage] = useState("Booting System...");
+  const [bootProgress, setBootProgress] = useState(0); // Progress bar state
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [uploadQueue, setUploadQueue] = useState<UploadItem[]>([]);
   const [downloadQueue, setDownloadQueue] = useState<DownloadItem[]>([]);
@@ -958,8 +959,10 @@ const App = () => {
   useEffect(() => {
     const boot = async () => {
       try {
+        setBootProgress(10);
         setGlobalLoadingMessage("Loading System Configuration...");
         const osConfig = await API.getSystemConfig();
+        setBootProgress(30);
         
         let configUpdated = false;
         if (!osConfig.installedApps.some(app => app.id === 'youtube')) { osConfig.installedApps.push({ id: 'youtube', name: 'YouTube', url: 'internal://youtube', icon: 'youtube', type: 'system' }); configUpdated = true; }
@@ -969,6 +972,7 @@ const App = () => {
         setConfig(osConfig);
 
         setGlobalLoadingMessage("Locating Cloud Storage...");
+        setBootProgress(50);
         const cloudLocation = await API.locateSystemDB();
         let sysFolderId = cloudLocation.systemFolderId;
         let curDbFileId = cloudLocation.fileId; 
@@ -976,6 +980,7 @@ const App = () => {
 
         if (!sysFolderId) { setGlobalLoadingMessage("Initializing System Folder..."); sysFolderId = await API.createSystemFolder(); }
         setSystemFolderId(sysFolderId);
+        setBootProgress(70);
 
         let finalMap: FolderMap = { "root": { id: "root", name: "Home", parentId: "" } };
         if (curDbFileId) {
@@ -983,6 +988,7 @@ const App = () => {
             const content = await API.getFileContent(curDbFileId);
             finalMap = JSON.parse(content);
         } else { curDbFileId = await API.createSystemDBFile(finalMap, sysFolderId); }
+        setBootProgress(85);
 
         let finalComments: CommentDB = {};
         if (curCommentFileId) {
@@ -996,15 +1002,19 @@ const App = () => {
         
         await DB.saveSystemMap({ fileId: curDbFileId, map: finalMap, lastSync: Date.now() });
         await DB.saveCommentsCache(finalComments);
+        setBootProgress(100);
+        setGlobalLoadingMessage("Starting...");
         setIsSystemInitialized(true);
-      } catch (e) { console.error("Boot Error:", e); } finally { setIsGlobalLoading(false); }
+      } catch (e) { console.error("Boot Error:", e); } finally { 
+          setTimeout(() => setIsGlobalLoading(false), 500); // Slight delay to show 100%
+      }
     };
     boot();
   }, []);
 
   useEffect(() => { const timer = setInterval(() => setClock(new Date()), 1000); return () => clearInterval(timer); }, []);
 
-  // --- SHARED EXPLORER ACTIONS ---
+  // ... (Shared Explorer Actions, unchanged) ...
   // Fix Explorer Bug: Ensure we are only updating state if the folder hasn't changed during fetch
   const handleSetCurrentFolderId = (id: string) => {
       setCurrentFolderId(id);
@@ -1394,7 +1404,7 @@ const App = () => {
      }
   };
 
-  // Window Manager Logic
+  // ... (Window manager and other helper functions remain the same) ...
   const handleWindowAction = (instanceId: string, e: React.PointerEvent, actionType: 'move' | 'resize', corner?: string) => {
     if (e.button !== 0) return;
     const win = windows.find(w => w.instanceId === instanceId);
@@ -1435,11 +1445,9 @@ const App = () => {
     setStartMenuOpen(false);
     if (!app) { addNotification("App not ready", "error"); return; }
     
-    // Notes App Single Instance Logic
     if (app.id === 'notes') {
         const existingNoteWindow = windows.find(w => w.appId === 'notes');
         if (existingNoteWindow) {
-            // If window exists, bring to front and update args if provided
             setWindows(prev => prev.map(w => {
                 if (w.instanceId === existingNoteWindow.instanceId) {
                     return { ...w, isMinimized: false, args: args || w.args };
@@ -1451,7 +1459,6 @@ const App = () => {
         }
     }
 
-    // Recycle Bin is special case (it's a folder view)
     if (app.id === 'recycle-bin') {
         const explorer = config?.installedApps.find(a => a.id === 'file-explorer');
         if (explorer) {
@@ -1490,7 +1497,6 @@ const App = () => {
   const openNotesApp = (fileId?: string, isNew?: boolean) => {
     const notesApp = config?.installedApps.find(a => a.id === 'notes');
     if (notesApp) {
-        // Pass the fileId and currentFolderId (for context where to save new files)
         openApp(notesApp, { fileId, isNew, folderId: currentFolderIdRef.current });
     }
   };
@@ -1512,10 +1518,14 @@ const App = () => {
          {/* Title */}
          <h1 className="text-3xl font-bold text-white tracking-widest font-sans">CLOUD OS</h1>
          
-         {/* Spinner */}
-         <div className="mt-4">
-            <Loader2 size={32} className="animate-spin text-blue-500" />
+         {/* Progress Bar */}
+         <div className="w-64 h-1 bg-gray-800 rounded-full overflow-hidden mt-2">
+            <div 
+                className="h-full bg-blue-500 transition-all duration-500 ease-out" 
+                style={{width: `${bootProgress}%`}}
+            ></div>
          </div>
+         <div className="text-xs font-mono text-blue-400">{bootProgress}%</div>
       </div>
 
       {/* Bottom Status Text */}
@@ -1525,7 +1535,7 @@ const App = () => {
          </p>
       </div>
       
-      {/* Copyright/Footer (Optional) */}
+      {/* Copyright/Footer */}
       <div className="absolute bottom-6 text-[10px] text-slate-700">
          © 2025 Zombio Systems
       </div>
@@ -1596,7 +1606,7 @@ const App = () => {
              onPointerDown={() => setActiveWindowId(win.instanceId)}
              onContextMenu={(e) => e.stopPropagation()}
         >
-          
+          {/* Window Header */}
           <div className="h-10 bg-slate-950/40 border-b border-white/5 flex items-center justify-between px-3 select-none cursor-default touch-none"
                onDoubleClick={() => toggleMaximize(win.instanceId)}
                onPointerDown={(e) => handleWindowAction(win.instanceId, e, 'move')}>
@@ -1646,9 +1656,9 @@ const App = () => {
                 initialFileId={win.args?.fileId}
                 isNewNote={win.args?.isNew}
                 initialFolderId={win.args?.folderId}
-                currentFolderId={currentFolderId} // Global fallback
+                currentFolderId={currentFolderId} 
                 filesInFolder={items} 
-                systemMap={systemMap}
+                systemMap={systemMap} // Passing full system map for picker
                 onClose={() => closeWindow(win.instanceId)}
                 onRefresh={() => loadFolder(win.args?.folderId || currentFolderId)}
                 onSaveToCloud={async (id: string, title: string, content: string, targetFolderId?: string) => {
@@ -1656,6 +1666,7 @@ const App = () => {
                 }}
               />
             )}
+            {/* ... Other Apps ... */}
             {win.appData.url === 'internal://gallery' && (
               <GalleryApp 
                 items={items} 
@@ -1780,6 +1791,8 @@ const App = () => {
             onPointerDown={(e) => e.stopPropagation()} 
             onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
         >
+            {/* ... Context Menu Items (unchanged) ... */}
+            {/* (Reusing the existing context menu logic from previous step, ensuring consistency) */}
             {globalContextMenu.type === 'item' && globalContextMenu.targetItem ? (
                 <>
                   <button onClick={() => { 
@@ -1789,8 +1802,6 @@ const App = () => {
                       else if(itm.type === 'image') setPreviewImage(itm.url || null);
                       setGlobalContextMenu(null); 
                   }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-white font-bold"><ExternalLink size={14}/> Open</button>
-                  
-                  {/* System Folder Protection - Only show Open */}
                   {globalContextMenu.targetItem.id !== systemFolderId && globalContextMenu.targetItem.name !== SYSTEM_FOLDER_NAME && (
                       <>
                         {globalContextMenu.targetItem.id === recycleBinId || globalContextMenu.targetItem.name === RECYCLE_BIN_NAME ? (
@@ -1869,8 +1880,7 @@ const App = () => {
       <DownloadProgress downloads={downloadQueue} onClose={() => setDownloadQueue([])} onClearCompleted={() => setDownloadQueue(prev => prev.filter(d => d.status !== 'completed'))} />
       {previewImage && (<div className="fixed inset-0 z-[150] bg-black/95 flex items-center justify-center p-4" onClick={() => setPreviewImage(null)}><button onClick={() => setPreviewImage(null)} className="absolute top-4 right-4 text-white"><X size={32}/></button><img src={previewImage} className="max-w-full max-h-full object-contain" referrerPolicy="no-referrer" /></div>)}
       {editingNote && <TextEditor note={editingNote} onSave={async (id: string, title: string, content: string) => { await API.saveNoteToDrive(title, content, currentFolderId, id.startsWith('new-') ? undefined : id); setEditingNote(null); }} onClose={() => setEditingNote(null)} />}
-      
-      {modal && (
+      {modal && (/* ... Existing Modal Component ... */
         <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => !isPostingComment && setModal(null)} />
           <div className={`relative w-full ${modal.type === 'comment' || modal.type === 'properties' ? 'max-w-2xl' : 'max-w-sm'} bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl overflow-hidden`}>

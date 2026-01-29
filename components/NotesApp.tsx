@@ -285,13 +285,20 @@ export const NotesApp: React.FC<NotesAppProps> = ({
 
   // --- PICKER NAVIGATION HELPERS ---
   const getPickerSubfolders = () => {
-    // If picker is at root, we show top level folders from systemMap that have parentId ""
-    const pid = pickerCurrentFolderId === 'root' ? "" : pickerCurrentFolderId;
+    // Fix: Use the current folder ID directly. 
+    // In App.tsx logic, root-level folders have parentId assigned as "root".
+    // We should NOT convert 'root' to '' here, otherwise we match the root node itself.
+    const pid = pickerCurrentFolderId;
+    
+    // Ensure systemMap exists
+    if (!systemMap) return [];
+
     return Object.values(systemMap).filter(f => 
       f.parentId === pid && 
       f.name !== 'System' && 
-      f.name !== 'Recycle Bin'
-    );
+      f.name !== 'Recycle Bin' &&
+      f.id !== 'root' // Explicitly exclude root node to prevent self-reference
+    ).sort((a, b) => a.name.localeCompare(b.name));
   };
 
   const handlePickerEnter = (folderId: string) => {
@@ -532,13 +539,13 @@ export const NotesApp: React.FC<NotesAppProps> = ({
                       getPickerSubfolders().map(folder => (
                         <div 
                           key={folder.id}
-                          onDoubleClick={() => handlePickerEnter(folder.id)}
-                          className="group flex flex-col items-center gap-2 p-2 hover:bg-[#333] hover:bg-opacity-50 border border-transparent hover:border-[#444] rounded cursor-pointer transition-all"
+                          onClick={() => handlePickerEnter(folder.id)}
+                          className="group flex flex-col items-center gap-2 p-2 hover:bg-[#333] hover:bg-opacity-50 border border-transparent hover:border-[#444] rounded cursor-pointer transition-all active:scale-95"
                         >
                            <div className="w-16 h-14 flex items-center justify-center">
                               <Folder size={48} className="text-yellow-500 drop-shadow-md group-hover:scale-105 transition-transform" fill="currentColor" fillOpacity={0.2} />
                            </div>
-                           <span className="text-[11px] text-gray-300 text-center w-full truncate px-1">{folder.name}</span>
+                           <span className="text-[11px] text-gray-300 text-center w-full truncate px-1 group-hover:text-white">{folder.name}</span>
                         </div>
                       ))
                   )}
