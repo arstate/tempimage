@@ -872,15 +872,8 @@ const App = () => {
 
   // Interaction State
   const [isInteracting, setIsInteracting] = useState(false);
-  const [iconLayout, setIconLayout] = useState<{ [appId: string]: {x: number, y: number} }>({});
   const [selectedDesktopIcon, setSelectedDesktopIcon] = useState<string | null>(null);
   
-  // DRAG & DROP LOGIC (Hold to Move)
-  const [draggingAppId, setDraggingAppId] = useState<string | null>(null);
-  const longPressTimerRef = useRef<any>(null);
-  const dragStartPosRef = useRef<{ x: number, y: number } | null>(null);
-  const iconRefs = useRef<{ [key: string]: HTMLDivElement | null }>({});
-
   const toggleFullscreen = () => {
     if (!document.fullscreenElement) { document.documentElement.requestFullscreen().catch(e => console.error(e)); } 
     else { if (document.exitFullscreen) document.exitFullscreen(); }
@@ -905,7 +898,6 @@ const App = () => {
         if (!osConfig.installedApps.some(app => app.id === 'recycle-bin')) { osConfig.installedApps.push({ id: 'recycle-bin', name: 'Recycle Bin', url: 'internal://recycle-bin', icon: 'trash', type: 'system' }); configUpdated = true; }
 
         setConfig(osConfig);
-        if(osConfig.desktopLayout) setIconLayout(osConfig.desktopLayout);
 
         setGlobalLoadingMessage("Locating Cloud Storage...");
         const cloudLocation = await API.locateSystemDB();
@@ -1051,25 +1043,47 @@ const App = () => {
   };
 
   const handleDownloadItems = async (ids: string[]) => {
-    const itemsToDownload = items.filter(i => ids.includes(i.id) && i.type === 'image');
-    if (itemsToDownload.length === 0) return addNotification("Only images can be downloaded", "error");
+    const itemsToDownload = items.filter(i => ids.includes(i.id) && (i.type === 'image' || i.type === 'note'));
+    if (itemsToDownload.length === 0) return addNotification("Only images and notes can be downloaded", "error");
+    
     const newDownloads: DownloadItem[] = itemsToDownload.map(i => ({ id: i.id, name: i.name, status: 'pending', progress: 0 }));
     setDownloadQueue(prev => [...prev, ...newDownloads]);
+    
     for (const dItem of newDownloads) {
         setDownloadQueue(prev => prev.map(d => d.id === dItem.id ? { ...d, status: 'downloading' } : d));
         try {
             const item = itemsToDownload.find(i => i.id === dItem.id);
-            if (!item || !item.url) throw new Error("URL missing");
-            const proxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(item.url)}`;
-            const response = await fetch(proxyUrl);
-            if (!response.ok) throw new Error("Fetch failed");
-            const blob = await response.blob();
-            const blobUrl = URL.createObjectURL(blob);
+            if (!item) throw new Error("Item missing");
+            
+            let blobUrl = "";
+            
+            if (item.type === 'image' && item.url) {
+                const proxyUrl = `https://wsrv.nl/?url=${encodeURIComponent(item.url)}`;
+                const response = await fetch(proxyUrl);
+                if (!response.ok) throw new Error("Fetch failed");
+                const blob = await response.blob();
+                blobUrl = URL.createObjectURL(blob);
+            } else if (item.type === 'note') {
+                let content = item.content;
+                if (!content) content = await API.getFileContent(item.id);
+                const blob = new Blob([content], {type: 'text/plain'});
+                blobUrl = URL.createObjectURL(blob);
+            } else {
+                throw new Error("Unsupported type");
+            }
+
             const link = document.createElement('a');
-            link.href = blobUrl; link.download = item.name; document.body.appendChild(link); link.click(); document.body.removeChild(link);
+            link.href = blobUrl;
+            link.download = item.name;
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
             setTimeout(() => URL.revokeObjectURL(blobUrl), 500);
+            
             setDownloadQueue(prev => prev.map(d => d.id === dItem.id ? { ...d, status: 'completed', progress: 100 } : d));
-        } catch (e) { setDownloadQueue(prev => prev.map(d => d.id === dItem.id ? { ...d, status: 'error', error: 'Failed' } : d)); }
+        } catch (e) { 
+            setDownloadQueue(prev => prev.map(d => d.id === dItem.id ? { ...d, status: 'error', error: 'Failed' } : d)); 
+        }
     }
   };
 
@@ -1242,113 +1256,6 @@ const App = () => {
      try { await API.saveSystemConfig(updatedConfig); setConfig(updatedConfig); addNotification("API Keys updated", "success"); setModal(null); } 
      catch(e) { addNotification("Failed to save keys", "error"); }
   };
-
-  // --- DESKTOP ICON DRAG & DROP LOGIC (HOLD TO MOVE) ---
-  const handleIconPointerDown = (app: API.AppDefinition, e: React.PointerEvent) => {
-      // 1. Instant Select (Normal Click Behavior)
-      setSelectedDesktopIcon(app.id);
-      
-      if (e.button !== 0) return;
-      e.stopPropagation();
-
-      const el = iconRefs.current[app.id];
-      if (!el) return;
-
-      const rect = el.getBoundingClientRect();
-      dragStartPosRef.current = { x: e.clientX, y: e.clientY };
-
-      // 2. Start Long Press Timer
-      longPressTimerRef.current = setTimeout(() => {
-          // Timer Finished -> Enable Drag Mode
-          setDraggingAppId(app.id);
-          setIsInteracting(true); // Blocks interaction with iframes/windows
-          if (navigator.vibrate) navigator.vibrate(50); // Haptic feedback
-      }, 500); // 500ms Hold Threshold
-  };
-
-  const handleGlobalPointerMove = (e: PointerEvent) => {
-      // Check for jitter/scroll intent during Hold phase
-      if (longPressTimerRef.current && dragStartPosRef.current) {
-          const dist = Math.hypot(e.clientX - dragStartPosRef.current.x, e.clientY - dragStartPosRef.current.y);
-          if (dist > 10) {
-              // User moved too much before Hold time was up -> Cancel Hold
-              clearTimeout(longPressTimerRef.current);
-              longPressTimerRef.current = null;
-          }
-      }
-
-      // Handle Active Dragging
-      if (draggingAppId && dragStartPosRef.current) {
-          const el = iconRefs.current[draggingAppId];
-          if (el) {
-              const dx = e.clientX - dragStartPosRef.current.x;
-              const dy = e.clientY - dragStartPosRef.current.y;
-              
-              // Apply transform directly for performance
-              el.style.transform = `translate(${dx}px, ${dy}px) scale(1.1)`;
-              el.style.zIndex = '100';
-              el.style.transition = 'none';
-              el.style.pointerEvents = 'none'; 
-          }
-      }
-  };
-
-  const handleGlobalPointerUp = (e: PointerEvent) => {
-      // Clean up timer if released early (It was just a click)
-      if (longPressTimerRef.current) {
-          clearTimeout(longPressTimerRef.current);
-          longPressTimerRef.current = null;
-      }
-
-      if (draggingAppId) {
-          // Drop Logic
-          const el = iconRefs.current[draggingAppId];
-          if (el && dragStartPosRef.current) {
-              // Reset styles
-              el.style.transform = '';
-              el.style.zIndex = '';
-              el.style.pointerEvents = '';
-
-              // Calculate final position
-              const rect = el.getBoundingClientRect();
-              
-              // Snap to Grid (20px margin + grid size)
-              const snappedX = Math.round(rect.left / GRID_SIZE_X) * GRID_SIZE_X + 20;
-              const snappedY = Math.round(rect.top / GRID_SIZE_Y) * GRID_SIZE_Y + 20;
-
-              // Save new position
-              const newLayout = { ...iconLayout, [draggingAppId]: { x: snappedX, y: snappedY } };
-              setIconLayout(newLayout);
-              
-              // Sync to Cloud
-              if (config) {
-                 const updatedConfig = { ...config, desktopLayout: newLayout };
-                 setConfig(updatedConfig);
-                 API.saveSystemConfig(updatedConfig).catch(console.error);
-              }
-          }
-          setDraggingAppId(null);
-          setIsInteracting(false);
-      }
-      
-      dragStartPosRef.current = null;
-  };
-
-  // Bind global pointer events
-  useEffect(() => {
-      window.addEventListener('pointermove', handleGlobalPointerMove);
-      window.addEventListener('pointerup', handleGlobalPointerUp);
-      return () => {
-          window.removeEventListener('pointermove', handleGlobalPointerMove);
-          window.removeEventListener('pointerup', handleGlobalPointerUp);
-      }
-  }, [draggingAppId, iconLayout]); // Re-bind when dragging state changes to ensure closure captures correctly
-
-  const handleDesktopIconClick = (appId: string, e: React.MouseEvent) => {
-      e.stopPropagation();
-      // Click logic is handled by PointerDown (for selection)
-      // Double click logic handles Open
-  };
   
   const handleRefreshDesktop = async () => {
      const notifId = addNotification("Refreshing System...", "loading");
@@ -1361,7 +1268,6 @@ const App = () => {
          if (!osConfig.installedApps.some(app => app.id === 'recycle-bin')) { osConfig.installedApps.push({ id: 'recycle-bin', name: 'Recycle Bin', url: 'internal://recycle-bin', icon: 'trash', type: 'system' }); configUpdated = true; }
          
          setConfig(osConfig);
-         if(osConfig.desktopLayout) setIconLayout(osConfig.desktopLayout);
          updateNotification(notifId, "System Refreshed", "success");
      } catch(e) {
          updateNotification(notifId, "Refresh Failed", "error");
@@ -1495,27 +1401,20 @@ const App = () => {
       <div className="absolute top-0 left-0 bottom-12 w-full p-4 z-0">
         <div className="grid grid-cols-[repeat(auto-fill,100px)] grid-rows-[repeat(auto-fill,120px)] h-full gap-2 pointer-events-none">
             {config?.installedApps.map((app) => {
-                const pos = iconLayout[app.id];
-                // Determine style: Grid Flow vs Absolute (Locked)
-                const isLocked = !!pos;
-                const style: React.CSSProperties = isLocked 
-                    ? { position: 'absolute', left: pos.x, top: pos.y, pointerEvents: 'auto' } 
-                    : { position: 'relative', pointerEvents: 'auto' };
-                
                 const isSelected = selectedDesktopIcon === app.id;
-                const isBeingDragged = draggingAppId === app.id;
 
                 return (
                 <div 
                     key={app.id} 
-                    ref={el => { iconRefs.current[app.id] = el; }}
-                    style={style}
+                    style={{ position: 'relative', pointerEvents: 'auto' }}
                     onDoubleClick={(e) => { 
                         e.stopPropagation(); 
                         openApp(app); 
                     }}
-                    onPointerDown={(e) => handleIconPointerDown(app, e)}
-                    onClick={(e) => handleDesktopIconClick(app.id, e)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setSelectedDesktopIcon(app.id);
+                    }}
                     onContextMenu={(e) => {
                         e.preventDefault(); e.stopPropagation();
                         setSelectedDesktopIcon(app.id);
@@ -1523,7 +1422,6 @@ const App = () => {
                     }}
                     className={`w-24 flex flex-col items-center gap-1.5 p-2 rounded-lg cursor-default group transition-all duration-200 select-none 
                         ${isSelected ? 'bg-white/20 ring-1 ring-white/30' : 'hover:bg-white/10'}
-                        ${isBeingDragged ? 'scale-110 shadow-2xl z-[100] animate-pulse bg-white/30 ring-2 ring-blue-400' : ''}
                     `}
                 >
                     <div className="w-12 h-12 glass-light rounded-2xl flex items-center justify-center shadow-lg group-hover:scale-105 transition-transform text-white overflow-hidden pointer-events-none">
@@ -1738,19 +1636,30 @@ const App = () => {
         >
             {globalContextMenu.type === 'item' && globalContextMenu.targetItem ? (
                 <>
-                  {!globalContextMenu.isRecycleBin && <button onClick={() => { executeAction('comment', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><MessageSquare size={14}/> Comment</button>}
-                  {(globalContextMenu.targetItem as Item).type === 'image' && !globalContextMenu.isRecycleBin && (
-                    <button onClick={() => { executeAction('download', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-emerald-400"><Download size={14}/> Download</button>
-                  )}
-                  {globalContextMenu.isRecycleBin ? (
-                      <button onClick={() => { executeAction('restore', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-green-400"><RotateCcw size={14}/> Restore</button>
-                  ) : (
+                  <button onClick={() => { 
+                      const itm = globalContextMenu.targetItem as Item;
+                      if(itm.type === 'folder') loadFolder(itm.id);
+                      else if(itm.type === 'note') openNotesApp(itm.id);
+                      else if(itm.type === 'image') setPreviewImage(itm.url || null);
+                      setGlobalContextMenu(null); 
+                  }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-white font-bold"><ExternalLink size={14}/> Open</button>
+                  
+                  {!globalContextMenu.isRecycleBin && (
                       <>
                         <button onClick={() => { executeAction('rename', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><Edit size={14}/> Rename</button>
+                        <button onClick={() => { executeAction('download', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-emerald-400"><Download size={14}/> Download</button>
+                        <button onClick={() => { executeAction('comment', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><MessageSquare size={14}/> Comment</button>
                         <button onClick={() => { executeAction('move', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><Move size={14}/> Move</button>
                       </>
                   )}
-                  <div className="h-px bg-slate-800 my-1"></div>
+                  {globalContextMenu.isRecycleBin ? (
+                      <>
+                        <div className="h-px bg-slate-800 my-1"></div>
+                        <button onClick={() => { executeAction('restore', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-green-400"><RotateCcw size={14}/> Restore</button>
+                      </>
+                  ) : (
+                      <div className="h-px bg-slate-800 my-1"></div>
+                  )}
                   <button onClick={() => { executeAction('delete', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-500 text-xs flex items-center gap-2"><Trash2 size={14}/> {globalContextMenu.isRecycleBin ? 'Delete Permanent' : 'Delete'}</button>
                 </>
             ) : globalContextMenu.type === 'app' ? (
