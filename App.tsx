@@ -9,7 +9,7 @@ import {
   CheckCheck, MessageSquare, Reply, Send, User, Clock,
   Grid, Monitor, Globe, Settings, ShoppingBag, Minus, Square, Search, Wifi,
   Maximize2, MonitorCheck, ExternalLink, Minimize2, LayoutGrid, Youtube, Play, Pause, SkipForward, Music,
-  UploadCloud, RefreshCcw, Hand
+  UploadCloud, RefreshCcw, Hand, Power, Focus
 } from 'lucide-react';
 import * as API from './services/api';
 import * as DB from './services/db';
@@ -339,30 +339,100 @@ const GalleryApp = ({ items, onUpload, onDelete, loading }: any) => {
   );
 };
 
-// --- CANVA APP COMPONENT ---
-const CanvaApp = ({ onLaunch }: { onLaunch: () => void }) => {
+// --- CANVA APP COMPONENT WITH REMOTE CONTROLLER UI ---
+const CanvaApp = ({ onLaunch, onCloseApp }: { onLaunch: () => void, onCloseApp: () => void }) => {
+  const [isRunning, setIsRunning] = useState(false);
+  const externalWindowRef = useRef<Window | null>(null);
+
   const handleLaunch = () => {
-    // 1. Hitung Tinggi Taskbar (Misal 48px)
-    const taskbarHeight = 48; 
+    // Calculate Dimensions
+    const width = window.screen.availWidth;
+    const height = window.screen.availHeight - 48; // Leave room for taskbar hint
     
-    // 2. Hitung Ukuran Layar Tersedia
-    const screenWidth = window.screen.availWidth;
-    const screenHeight = window.screen.availHeight;
-    
-    // 3. Tentukan Ukuran Jendela Canva (Full Screen minus Taskbar)
-    const width = screenWidth;
-    const height = screenHeight - taskbarHeight;
-    
-    // 4. Buka Jendela di Posisi Paling Atas (Top: 0, Left: 0)
-    window.open(
+    externalWindowRef.current = window.open(
       'https://www.canva.com', 
       'CanvaWindow', 
       `width=${width},height=${height},top=0,left=0,toolbar=no,menubar=no,location=no,status=no`
     );
 
-    if (onLaunch) onLaunch();
+    setIsRunning(true);
+    onLaunch();
   };
 
+  const handleFocus = () => {
+    if (externalWindowRef.current && !externalWindowRef.current.closed) {
+      externalWindowRef.current.focus();
+    } else {
+      // Re-launch if closed
+      handleLaunch();
+    }
+  };
+
+  const handleClose = () => {
+    if (externalWindowRef.current) {
+      externalWindowRef.current.close();
+    }
+    setIsRunning(false);
+    onCloseApp();
+  };
+
+  // If running, show "Remote Controller" UI inside the window
+  if (isRunning) {
+    return (
+      <div className="h-full w-full flex flex-col items-center justify-center bg-slate-900 relative text-white">
+         <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-5"></div>
+         
+         <div className="z-10 flex flex-col items-center gap-6 animate-in zoom-in-95 duration-300">
+            <div className="relative">
+               <div className="w-32 h-32 bg-slate-800 rounded-full flex items-center justify-center shadow-2xl border border-slate-700">
+                  <img 
+                    src="https://upload.wikimedia.org/wikipedia/commons/thumb/0/08/Canva_icon_2021.svg/600px-Canva_icon_2021.svg.png" 
+                    className="w-20 h-20 object-contain opacity-50"
+                    alt="Canva Logo"
+                  />
+               </div>
+               {/* Pulsing Status */}
+               <div className="absolute -bottom-2 -right-2 bg-green-900/80 border border-green-500 text-green-400 px-3 py-1 rounded-full text-xs font-bold flex items-center gap-2 shadow-lg backdrop-blur-md">
+                  <span className="relative flex h-2.5 w-2.5">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500"></span>
+                  </span>
+                  Running Externally
+               </div>
+            </div>
+
+            <h2 className="text-xl font-bold text-slate-300">Canva Remote Control</h2>
+            <p className="text-slate-500 text-center max-w-xs text-sm">
+               Aplikasi berjalan di jendela terpisah. Gunakan kontrol ini untuk mengelola sesi.
+            </p>
+
+            <div className="flex gap-4 mt-4">
+               <button 
+                 onClick={handleClose}
+                 className="flex flex-col items-center gap-2 group"
+               >
+                  <div className="w-14 h-14 bg-red-500/10 group-hover:bg-red-500 text-red-500 group-hover:text-white rounded-2xl flex items-center justify-center transition-all shadow-lg border border-red-500/20">
+                     <Power size={24} />
+                  </div>
+                  <span className="text-xs font-bold text-slate-400 group-hover:text-red-400">Tutup</span>
+               </button>
+
+               <button 
+                 onClick={handleFocus}
+                 className="flex flex-col items-center gap-2 group"
+               >
+                  <div className="w-14 h-14 bg-blue-500/10 group-hover:bg-blue-500 text-blue-500 group-hover:text-white rounded-2xl flex items-center justify-center transition-all shadow-lg border border-blue-500/20">
+                     <Focus size={24} />
+                  </div>
+                  <span className="text-xs font-bold text-slate-400 group-hover:text-blue-400">Buka Kembali</span>
+               </button>
+            </div>
+         </div>
+      </div>
+    );
+  }
+
+  // Launcher UI (Default)
   return (
     <div className="h-full w-full flex flex-col items-center justify-center bg-[#7d2ae8] relative text-white overflow-hidden">
        {/* Background Animation */}
@@ -1764,7 +1834,7 @@ const App = () => {
                 }}
               />
             )}
-            {win.appId === 'canva' && <CanvaApp onLaunch={() => setIsCanvaRunning(true)} />}
+            {win.appId === 'canva' && <CanvaApp onLaunch={() => setIsCanvaRunning(true)} onCloseApp={() => setIsCanvaRunning(false)} />}
             {win.appData.url === 'internal://gallery' && (
               <GalleryApp 
                 items={items} 
@@ -1877,18 +1947,25 @@ const App = () => {
         
         {/* Indikator Spesial Canva */}
         {isCanvaRunning && (
-            <div className="px-4 flex items-center gap-2 border-l border-white/10 ml-2 animate-in fade-in duration-300">
+            <div className="px-4 flex items-center gap-2 border-l border-white/10 ml-2 animate-in fade-in duration-300 hidden sm:flex">
                 <span className="relative flex h-3 w-3">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-3 w-3 bg-purple-500"></span>
                 </span>
-                <span className="text-xs text-purple-300 font-bold hidden sm:inline">Canva Active</span>
+                <span className="text-xs text-purple-300 font-bold whitespace-nowrap">Canva Active</span>
                 
                 <button 
-                onClick={() => alert("Gunakan Alt+Tab (PC) atau Recent Apps (HP) untuk pindah antar window.")}
+                onClick={() => alert("Tekan tombol Home/Recent Apps di HP Anda untuk kembali ke Canva.")}
                 className="text-[10px] bg-white/10 px-2 py-1 rounded hover:bg-white/20 text-white ml-2 whitespace-nowrap"
                 >
-                Switch Window
+                Switch
+                </button>
+                <button 
+                onClick={() => setIsCanvaRunning(false)}
+                className="text-[10px] bg-red-500/20 px-2 py-1 rounded hover:bg-red-500/30 text-red-400 ml-1"
+                title="Force Close Indicator"
+                >
+                <X size={12} />
                 </button>
             </div>
         )}
