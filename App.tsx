@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 import * as API from './services/api';
 import * as DB from './services/db';
-import { Item, StoredNote, DownloadItem, FolderMap, SystemDB, Comment, CommentDB, StoredImage } from './types';
+import { Item, StoredNote, DownloadItem, FolderMap, SystemDB, Comment, CommentDB, StoredImage, FolderNode } from './types';
 import { TextEditor } from './components/TextEditor';
 import { UploadProgress, UploadItem } from './components/UploadProgress';
 import { DownloadProgress } from './components/DownloadProgress';
@@ -669,10 +669,6 @@ const FileExplorerApp = ({
     onContextMenu,
     openNotesApp
 }: any) => {
-  // ... (Full implementation of FileExplorerApp logic from previous version) ...
-  // Since no changes are required here for the specific request, we assume the previous content is preserved.
-  // I will just return the main structure for context if needed, but for the XML update I'll skip re-pasting 500 lines if possible
-  // However, strict instruction says "Full content". I will paste the previous implementation.
   const [lastSelectedId, setLastSelectedId] = useState<string | null>(null);
   const [isNewDropdownOpen, setIsNewDropdownOpen] = useState(false);
   const [selectionBox, setSelectionBox] = useState<{x:number, y:number, width:number, height:number} | null>(null);
@@ -1106,6 +1102,7 @@ const App = () => {
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isCanvaRunning, setIsCanvaRunning] = useState(false);
   const [isFigmaRunning, setIsFigmaRunning] = useState(false);
+  const [isExplorerRestarting, setIsExplorerRestarting] = useState(false);
 
   // EXPLORER STATE
   const [currentFolderId, setCurrentFolderId] = useState<string>(""); 
@@ -1575,7 +1572,7 @@ const App = () => {
       case 'move':
         const finalTarget = targetFolderId;
         if (!finalTarget) {
-            const opts = Object.values(systemMap).map(f => ({ label: f.name, value: f.id }));
+            const opts = (Object.values(systemMap) as FolderNode[]).map(f => ({ label: f.name, value: f.id }));
             setModal({ type: 'select', title: 'Move to...', options: opts, onConfirm: async (tid) => {
                 if(!tid) return; setModal(null); executeAction('move', ids, tid);
             }});
@@ -1666,6 +1663,51 @@ const App = () => {
     } catch (e) {
         console.error(e);
         updateNotification(notifId, "Could not load image for cropping", "error");
+    }
+  };
+
+  // --- RESTART TASK HANDLER (For Task Manager) ---
+  const handleRestartTask = async (instanceId: string, appId: string) => {
+    // 1. Restart "Windows Explorer" (System)
+    if (appId === 'file-explorer') {
+       // Close specific File Explorer windows if open
+       setWindows(prev => prev.filter(w => w.instanceId !== instanceId));
+       
+       // Trigger System Refresh (Desktop, Taskbar, Config)
+       setIsExplorerRestarting(true);
+       const notifId = addNotification("Restarting Windows Explorer...", "loading");
+       
+       // Simulate shutdown/reload delay
+       setTimeout(async () => {
+           try {
+               // Reload current folder if valid
+               if (currentFolderId && currentFolderId !== 'root') {
+                   await loadFolder(currentFolderId);
+               }
+               
+               // Reload system configuration and desktop
+               await handleRefreshDesktop();
+               
+               setIsExplorerRestarting(false);
+               removeNotification(notifId);
+           } catch (e) {
+               setIsExplorerRestarting(false);
+               updateNotification(notifId, "Explorer Restart Failed", "error");
+           }
+       }, 1500);
+       return;
+    }
+
+    // 2. Restart Regular Apps
+    const win = windows.find(w => w.instanceId === instanceId);
+    if (win) {
+       // Close
+       setWindows(prev => prev.filter(w => w.instanceId !== instanceId));
+       
+       // Re-open after brief delay
+       setTimeout(() => {
+           openApp(win.appData, win.args);
+       }, 300);
     }
   };
 
@@ -1854,7 +1896,8 @@ const App = () => {
       )}
 
       {/* DESKTOP ICONS GRID CONTAINER */}
-      <div className="absolute top-0 left-0 bottom-12 w-full p-4 z-0">
+      {!isExplorerRestarting && (
+      <div className="absolute top-0 left-0 bottom-12 w-full p-4 z-0 animate-in fade-in duration-500">
         <div className="grid grid-cols-[repeat(auto-fill,100px)] grid-rows-[repeat(auto-fill,120px)] h-full gap-2 pointer-events-none">
             {config?.installedApps.map((app) => {
                 const isSelected = selectedDesktopIcon === app.id;
@@ -1898,6 +1941,7 @@ const App = () => {
             })}
         </div>
       </div>
+      )}
 
       {/* WINDOWS */}
       {windows.map(win => (
@@ -1988,7 +2032,13 @@ const App = () => {
             )}
             {win.appId === 'youtube' && <YouTubeApp customKeys={config?.youtubeApiKeys} />}
             {win.appId === 'calculator' && <CalculatorApp />}
-            {win.appId === 'task-manager' && <TaskManagerApp windows={windows.filter(w => w.appId !== 'task-manager')} onCloseWindow={closeWindow} />}
+            {win.appId === 'task-manager' && (
+               <TaskManagerApp 
+                  windows={windows.filter(w => w.appId !== 'task-manager')} // Filter out itself
+                  onCloseWindow={closeWindow}
+                  onRestartTask={handleRestartTask}
+                />
+            )}
             {win.appId === 'settings' && <SettingsApp config={config!} systemFolderId={systemFolderId} addNotification={addNotification} onSave={async (c:any)=>{ try { await API.saveSystemConfig(c); setConfig(c); addNotification("Pengaturan disimpan", "success"); } catch(e) { addNotification("Gagal menyimpan", "error"); } }} installPrompt={deferredPrompt} onInstallPWA={handleInstallClick} />}
             {(win.appId === 'app-store' || win.appId === 'store') && <AppStoreApp config={config!} setConfig={setConfig} addNotification={addNotification} systemFolderId={systemFolderId} onRequestCrop={handleRequestCrop} />}
             {(win.appData.type === 'webapp') && win.appId !== 'youtube' && win.appId !== 'canva' && win.appId !== 'figma' && win.appId !== 'calculator' && (
@@ -2036,7 +2086,7 @@ const App = () => {
       )}
 
       {/* START MENU */}
-      {startMenuOpen && (
+      {startMenuOpen && !isExplorerRestarting && (
         <div className="absolute bottom-16 left-2 sm:left-4 w-[600px] max-w-[calc(100vw-16px)] h-[550px] max-h-[80vh] glass rounded-3xl shadow-[0_32px_64px_rgba(0,0,0,0.5)] z-[60] p-8 flex flex-col animate-in slide-in-from-bottom-5 duration-200">
           <div className="grid grid-cols-4 sm:grid-cols-6 gap-6 flex-1 content-start overflow-y-auto pr-2 no-scrollbar">
              {config?.installedApps.map(app => (
@@ -2070,7 +2120,8 @@ const App = () => {
       )}
 
       {/* TASKBAR - FIXED POSITION */}
-      <div className="fixed bottom-0 left-0 right-0 h-12 glass border-t border-white/5 flex items-center px-4 z-[9999]"
+      {!isExplorerRestarting && (
+      <div className="fixed bottom-0 left-0 right-0 h-12 glass border-t border-white/5 flex items-center px-4 z-[9999] animate-in slide-in-from-bottom-2"
            style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
            onContextMenu={(e) => {
              e.preventDefault(); e.stopPropagation();
@@ -2148,6 +2199,7 @@ const App = () => {
             </div>
         </div>
       </div>
+      )}
 
       {/* GLOBAL CONTEXT MENU */}
       {globalContextMenu && (
