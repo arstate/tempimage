@@ -1843,7 +1843,24 @@ const App = () => {
       const isActive = !!win;
       const isWindowSelected = isActive && activeWindowId === win.instanceId && !win.isMinimized;
       return (
-        <button key={isActive ? win.instanceId : `pinned-${app.id}`} onClick={() => { if (isActive) { if (win.isMinimized) toggleMinimize(win.instanceId); setActiveWindowId(win.instanceId); } else openApp(app); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setGlobalContextMenu({ x: e.clientX, y: e.clientY, type: 'taskbar-item', targetItem: app, windowId: win?.instanceId }); }} className={`p-2 rounded-xl hover:bg-white/10 transition-all relative group flex-shrink-0 ${isWindowSelected ? 'bg-white/10' : 'opacity-80 hover:opacity-100'} ${isPinnedLauncher && !isActive ? 'opacity-60' : ''}`}>
+        <button key={isActive ? win.instanceId : `pinned-${app.id}`} 
+        onClick={() => { 
+            if (isActive) { 
+                // Jika window aktif dan tidak diminimize (sedang fokus), maka minimize
+                if (activeWindowId === win.instanceId && !win.isMinimized) {
+                    toggleMinimize(win.instanceId);
+                    setActiveWindowId(null);
+                } else {
+                    // Jika window diminimize atau tidak fokus, restore/fokuskan
+                    if (win.isMinimized) toggleMinimize(win.instanceId); 
+                    setActiveWindowId(win.instanceId); 
+                }
+            } else {
+                openApp(app); 
+            }
+        }} 
+        onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setGlobalContextMenu({ x: e.clientX, y: e.clientY, type: 'taskbar-item', targetItem: app, windowId: win?.instanceId }); }} 
+        className={`p-2 rounded-xl hover:bg-white/10 transition-all relative group flex-shrink-0 ${isWindowSelected ? 'bg-white/10' : 'opacity-80 hover:opacity-100'} ${isPinnedLauncher && !isActive ? 'opacity-60' : ''}`}>
             <div className={`w-7 h-7 rounded-xl flex items-center justify-center text-white text-[10px] font-bold shadow-lg overflow-hidden ${app.id === 'file-explorer' ? (win?.args?.folderId === recycleBinId ? 'bg-red-900' : 'bg-blue-600') : (app.id === 'app-store' || app.id === 'store') ? 'bg-pink-600' : app.id === 'youtube' ? 'bg-red-600' : app.id === 'notes' ? 'bg-yellow-600' : app.id === 'calculator' ? 'bg-orange-600' : app.id === 'task-manager' ? 'bg-teal-600' : app.icon === 'image' ? 'bg-pink-500' : app.icon.startsWith('http') ? 'bg-white' : 'bg-slate-700'}`}>
                {app.id === 'file-explorer' ? (win?.args?.folderId === recycleBinId ? <Trash2 size={14}/> : <Folder size={14}/>) : (app.id === 'app-store' || app.id === 'store') ? <ShoppingBag size={14}/> : app.id === 'settings' ? <Settings size={14}/> : app.id === 'youtube' ? <Youtube size={14}/> : app.id === 'notes' ? <FileText size={14}/> : app.id === 'calculator' ? <Calculator size={14}/> : app.id === 'task-manager' ? <Activity size={14}/> : app.icon === 'image' ? <ImageIcon size={14} /> : app.icon.startsWith('http') ? <img src={app.icon} className="w-full h-full object-cover"/> : app.name.charAt(0)}
             </div>
