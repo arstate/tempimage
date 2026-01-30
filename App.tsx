@@ -9,7 +9,7 @@ import {
   CheckCheck, MessageSquare, Reply, Send, User, Clock,
   Grid, Monitor, Globe, Settings, ShoppingBag, Minus, Square, Search, Wifi,
   Maximize2, MonitorCheck, ExternalLink, Minimize2, LayoutGrid, Youtube, Play, Pause, SkipForward, Music,
-  UploadCloud, RefreshCcw, Hand, Power, Focus, LayoutTemplate
+  UploadCloud, RefreshCcw, Hand, Power, Focus, LayoutTemplate, PenTool
 } from 'lucide-react';
 import * as API from './services/api';
 import * as DB from './services/db';
@@ -345,13 +345,10 @@ const CanvaApp = ({ onLaunch, onCloseApp, onMinimize }: { onLaunch: () => void, 
   const externalWindowRef = useRef<Window | null>(null);
 
   const handleLaunch = () => {
-    // 1. Hitung Ukuran Layar Tersedia dengan GAP LEBIH BESAR
-    // Menggunakan gap 100px agar taskbar di desktop tidak tertutup
     const taskbarGap = 100;
     const screenWidth = window.screen.availWidth;
     const screenHeight = window.screen.availHeight - taskbarGap;
     
-    // 2. Buka Jendela
     externalWindowRef.current = window.open(
       'https://www.canva.com', 
       'CanvaWindow', 
@@ -366,7 +363,6 @@ const CanvaApp = ({ onLaunch, onCloseApp, onMinimize }: { onLaunch: () => void, 
     if (externalWindowRef.current && !externalWindowRef.current.closed) {
       externalWindowRef.current.focus();
     } else {
-      // Re-launch if closed
       handleLaunch();
     }
   };
@@ -379,7 +375,6 @@ const CanvaApp = ({ onLaunch, onCloseApp, onMinimize }: { onLaunch: () => void, 
     onCloseApp();
   };
 
-  // If running, show "Remote Controller" UI inside the window
   if (isRunning) {
     return (
       <div className="h-full w-full flex flex-col items-center justify-center bg-slate-900 relative text-white">
@@ -394,7 +389,6 @@ const CanvaApp = ({ onLaunch, onCloseApp, onMinimize }: { onLaunch: () => void, 
                     alt="Canva Logo"
                   />
                </div>
-               {/* Pulsing Status */}
                <div className="absolute -bottom-2 -right-2 bg-green-900/80 border border-green-500 text-green-400 px-3 py-1 rounded-full text-xs font-bold flex items-center gap-2 shadow-lg backdrop-blur-md">
                   <span className="relative flex h-2.5 w-2.5">
                     <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
@@ -410,30 +404,21 @@ const CanvaApp = ({ onLaunch, onCloseApp, onMinimize }: { onLaunch: () => void, 
             </p>
 
             <div className="flex gap-4 mt-4">
-               <button 
-                 onClick={handleClose}
-                 className="flex flex-col items-center gap-2 group"
-               >
+               <button onClick={handleClose} className="flex flex-col items-center gap-2 group">
                   <div className="w-14 h-14 bg-red-500/10 group-hover:bg-red-500 text-red-500 group-hover:text-white rounded-2xl flex items-center justify-center transition-all shadow-lg border border-red-500/20">
                      <Power size={24} />
                   </div>
                   <span className="text-xs font-bold text-slate-400 group-hover:text-red-400">Tutup</span>
                </button>
 
-               <button 
-                 onClick={onMinimize}
-                 className="flex flex-col items-center gap-2 group"
-               >
+               <button onClick={onMinimize} className="flex flex-col items-center gap-2 group">
                   <div className="w-14 h-14 bg-yellow-500/10 group-hover:bg-yellow-500 text-yellow-500 group-hover:text-white rounded-2xl flex items-center justify-center transition-all shadow-lg border border-yellow-500/20">
                      <Minus size={24} />
                   </div>
                   <span className="text-xs font-bold text-slate-400 group-hover:text-yellow-400">Minimize</span>
                </button>
 
-               <button 
-                 onClick={handleFocus}
-                 className="flex flex-col items-center gap-2 group"
-               >
+               <button onClick={handleFocus} className="flex flex-col items-center gap-2 group">
                   <div className="w-14 h-14 bg-blue-500/10 group-hover:bg-blue-500 text-blue-500 group-hover:text-white rounded-2xl flex items-center justify-center transition-all shadow-lg border border-blue-500/20">
                      <Focus size={24} />
                   </div>
@@ -445,12 +430,9 @@ const CanvaApp = ({ onLaunch, onCloseApp, onMinimize }: { onLaunch: () => void, 
     );
   }
 
-  // Launcher UI (Default)
   return (
     <div className="h-full w-full flex flex-col items-center justify-center bg-[#7d2ae8] relative text-white overflow-hidden">
-       {/* Background Animation */}
        <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-10"></div>
-       
        <div className="z-10 text-center animate-in zoom-in-95 duration-500 p-8">
           <div className="w-24 h-24 mx-auto mb-6 bg-white rounded-full flex items-center justify-center shadow-2xl">
              <img 
@@ -464,11 +446,123 @@ const CanvaApp = ({ onLaunch, onCloseApp, onMinimize }: { onLaunch: () => void, 
             Aplikasi ini akan berjalan di jendela khusus agar performa maksimal.
           </p>
 
-          <button 
-            onClick={handleLaunch}
-            className="bg-white text-[#7d2ae8] px-8 py-4 rounded-full font-bold text-xl shadow-xl hover:scale-105 transition-transform flex items-center gap-3 mx-auto"
-          >
+          <button onClick={handleLaunch} className="bg-white text-[#7d2ae8] px-8 py-4 rounded-full font-bold text-xl shadow-xl hover:scale-105 transition-transform flex items-center gap-3 mx-auto">
             <span>Buka Jendela Canva</span>
+            <ExternalLink size={24} />
+          </button>
+       </div>
+    </div>
+  );
+};
+
+// --- FIGMA APP COMPONENT WITH REMOTE CONTROLLER UI ---
+const FigmaApp = ({ onLaunch, onCloseApp, onMinimize }: { onLaunch: () => void, onCloseApp: () => void, onMinimize: () => void }) => {
+  const [isRunning, setIsRunning] = useState(false);
+  const externalWindowRef = useRef<Window | null>(null);
+
+  const handleLaunch = () => {
+    const taskbarGap = 100;
+    const screenWidth = window.screen.availWidth;
+    const screenHeight = window.screen.availHeight - taskbarGap;
+    
+    externalWindowRef.current = window.open(
+      'https://www.figma.com', 
+      'FigmaWindow', 
+      `width=${screenWidth},height=${screenHeight},top=0,left=0,toolbar=no,menubar=no,location=no,status=no,resizable=yes,scrollbars=yes`
+    );
+
+    setIsRunning(true);
+    onLaunch();
+  };
+
+  const handleFocus = () => {
+    if (externalWindowRef.current && !externalWindowRef.current.closed) {
+      externalWindowRef.current.focus();
+    } else {
+      handleLaunch();
+    }
+  };
+
+  const handleClose = () => {
+    if (externalWindowRef.current) {
+      externalWindowRef.current.close();
+    }
+    setIsRunning(false);
+    onCloseApp();
+  };
+
+  if (isRunning) {
+    return (
+      <div className="h-full w-full flex flex-col items-center justify-center bg-[#1e1e1e] relative text-white">
+         <div className="absolute inset-0 bg-black opacity-30"></div>
+         
+         <div className="z-10 flex flex-col items-center gap-6 animate-in zoom-in-95 duration-300">
+            <div className="relative">
+               <div className="w-32 h-32 bg-black rounded-3xl flex items-center justify-center shadow-2xl border border-white/10">
+                  <img 
+                    src="https://upload.wikimedia.org/wikipedia/commons/3/33/Figma-logo.svg" 
+                    className="w-20 h-20 object-contain"
+                    alt="Figma Logo"
+                  />
+               </div>
+               <div className="absolute -bottom-2 -right-2 bg-green-900/80 border border-green-500 text-green-400 px-3 py-1 rounded-full text-xs font-bold flex items-center gap-2 shadow-lg backdrop-blur-md">
+                  <span className="relative flex h-2.5 w-2.5">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500"></span>
+                  </span>
+                  Running Externally
+               </div>
+            </div>
+
+            <h2 className="text-xl font-bold text-slate-300">Figma Remote Control</h2>
+            <p className="text-slate-500 text-center max-w-xs text-sm">
+               Aplikasi berjalan di jendela terpisah.
+            </p>
+
+            <div className="flex gap-4 mt-4">
+               <button onClick={handleClose} className="flex flex-col items-center gap-2 group">
+                  <div className="w-14 h-14 bg-red-500/10 group-hover:bg-red-500 text-red-500 group-hover:text-white rounded-2xl flex items-center justify-center transition-all shadow-lg border border-red-500/20">
+                     <Power size={24} />
+                  </div>
+                  <span className="text-xs font-bold text-slate-400 group-hover:text-red-400">Tutup</span>
+               </button>
+
+               <button onClick={onMinimize} className="flex flex-col items-center gap-2 group">
+                  <div className="w-14 h-14 bg-yellow-500/10 group-hover:bg-yellow-500 text-yellow-500 group-hover:text-white rounded-2xl flex items-center justify-center transition-all shadow-lg border border-yellow-500/20">
+                     <Minus size={24} />
+                  </div>
+                  <span className="text-xs font-bold text-slate-400 group-hover:text-yellow-400">Minimize</span>
+               </button>
+
+               <button onClick={handleFocus} className="flex flex-col items-center gap-2 group">
+                  <div className="w-14 h-14 bg-blue-500/10 group-hover:bg-blue-500 text-blue-500 group-hover:text-white rounded-2xl flex items-center justify-center transition-all shadow-lg border border-blue-500/20">
+                     <Focus size={24} />
+                  </div>
+                  <span className="text-xs font-bold text-slate-400 group-hover:text-blue-400">Ke Figma</span>
+               </button>
+            </div>
+         </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="h-full w-full flex flex-col items-center justify-center bg-[#2c2c2c] relative text-white overflow-hidden">
+       <div className="z-10 text-center animate-in zoom-in-95 duration-500 p-8">
+          <div className="w-24 h-24 mx-auto mb-6 bg-black rounded-3xl flex items-center justify-center shadow-2xl border border-white/10">
+             <img 
+                src="https://upload.wikimedia.org/wikipedia/commons/3/33/Figma-logo.svg" 
+                className="w-16 h-16 object-contain"
+                alt="Figma Logo"
+             />
+          </div>
+          <h1 className="text-4xl font-bold mb-2 text-shadow">Figma</h1>
+          <p className="text-white/80 mb-8 max-w-md mx-auto text-sm drop-shadow">
+            Desain, prototipe, dan kolaborasi dalam waktu nyata.
+          </p>
+
+          <button onClick={handleLaunch} className="bg-white text-black px-8 py-4 rounded-full font-bold text-xl shadow-xl hover:scale-105 transition-transform flex items-center gap-3 mx-auto">
+            <span>Buka Jendela Figma</span>
             <ExternalLink size={24} />
           </button>
        </div>
@@ -492,6 +586,7 @@ const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId }: any
      { id: 'youtube', name: 'YouTube', url: 'internal://youtube', icon: 'youtube' },
      { id: 'spotify', name: 'Spotify', url: 'https://open.spotify.com/embed', icon: 'music' },
      { id: 'canva', name: 'Canva', url: 'https://www.canva.com', icon: 'https://upload.wikimedia.org/wikipedia/commons/0/08/Canva_icon_2021.svg' },
+     { id: 'figma', name: 'Figma', url: 'https://www.figma.com', icon: 'https://upload.wikimedia.org/wikipedia/commons/3/33/Figma-logo.svg' },
      { id: 'google-maps', name: 'Maps', url: 'https://www.google.com/maps/embed', icon: 'globe' }
    ];
 
@@ -557,7 +652,7 @@ const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId }: any
             {config?.installedApps.map((app: any) => (
                 <div key={app.id} className="flex justify-between items-center p-4 bg-slate-800/40 border border-slate-700/50 rounded-xl">
                     <div className="flex items-center gap-4">
-                        <div className="w-12 h-12 bg-slate-950 rounded-xl flex items-center justify-center border border-slate-800">
+                        <div className="w-12 h-12 bg-slate-950 rounded-xl flex items-center justify-center border border-slate-800 overflow-hidden">
                             {app.icon.startsWith('http') ? <img src={app.icon} className="w-full h-full object-cover"/> : <Globe size={24}/>}
                         </div>
                         <div className="font-bold text-sm">{app.name}</div>
@@ -582,7 +677,7 @@ const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId }: any
             ))}
         </div>
       </section>
-      <section className="space-y-4"><h2 className="text-lg font-bold text-slate-300">Rekomendasi</h2><div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">{popularApps.map(app => (<div key={app.id} className="bg-slate-800/40 p-4 rounded-2xl flex flex-col items-center gap-4"><div className="w-16 h-16 bg-slate-950 rounded-2xl flex items-center justify-center">{app.icon.startsWith('http') ? <img src={app.icon} className="w-full h-full object-cover rounded-xl"/> : <Globe size={32}/>}</div><p className="font-bold text-sm">{app.name}</p><button onClick={() => handleInstall(app)} className="w-full py-2 bg-blue-600/20 text-blue-400 rounded-lg text-xs font-bold">Instal</button></div>))}</div></section>
+      <section className="space-y-4"><h2 className="text-lg font-bold text-slate-300">Rekomendasi</h2><div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">{popularApps.map(app => (<div key={app.id} className="bg-slate-800/40 p-4 rounded-2xl flex flex-col items-center gap-4"><div className="w-16 h-16 bg-slate-950 rounded-2xl flex items-center justify-center overflow-hidden">{app.icon.startsWith('http') ? <img src={app.icon} className="w-full h-full object-cover rounded-xl"/> : <Globe size={32}/>}</div><p className="font-bold text-sm">{app.name}</p><button onClick={() => handleInstall(app)} className="w-full py-2 bg-blue-600/20 text-blue-400 rounded-lg text-xs font-bold">Instal</button></div>))}</div></section>
     </div>
    );
 };
@@ -1043,6 +1138,7 @@ const App = () => {
   const [globalContextMenu, setGlobalContextMenu] = useState<{x:number, y:number, targetItem?: Item | API.AppDefinition, isRecycleBin?: boolean, type?: 'desktop' | 'item' | 'app' | 'folder-background'} | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isCanvaRunning, setIsCanvaRunning] = useState(false);
+  const [isFigmaRunning, setIsFigmaRunning] = useState(false);
 
   // EXPLORER STATE
   const [currentFolderId, setCurrentFolderId] = useState<string>(""); 
@@ -1134,6 +1230,16 @@ const App = () => {
         if (!osConfig.installedApps.some(app => app.id === 'youtube')) { osConfig.installedApps.push({ id: 'youtube', name: 'YouTube', url: 'internal://youtube', icon: 'youtube', type: 'system' }); configUpdated = true; }
         if (!osConfig.installedApps.some(app => app.id === 'notes')) { osConfig.installedApps.push({ id: 'notes', name: 'Notes', url: 'internal://notes', icon: 'file-text', type: 'system' }); configUpdated = true; }
         if (!osConfig.installedApps.some(app => app.id === 'recycle-bin')) { osConfig.installedApps.push({ id: 'recycle-bin', name: 'Recycle Bin', url: 'internal://recycle-bin', icon: 'trash', type: 'system' }); configUpdated = true; }
+        if (!osConfig.installedApps.some(app => app.id === 'figma')) { 
+          osConfig.installedApps.push({ 
+            id: 'figma', 
+            name: 'Figma', 
+            url: 'https://www.figma.com', 
+            icon: 'https://upload.wikimedia.org/wikipedia/commons/3/33/Figma-logo.svg', 
+            type: 'webapp' 
+          }); 
+          configUpdated = true; 
+        }
 
         setConfig(osConfig);
 
@@ -1588,6 +1694,7 @@ const App = () => {
          if (!osConfig.installedApps.some(app => app.id === 'youtube')) { osConfig.installedApps.push({ id: 'youtube', name: 'YouTube', url: 'internal://youtube', icon: 'youtube', type: 'system' }); configUpdated = true; }
          if (!osConfig.installedApps.some(app => app.id === 'notes')) { osConfig.installedApps.push({ id: 'notes', name: 'Notes', url: 'internal://notes', icon: 'file-text', type: 'system' }); configUpdated = true; }
          if (!osConfig.installedApps.some(app => app.id === 'recycle-bin')) { osConfig.installedApps.push({ id: 'recycle-bin', name: 'Recycle Bin', url: 'internal://recycle-bin', icon: 'trash', type: 'system' }); configUpdated = true; }
+         if (!osConfig.installedApps.some(app => app.id === 'figma')) { osConfig.installedApps.push({ id: 'figma', name: 'Figma', url: 'https://www.figma.com', icon: 'https://upload.wikimedia.org/wikipedia/commons/3/33/Figma-logo.svg', type: 'webapp' }); configUpdated = true; }
          
          setConfig(osConfig);
          updateNotification(notifId, "System Refreshed", "success");
@@ -1791,13 +1898,15 @@ const App = () => {
                onDoubleClick={() => toggleMaximize(win.instanceId)}
                onPointerDown={(e) => handleWindowAction(win.instanceId, e, 'move')}>
             <div className="flex items-center gap-2 pointer-events-none">
-               <div className="w-4 h-4 flex items-center justify-center text-white">
+               <div className="w-4 h-4 flex items-center justify-center text-white overflow-hidden">
                  {win.appId === 'file-explorer' ? (win.args?.folderId === recycleBinId ? <Trash2 size={14}/> : <Folder size={14}/>) : 
                   (win.appId === 'app-store' || win.appId === 'store') ? <ShoppingBag size={14}/> : 
                   win.appId === 'settings' ? <Settings size={14}/> : 
                   win.appId === 'youtube' ? <Youtube size={14}/> :
                   win.appId === 'notes' ? <FileText size={14}/> :
-                  win.appData.icon === 'image' ? <ImageIcon size={14}/> : <Globe size={14}/>}
+                  win.appData.icon === 'image' ? <ImageIcon size={14}/> : 
+                  win.appData.icon.startsWith('http') ? <img src={win.appData.icon} className="w-full h-full object-contain"/> :
+                  <Globe size={14}/>}
                </div>
                <span className="text-[10px] font-bold text-slate-300 tracking-wide uppercase">{win.title}</span>
             </div>
@@ -1848,6 +1957,7 @@ const App = () => {
               />
             )}
             {win.appId === 'canva' && <CanvaApp onLaunch={() => setIsCanvaRunning(true)} onCloseApp={() => setIsCanvaRunning(false)} onMinimize={() => toggleMinimize(win.instanceId)} />}
+            {win.appId === 'figma' && <FigmaApp onLaunch={() => setIsFigmaRunning(true)} onCloseApp={() => setIsFigmaRunning(false)} onMinimize={() => toggleMinimize(win.instanceId)} />}
             {win.appData.url === 'internal://gallery' && (
               <GalleryApp 
                 items={items} 
@@ -1863,7 +1973,7 @@ const App = () => {
             {win.appId === 'youtube' && <YouTubeApp customKeys={config?.youtubeApiKeys} />}
             {win.appId === 'settings' && <SettingsApp config={config!} systemFolderId={systemFolderId} addNotification={addNotification} onSave={async (c:any)=>{ try { await API.saveSystemConfig(c); setConfig(c); addNotification("Pengaturan disimpan", "success"); } catch(e) { addNotification("Gagal menyimpan", "error"); } }} installPrompt={deferredPrompt} onInstallPWA={handleInstallClick} />}
             {(win.appId === 'app-store' || win.appId === 'store') && <AppStoreApp config={config!} setConfig={setConfig} addNotification={addNotification} systemFolderId={systemFolderId}/>}
-            {(win.appData.type === 'webapp') && win.appId !== 'youtube' && win.appId !== 'canva' && (
+            {(win.appData.type === 'webapp') && win.appId !== 'youtube' && win.appId !== 'canva' && win.appId !== 'figma' && (
               <div className="h-full flex flex-col bg-white">
                 {!win.appData.hideAddressBar && (
                     <div className="p-1 bg-slate-100 flex items-center justify-between gap-2 border-b">
@@ -1945,13 +2055,15 @@ const App = () => {
            {windows.map(win => (
              <button key={win.instanceId} onClick={() => { if (win.isMinimized) toggleMinimize(win.instanceId); setActiveWindowId(win.instanceId); }}
                      className={`p-2 rounded-xl hover:bg-white/10 transition-all relative group flex-shrink-0 ${activeWindowId === win.instanceId && !win.isMinimized ? 'bg-white/10' : 'opacity-60'}`}>
-                <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-white text-[10px] font-bold shadow-lg ${win.appId === 'file-explorer' ? (win.args?.folderId === recycleBinId ? 'bg-red-900' : 'bg-blue-600') : (win.appId === 'app-store' || win.appId === 'store') ? 'bg-pink-600' : win.appId === 'youtube' ? 'bg-red-600' : win.appId === 'notes' ? 'bg-yellow-600' : win.appData.icon === 'image' ? 'bg-pink-500' : 'bg-slate-700'}`}>
+                <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-white text-[10px] font-bold shadow-lg overflow-hidden ${win.appId === 'file-explorer' ? (win.args?.folderId === recycleBinId ? 'bg-red-900' : 'bg-blue-600') : (win.appId === 'app-store' || win.appId === 'store') ? 'bg-pink-600' : win.appId === 'youtube' ? 'bg-red-600' : win.appId === 'notes' ? 'bg-yellow-600' : win.appData.icon === 'image' ? 'bg-pink-500' : win.appData.icon.startsWith('http') ? 'bg-white' : 'bg-slate-700'}`}>
                    {win.appId === 'file-explorer' ? (win.args?.folderId === recycleBinId ? <Trash2 size={14}/> : <Folder size={14}/>) : 
                     (win.appId === 'app-store' || win.appId === 'store') ? <ShoppingBag size={14}/> : 
                     win.appId === 'settings' ? <Settings size={14}/> : 
                     win.appId === 'youtube' ? <Youtube size={14}/> :
                     win.appId === 'notes' ? <FileText size={14}/> :
-                    win.appData.icon === 'image' ? <ImageIcon size={14} /> : win.title.charAt(0)}
+                    win.appData.icon === 'image' ? <ImageIcon size={14} /> : 
+                    win.appData.icon.startsWith('http') ? <img src={win.appData.icon} className="w-full h-full object-cover"/> :
+                    win.title.charAt(0)}
                 </div>
                 {!win.isMinimized && activeWindowId === win.instanceId && <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-3 h-1 bg-blue-400 rounded-full"></div>}
              </button>
@@ -1975,6 +2087,31 @@ const App = () => {
                 </button>
                 <button 
                 onClick={() => setIsCanvaRunning(false)}
+                className="text-[10px] bg-red-500/20 px-2 py-1 rounded hover:bg-red-500/30 text-red-400 ml-1"
+                title="Force Close Indicator"
+                >
+                <X size={12} />
+                </button>
+            </div>
+        )}
+
+        {/* Indikator Spesial Figma - Visible on Mobile */}
+        {isFigmaRunning && (
+            <div className="px-2 sm:px-4 flex items-center gap-2 border-l border-white/10 ml-2 animate-in fade-in duration-300">
+                <span className="relative flex h-3 w-3 flex-shrink-0">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-3 w-3 bg-orange-500"></span>
+                </span>
+                <span className="text-xs text-orange-300 font-bold whitespace-nowrap hidden md:inline">Figma Active</span>
+                
+                <button 
+                onClick={() => alert("Gunakan task switcher untuk kembali ke Figma.")}
+                className="text-[10px] bg-white/10 px-2 py-1 rounded hover:bg-white/20 text-white ml-1 whitespace-nowrap"
+                >
+                Switch
+                </button>
+                <button 
+                onClick={() => setIsFigmaRunning(false)}
                 className="text-[10px] bg-red-500/20 px-2 py-1 rounded hover:bg-red-500/30 text-red-400 ml-1"
                 title="Force Close Indicator"
                 >
