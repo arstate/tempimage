@@ -35,22 +35,13 @@ self.addEventListener('activate', (event) => {
 });
 
 self.addEventListener('fetch', (event) => {
-  // Navigation requests (HTML pages) -> Cache First falling back to Network (Stale-While-Revalidate for instant load)
+  // Navigation requests (HTML pages) -> Network First, fall back to /index.html
   if (event.request.mode === 'navigate') {
     event.respondWith(
-      caches.match('/index.html').then((response) => {
-        // If cache hit, return it immediately (instant resume feel)
-        // But also fetch network to update cache in background for next time
-        const fetchPromise = fetch(event.request).then((networkResponse) => {
-           if(networkResponse && networkResponse.status === 200 && networkResponse.type === 'basic') {
-               const clone = networkResponse.clone();
-               caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
-           }
-           return networkResponse;
-        });
-        
-        return response || fetchPromise;
-      })
+      fetch(event.request)
+        .catch(() => {
+          return caches.match('/index.html');
+        })
     );
     return;
   }
