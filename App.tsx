@@ -307,8 +307,29 @@ const YouTubeApp = ({ customKeys }: { customKeys?: string[] }) => {
 // --- GALLERY APP COMPONENT ---
 const GalleryApp = ({ items, onUpload, onDelete, loading }: any) => {
   const images = items.filter((i: Item) => i.type === 'image');
+
+  // Drag and drop handlers for the whole container to support uploading anywhere
+  const handleDrop = (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+          onUpload(e.dataTransfer.files);
+      }
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      // Indicate drop is possible
+      e.dataTransfer.dropEffect = 'copy';
+  };
+
   return (
-    <div className="h-full bg-slate-900 flex flex-col overflow-hidden">
+    <div 
+        className="h-full bg-slate-900 flex flex-col overflow-hidden"
+        onDrop={handleDrop}
+        onDragOver={handleDragOver}
+    >
       <div className="p-4 border-b border-slate-800 bg-slate-950/50">
         <UploadZone onFilesSelected={onUpload} />
       </div>
@@ -319,9 +340,10 @@ const GalleryApp = ({ items, onUpload, onDelete, loading }: any) => {
             <p className="text-slate-400 text-sm">Memuat galeri...</p>
           </div>
         ) : images.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-slate-500 border-2 border-dashed border-slate-800 rounded-3xl p-12">
+          <div className="flex flex-col items-center justify-center h-full text-slate-500 border-2 border-dashed border-slate-800 rounded-3xl p-12 pointer-events-none">
             <ImageIcon size={64} className="mb-4 opacity-10" />
             <p className="text-lg font-medium">Belum ada foto</p>
+            <p className="text-sm mt-2 opacity-60">Drag & drop foto di mana saja</p>
           </div>
         ) : (
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-6">
@@ -345,15 +367,25 @@ const GenericExternalApp = ({ app, onLaunch, onCloseApp, onMinimize }: { app: AP
   const externalWindowRef = useRef<Window | null>(null);
 
   const handleLaunch = () => {
-    const taskbarGap = 100;
-    const screenWidth = window.screen.availWidth;
-    const screenHeight = window.screen.availHeight - taskbarGap;
-    
-    externalWindowRef.current = window.open(
-      app.url, 
-      `ExternalWindow-${app.id}`, 
-      `width=${screenWidth},height=${screenHeight},top=0,left=0,toolbar=no,menubar=no,location=no,status=no,resizable=yes,scrollbars=yes`
-    );
+    // Detect Mobile
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+    if (isMobile) {
+        // On mobile, opening with '_blank' and NO features usually forces a new browser tab/activity
+        // which appears as a separate entry in Android Recents (Multitasking).
+        externalWindowRef.current = window.open(app.url, '_blank');
+    } else {
+        // On Desktop, we want a popup window to act like a floating app
+        const taskbarGap = 100;
+        const screenWidth = window.screen.availWidth;
+        const screenHeight = window.screen.availHeight - taskbarGap;
+        
+        externalWindowRef.current = window.open(
+          app.url, 
+          `ExternalWindow-${app.id}`, 
+          `width=${screenWidth},height=${screenHeight},top=0,left=0,toolbar=no,menubar=no,location=no,status=no,resizable=yes,scrollbars=yes`
+        );
+    }
 
     setIsRunning(true);
     onLaunch();
