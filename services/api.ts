@@ -9,6 +9,7 @@ const COMMENT_DB_FILENAME = "COMENTDATABASE.json";
 const CONFIG_FILENAME = "system_config.json";
 const SYSTEM_FOLDER_NAME = "System";
 const APPS_ICON_FOLDER_NAME = "Apps Icon";
+const SYSTEM_ICONS_FOLDER_NAME = "IconSystem";
 
 export interface AppDefinition {
   id: string;
@@ -27,6 +28,10 @@ export interface SystemConfig {
   pinnedAppIds?: string[]; // List of app IDs pinned to taskbar
   youtubeApiKeys?: string[]; // Custom user keys
   desktopLayout?: { [appId: string]: { x: number; y: number } }; // Icon positions
+  taskbarIcon?: {
+    mode: 'default' | 'custom';
+    customUrl?: string;
+  };
 }
 
 interface ApiResponse {
@@ -236,4 +241,16 @@ export const ensureAppIconFolder = async (systemFolderId: string): Promise<strin
     const createRes = await createFolder(systemFolderId, APPS_ICON_FOLDER_NAME);
     if (createRes.status === 'success' && createRes.data) return createRes.data.id;
     throw new Error("Failed to create Apps Icon folder");
+};
+
+export const ensureIconSystemFolder = async (systemFolderId: string): Promise<string> => {
+    const sysRes = await getFolderContents(systemFolderId);
+    if (sysRes.status !== 'success' || !Array.isArray(sysRes.data)) throw new Error("Cannot access System folder");
+    
+    const iconFolder = sysRes.data.find((i: any) => i.name === SYSTEM_ICONS_FOLDER_NAME && i.type === 'folder');
+    if (iconFolder) return iconFolder.id;
+    
+    const createRes = await createFolder(systemFolderId, SYSTEM_ICONS_FOLDER_NAME);
+    if (createRes.status === 'success' && createRes.data) return createRes.data.id;
+    throw new Error("Failed to create IconSystem folder");
 };
