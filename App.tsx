@@ -204,7 +204,7 @@ const ImageItem = ({ item, hasComments, selected, onClick, onDoubleClick, onCont
   </div>
 );
 
-// ... (Other components like YouTubeApp, GalleryApp, AppStoreApp remain unchanged, skipping for brevity but assuming they are here) ...
+// ... (Other components like YouTubeApp, GalleryApp, AppStoreApp, GenericExternalApp remain unchanged) ...
 const YouTubeApp = ({ customKeys }: { customKeys?: string[] }) => {
   const [searchQuery, setSearchQuery] = useState("");
   const [videos, setVideos] = useState<any[]>([]);
@@ -1215,7 +1215,15 @@ const App = () => {
     boot();
   }, []);
 
-  useEffect(() => { const timer = setInterval(() => setClock(new Date()), 1000); return () => clearInterval(timer); }, []);
+  // --- OPTIMIZED CLOCK: Pause when hidden to prevent unnecessary re-renders on Android ---
+  useEffect(() => { 
+      const timer = setInterval(() => {
+          if (!document.hidden) {
+              setClock(new Date()); 
+          }
+      }, 1000); 
+      return () => clearInterval(timer); 
+  }, []);
 
   // ... (Shared Explorer Actions, unchanged) ...
   // Fix Explorer Bug: Ensure we are only updating state if the folder hasn't changed during fetch
@@ -1281,10 +1289,11 @@ const App = () => {
       }
   }, [currentFolderId, isSystemInitialized]);
 
-  // ... (Other functions like triggerCloudSync, triggerCommentSync, etc. remain unchanged)
-  // Re-declare for context
   const triggerCloudSync = useCallback(() => {
     if (!dbFileId) return;
+    // Optimization: Don't sync if tab is hidden (save battery/data)
+    if (document.hidden) return;
+    
     setIsSavingDB(true);
     setTimeout(async () => {
       try { await API.updateSystemDBFile(dbFileId, systemMapRef.current); setIsSavingDB(false); } 
