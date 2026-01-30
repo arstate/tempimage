@@ -9,7 +9,8 @@ import {
   CheckCheck, MessageSquare, Reply, Send, User, Clock,
   Grid, Monitor, Globe, Settings, ShoppingBag, Minus, Square, Search, Wifi,
   Maximize2, MonitorCheck, ExternalLink, Minimize2, LayoutGrid, Youtube, Play, Pause, SkipForward, Music,
-  UploadCloud, RefreshCcw, Hand, Power, Focus, LayoutTemplate, PenTool, Crop, Calculator
+  UploadCloud, RefreshCcw, Hand, Power, Focus, LayoutTemplate, PenTool, Crop, Calculator,
+  Activity
 } from 'lucide-react';
 import * as API from './services/api';
 import * as DB from './services/db';
@@ -22,6 +23,7 @@ import { ImageCard } from './components/ImageCard';
 import { NotesApp } from './components/NotesApp';
 import { ImageCropper } from './components/ImageCropper';
 import { CalculatorApp } from './components/CalculatorApp';
+import { TaskManagerApp } from './components/TaskManagerApp';
 
 // --- CONSTANTS ---
 const DEFAULT_YOUTUBE_KEYS = [
@@ -474,6 +476,8 @@ const GenericExternalApp = ({ app, onLaunch, onCloseApp, onMinimize }: { app: AP
 };
 
 // --- APP STORE COMPONENT ---
+// ... (AppStoreApp code omitted for brevity as it is unchanged) ...
+// (Retaining AppStoreApp code via re-declaration if it was missing, but here I'm using the existing one)
 const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId, onRequestCrop }: any) => {
    const [appName, setAppName] = useState('');
    const [appUrl, setAppUrl] = useState('');
@@ -1098,7 +1102,7 @@ const App = () => {
   const [activeWindowId, setActiveWindowId] = useState<string | null>(null);
   const [startMenuOpen, setStartMenuOpen] = useState(false);
   const [clock, setClock] = useState(new Date());
-  const [globalContextMenu, setGlobalContextMenu] = useState<{x:number, y:number, targetItem?: Item | API.AppDefinition, isRecycleBin?: boolean, type?: 'desktop' | 'item' | 'app' | 'folder-background'} | null>(null);
+  const [globalContextMenu, setGlobalContextMenu] = useState<{x:number, y:number, targetItem?: Item | API.AppDefinition, isRecycleBin?: boolean, type?: 'desktop' | 'item' | 'app' | 'folder-background' | 'taskbar'} | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isCanvaRunning, setIsCanvaRunning] = useState(false);
   const [isFigmaRunning, setIsFigmaRunning] = useState(false);
@@ -1706,6 +1710,16 @@ const App = () => {
     setStartMenuOpen(false);
     if (!app) { addNotification("App not ready", "error"); return; }
     
+    // Check if Task Manager is already open
+    if (app.id === 'task-manager') {
+       const existing = windows.find(w => w.appId === 'task-manager');
+       if (existing) {
+         setActiveWindowId(existing.instanceId);
+         setWindows(prev => prev.map(w => w.instanceId === existing.instanceId ? { ...w, isMinimized: false } : w));
+         return;
+       }
+    }
+
     if (app.id === 'notes') {
         const existingNoteWindow = windows.find(w => w.appId === 'notes');
         if (existingNoteWindow) {
@@ -1743,10 +1757,15 @@ const App = () => {
     let defaultWidth = 900;
     let defaultHeight = 600;
 
-    // Special sizing for Calculator
+    // Special sizing
     if (app.id === 'calculator') {
         defaultWidth = 340;
         defaultHeight = 540;
+    }
+
+    if (app.id === 'task-manager') {
+       defaultWidth = 700;
+       defaultHeight = 500;
     }
 
     const newWindow = {
@@ -1771,6 +1790,18 @@ const App = () => {
     }
   };
   
+  const openTaskManager = () => {
+    // Manually construct the AppDefinition for Task Manager since it's a hidden system app
+    const tmApp: API.AppDefinition = {
+        id: 'task-manager',
+        name: 'Task Manager',
+        icon: 'activity', 
+        type: 'system',
+        url: 'internal://task-manager'
+    };
+    openApp(tmApp);
+  };
+
   const closeWindow = (instanceId: string) => setWindows(prev => prev.filter(w => w.instanceId !== instanceId));
   const toggleMaximize = (instanceId: string) => setWindows(prev => prev.map(w => w.instanceId === instanceId ? {...w, isMaximized: !w.isMaximized, isMinimized: false} : w));
   const toggleMinimize = (instanceId: string) => setWindows(prev => prev.map(w => w.instanceId === instanceId ? {...w, isMinimized: !w.isMinimized} : w));
@@ -1888,6 +1919,7 @@ const App = () => {
                   win.appId === 'youtube' ? <Youtube size={14}/> :
                   win.appId === 'notes' ? <FileText size={14}/> :
                   win.appId === 'calculator' ? <Calculator size={14}/> :
+                  win.appId === 'task-manager' ? <Activity size={14} /> :
                   win.appData.icon === 'image' ? <ImageIcon size={14}/> : 
                   win.appData.icon.startsWith('http') ? <img src={win.appData.icon} className="w-full h-full object-contain"/> :
                   <Globe size={14}/>}
@@ -1956,6 +1988,7 @@ const App = () => {
             )}
             {win.appId === 'youtube' && <YouTubeApp customKeys={config?.youtubeApiKeys} />}
             {win.appId === 'calculator' && <CalculatorApp />}
+            {win.appId === 'task-manager' && <TaskManagerApp windows={windows.filter(w => w.appId !== 'task-manager')} onCloseWindow={closeWindow} />}
             {win.appId === 'settings' && <SettingsApp config={config!} systemFolderId={systemFolderId} addNotification={addNotification} onSave={async (c:any)=>{ try { await API.saveSystemConfig(c); setConfig(c); addNotification("Pengaturan disimpan", "success"); } catch(e) { addNotification("Gagal menyimpan", "error"); } }} installPrompt={deferredPrompt} onInstallPWA={handleInstallClick} />}
             {(win.appId === 'app-store' || win.appId === 'store') && <AppStoreApp config={config!} setConfig={setConfig} addNotification={addNotification} systemFolderId={systemFolderId} onRequestCrop={handleRequestCrop} />}
             {(win.appData.type === 'webapp') && win.appId !== 'youtube' && win.appId !== 'canva' && win.appId !== 'figma' && win.appId !== 'calculator' && (
@@ -2038,7 +2071,12 @@ const App = () => {
 
       {/* TASKBAR - FIXED POSITION */}
       <div className="fixed bottom-0 left-0 right-0 h-12 glass border-t border-white/5 flex items-center px-4 z-[9999]"
-           style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
+           style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+           onContextMenu={(e) => {
+             e.preventDefault(); e.stopPropagation();
+             setGlobalContextMenu({ x: e.clientX, y: e.clientY, type: 'taskbar' });
+           }}
+      >
         
         {/* START BUTTON */}
         <button onClick={() => setStartMenuOpen(!startMenuOpen)} className={`p-2.5 rounded-xl hover:bg-white/10 transition-all flex-shrink-0 mr-2 ${startMenuOpen ? 'bg-white/10 scale-90' : ''}`}>
@@ -2057,13 +2095,14 @@ const App = () => {
            {windows.map(win => (
              <button key={win.instanceId} onClick={() => { if (win.isMinimized) toggleMinimize(win.instanceId); setActiveWindowId(win.instanceId); }}
                      className={`p-2 rounded-xl hover:bg-white/10 transition-all relative group flex-shrink-0 ${activeWindowId === win.instanceId && !win.isMinimized ? 'bg-white/10' : 'opacity-60'}`}>
-                <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-white text-[10px] font-bold shadow-lg overflow-hidden ${win.appId === 'file-explorer' ? (win.args?.folderId === recycleBinId ? 'bg-red-900' : 'bg-blue-600') : (win.appId === 'app-store' || win.appId === 'store') ? 'bg-pink-600' : win.appId === 'youtube' ? 'bg-red-600' : win.appId === 'notes' ? 'bg-yellow-600' : win.appId === 'calculator' ? 'bg-orange-600' : win.appData.icon === 'image' ? 'bg-pink-500' : win.appData.icon.startsWith('http') ? 'bg-white' : 'bg-slate-700'}`}>
+                <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-white text-[10px] font-bold shadow-lg overflow-hidden ${win.appId === 'file-explorer' ? (win.args?.folderId === recycleBinId ? 'bg-red-900' : 'bg-blue-600') : (win.appId === 'app-store' || win.appId === 'store') ? 'bg-pink-600' : win.appId === 'youtube' ? 'bg-red-600' : win.appId === 'notes' ? 'bg-yellow-600' : win.appId === 'calculator' ? 'bg-orange-600' : win.appId === 'task-manager' ? 'bg-teal-600' : win.appData.icon === 'image' ? 'bg-pink-500' : win.appData.icon.startsWith('http') ? 'bg-white' : 'bg-slate-700'}`}>
                    {win.appId === 'file-explorer' ? (win.args?.folderId === recycleBinId ? <Trash2 size={14}/> : <Folder size={14}/>) : 
                     (win.appId === 'app-store' || win.appId === 'store') ? <ShoppingBag size={14}/> : 
                     win.appId === 'settings' ? <Settings size={14}/> : 
                     win.appId === 'youtube' ? <Youtube size={14}/> :
                     win.appId === 'notes' ? <FileText size={14}/> :
                     win.appId === 'calculator' ? <Calculator size={14}/> :
+                    win.appId === 'task-manager' ? <Activity size={14}/> :
                     win.appData.icon === 'image' ? <ImageIcon size={14} /> : 
                     win.appData.icon.startsWith('http') ? <img src={win.appData.icon} className="w-full h-full object-cover"/> :
                     win.title.charAt(0)}
@@ -2113,8 +2152,12 @@ const App = () => {
       {/* GLOBAL CONTEXT MENU */}
       {globalContextMenu && (
         <div 
-            className="absolute z-[1001] bg-slate-900 border border-slate-700 rounded-lg shadow-2xl py-1 min-w-[180px] animate-in zoom-in-95 duration-100 overflow-hidden" 
-            style={{ top: globalContextMenu.y, left: globalContextMenu.x }}
+            className={`absolute z-[1001] bg-slate-900 border border-slate-700 rounded-lg shadow-2xl py-1 min-w-[180px] animate-in zoom-in-95 duration-100 overflow-hidden ${globalContextMenu.type === 'taskbar' ? 'origin-bottom-left' : 'origin-top-left'}`}
+            style={{ 
+              top: globalContextMenu.type === 'taskbar' ? 'auto' : globalContextMenu.y, 
+              left: globalContextMenu.x,
+              bottom: globalContextMenu.type === 'taskbar' ? 60 : 'auto' 
+            }}
             onPointerDown={(e) => e.stopPropagation()} 
             onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
         >
@@ -2192,6 +2235,12 @@ const App = () => {
                      <button onClick={() => { loadFolder(currentFolderId); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><RefreshCw size={14}/> Refresh</button>
                    </>
                 )
+            ) : globalContextMenu.type === 'taskbar' ? (
+               <>
+                  <button onClick={() => { openTaskManager(); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><Activity size={14}/> Task Manager</button>
+                  <div className="h-px bg-slate-800 my-1"></div>
+                  <button onClick={() => { setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-400">Cancel</button>
+               </>
             ) : (
                 <>
                   <button onClick={() => { handleRefreshDesktop(); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><RefreshCcw size={14}/> Refresh System</button>
