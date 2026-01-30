@@ -339,8 +339,8 @@ const GalleryApp = ({ items, onUpload, onDelete, loading }: any) => {
   );
 };
 
-// --- CANVA APP COMPONENT WITH REMOTE CONTROLLER UI ---
-const CanvaApp = ({ onLaunch, onCloseApp, onMinimize }: { onLaunch: () => void, onCloseApp: () => void, onMinimize: () => void }) => {
+// --- GENERIC EXTERNAL APP COMPONENT ---
+const GenericExternalApp = ({ app, onLaunch, onCloseApp, onMinimize }: { app: API.AppDefinition, onLaunch: () => void, onCloseApp: () => void, onMinimize: () => void }) => {
   const [isRunning, setIsRunning] = useState(false);
   const externalWindowRef = useRef<Window | null>(null);
 
@@ -350,8 +350,8 @@ const CanvaApp = ({ onLaunch, onCloseApp, onMinimize }: { onLaunch: () => void, 
     const screenHeight = window.screen.availHeight - taskbarGap;
     
     externalWindowRef.current = window.open(
-      'https://www.canva.com', 
-      'CanvaWindow', 
+      app.url, 
+      `ExternalWindow-${app.id}`, 
       `width=${screenWidth},height=${screenHeight},top=0,left=0,toolbar=no,menubar=no,location=no,status=no,resizable=yes,scrollbars=yes`
     );
 
@@ -382,12 +382,12 @@ const CanvaApp = ({ onLaunch, onCloseApp, onMinimize }: { onLaunch: () => void, 
          
          <div className="z-10 flex flex-col items-center gap-6 animate-in zoom-in-95 duration-300">
             <div className="relative">
-               <div className="w-32 h-32 bg-slate-800 rounded-full flex items-center justify-center shadow-2xl border border-slate-700">
-                  <img 
-                    src="https://upload.wikimedia.org/wikipedia/commons/thumb/0/08/Canva_icon_2021.svg/600px-Canva_icon_2021.svg.png" 
-                    className="w-20 h-20 object-contain opacity-50"
-                    alt="Canva Logo"
-                  />
+               <div className="w-32 h-32 bg-slate-800 rounded-3xl flex items-center justify-center shadow-2xl border border-slate-700">
+                  {app.icon.startsWith('http') ? (
+                      <img src={app.icon} className="w-20 h-20 object-contain opacity-50" alt={app.name} />
+                  ) : (
+                      <Globe size={80} className="text-slate-600 opacity-50"/>
+                  )}
                </div>
                <div className="absolute -bottom-2 -right-2 bg-green-900/80 border border-green-500 text-green-400 px-3 py-1 rounded-full text-xs font-bold flex items-center gap-2 shadow-lg backdrop-blur-md">
                   <span className="relative flex h-2.5 w-2.5">
@@ -398,7 +398,7 @@ const CanvaApp = ({ onLaunch, onCloseApp, onMinimize }: { onLaunch: () => void, 
                </div>
             </div>
 
-            <h2 className="text-xl font-bold text-slate-300">Canva Remote Control</h2>
+            <h2 className="text-xl font-bold text-slate-300">{app.name} Remote Control</h2>
             <p className="text-slate-500 text-center max-w-xs text-sm">
                Aplikasi berjalan di jendela terpisah.
             </p>
@@ -422,7 +422,7 @@ const CanvaApp = ({ onLaunch, onCloseApp, onMinimize }: { onLaunch: () => void, 
                   <div className="w-14 h-14 bg-blue-500/10 group-hover:bg-blue-500 text-blue-500 group-hover:text-white rounded-2xl flex items-center justify-center transition-all shadow-lg border border-blue-500/20">
                      <Focus size={24} />
                   </div>
-                  <span className="text-xs font-bold text-slate-400 group-hover:text-blue-400">Ke Canva</span>
+                  <span className="text-xs font-bold text-slate-400 group-hover:text-blue-400">Ke Jendela</span>
                </button>
             </div>
          </div>
@@ -431,138 +431,23 @@ const CanvaApp = ({ onLaunch, onCloseApp, onMinimize }: { onLaunch: () => void, 
   }
 
   return (
-    <div className="h-full w-full flex flex-col items-center justify-center bg-[#7d2ae8] relative text-white overflow-hidden">
+    <div className="h-full w-full flex flex-col items-center justify-center bg-slate-900 relative text-white overflow-hidden">
        <div className="absolute inset-0 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')] opacity-10"></div>
        <div className="z-10 text-center animate-in zoom-in-95 duration-500 p-8">
-          <div className="w-24 h-24 mx-auto mb-6 bg-white rounded-full flex items-center justify-center shadow-2xl">
-             <img 
-                src="https://upload.wikimedia.org/wikipedia/commons/thumb/0/08/Canva_icon_2021.svg/600px-Canva_icon_2021.svg.png" 
-                className="w-16 h-16 object-contain"
-                alt="Canva Logo"
-             />
+          <div className="w-24 h-24 mx-auto mb-6 bg-slate-800 rounded-3xl flex items-center justify-center shadow-2xl border border-slate-700">
+             {app.icon.startsWith('http') ? (
+                  <img src={app.icon} className="w-16 h-16 object-contain" alt={app.name} />
+              ) : (
+                  <Globe size={64} className="text-white"/>
+              )}
           </div>
-          <h1 className="text-4xl font-bold mb-2 text-shadow">Canva Designer</h1>
+          <h1 className="text-4xl font-bold mb-2 text-shadow">{app.name}</h1>
           <p className="text-white/80 mb-8 max-w-md mx-auto text-sm drop-shadow">
-            Aplikasi ini akan berjalan di jendela khusus agar performa maksimal.
+            Aplikasi ini dikonfigurasi untuk berjalan di jendela browser terpisah.
           </p>
 
-          <button onClick={handleLaunch} className="bg-white text-[#7d2ae8] px-8 py-4 rounded-full font-bold text-xl shadow-xl hover:scale-105 transition-transform flex items-center gap-3 mx-auto">
-            <span>Buka Jendela Canva</span>
-            <ExternalLink size={24} />
-          </button>
-       </div>
-    </div>
-  );
-};
-
-// --- FIGMA APP COMPONENT WITH REMOTE CONTROLLER UI ---
-const FigmaApp = ({ onLaunch, onCloseApp, onMinimize }: { onLaunch: () => void, onCloseApp: () => void, onMinimize: () => void }) => {
-  const [isRunning, setIsRunning] = useState(false);
-  const externalWindowRef = useRef<Window | null>(null);
-
-  const handleLaunch = () => {
-    const taskbarGap = 100;
-    const screenWidth = window.screen.availWidth;
-    const screenHeight = window.screen.availHeight - taskbarGap;
-    
-    externalWindowRef.current = window.open(
-      'https://www.figma.com', 
-      'FigmaWindow', 
-      `width=${screenWidth},height=${screenHeight},top=0,left=0,toolbar=no,menubar=no,location=no,status=no,resizable=yes,scrollbars=yes`
-    );
-
-    setIsRunning(true);
-    onLaunch();
-  };
-
-  const handleFocus = () => {
-    if (externalWindowRef.current && !externalWindowRef.current.closed) {
-      externalWindowRef.current.focus();
-    } else {
-      handleLaunch();
-    }
-  };
-
-  const handleClose = () => {
-    if (externalWindowRef.current) {
-      externalWindowRef.current.close();
-    }
-    setIsRunning(false);
-    onCloseApp();
-  };
-
-  if (isRunning) {
-    return (
-      <div className="h-full w-full flex flex-col items-center justify-center bg-[#1e1e1e] relative text-white">
-         <div className="absolute inset-0 bg-black opacity-30"></div>
-         
-         <div className="z-10 flex flex-col items-center gap-6 animate-in zoom-in-95 duration-300">
-            <div className="relative">
-               <div className="w-32 h-32 bg-black rounded-3xl flex items-center justify-center shadow-2xl border border-white/10">
-                  <img 
-                    src="https://upload.wikimedia.org/wikipedia/commons/3/33/Figma-logo.svg" 
-                    className="w-20 h-20 object-contain"
-                    alt="Figma Logo"
-                  />
-               </div>
-               <div className="absolute -bottom-2 -right-2 bg-green-900/80 border border-green-500 text-green-400 px-3 py-1 rounded-full text-xs font-bold flex items-center gap-2 shadow-lg backdrop-blur-md">
-                  <span className="relative flex h-2.5 w-2.5">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-green-500"></span>
-                  </span>
-                  Running Externally
-               </div>
-            </div>
-
-            <h2 className="text-xl font-bold text-slate-300">Figma Remote Control</h2>
-            <p className="text-slate-500 text-center max-w-xs text-sm">
-               Aplikasi berjalan di jendela terpisah.
-            </p>
-
-            <div className="flex gap-4 mt-4">
-               <button onClick={handleClose} className="flex flex-col items-center gap-2 group">
-                  <div className="w-14 h-14 bg-red-500/10 group-hover:bg-red-500 text-red-500 group-hover:text-white rounded-2xl flex items-center justify-center transition-all shadow-lg border border-red-500/20">
-                     <Power size={24} />
-                  </div>
-                  <span className="text-xs font-bold text-slate-400 group-hover:text-red-400">Tutup</span>
-               </button>
-
-               <button onClick={onMinimize} className="flex flex-col items-center gap-2 group">
-                  <div className="w-14 h-14 bg-yellow-500/10 group-hover:bg-yellow-500 text-yellow-500 group-hover:text-white rounded-2xl flex items-center justify-center transition-all shadow-lg border border-yellow-500/20">
-                     <Minus size={24} />
-                  </div>
-                  <span className="text-xs font-bold text-slate-400 group-hover:text-yellow-400">Minimize</span>
-               </button>
-
-               <button onClick={handleFocus} className="flex flex-col items-center gap-2 group">
-                  <div className="w-14 h-14 bg-blue-500/10 group-hover:bg-blue-500 text-blue-500 group-hover:text-white rounded-2xl flex items-center justify-center transition-all shadow-lg border border-blue-500/20">
-                     <Focus size={24} />
-                  </div>
-                  <span className="text-xs font-bold text-slate-400 group-hover:text-blue-400">Ke Figma</span>
-               </button>
-            </div>
-         </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="h-full w-full flex flex-col items-center justify-center bg-[#2c2c2c] relative text-white overflow-hidden">
-       <div className="z-10 text-center animate-in zoom-in-95 duration-500 p-8">
-          <div className="w-24 h-24 mx-auto mb-6 bg-black rounded-3xl flex items-center justify-center shadow-2xl border border-white/10">
-             <img 
-                src="https://upload.wikimedia.org/wikipedia/commons/3/33/Figma-logo.svg" 
-                className="w-16 h-16 object-contain"
-                alt="Figma Logo"
-             />
-          </div>
-          <h1 className="text-4xl font-bold mb-2 text-shadow">Figma</h1>
-          <p className="text-white/80 mb-8 max-w-md mx-auto text-sm drop-shadow">
-            Desain, prototipe, dan kolaborasi dalam waktu nyata.
-          </p>
-
-          <button onClick={handleLaunch} className="bg-white text-black px-8 py-4 rounded-full font-bold text-xl shadow-xl hover:scale-105 transition-transform flex items-center gap-3 mx-auto">
-            <span>Buka Jendela Figma</span>
+          <button onClick={handleLaunch} className="bg-white text-slate-900 px-8 py-4 rounded-full font-bold text-xl shadow-xl hover:scale-105 transition-transform flex items-center gap-3 mx-auto">
+            <span>Buka {app.name}</span>
             <ExternalLink size={24} />
           </button>
        </div>
@@ -574,6 +459,7 @@ const FigmaApp = ({ onLaunch, onCloseApp, onMinimize }: { onLaunch: () => void, 
 const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId }: any) => {
    const [appName, setAppName] = useState('');
    const [appUrl, setAppUrl] = useState('');
+   const [launchMode, setLaunchMode] = useState<'iframe' | 'external'>('iframe');
    const [customIconFile, setCustomIconFile] = useState<File | null>(null);
    const [isInstalling, setIsInstalling] = useState(false);
    const [useProxy, setUseProxy] = useState(false);
@@ -585,8 +471,8 @@ const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId }: any
      { id: 'gallery', name: 'Gallery', url: 'internal://gallery', icon: 'image' },
      { id: 'youtube', name: 'YouTube', url: 'internal://youtube', icon: 'youtube' },
      { id: 'spotify', name: 'Spotify', url: 'https://open.spotify.com/embed', icon: 'music' },
-     { id: 'canva', name: 'Canva', url: 'https://www.canva.com', icon: 'https://upload.wikimedia.org/wikipedia/commons/0/08/Canva_icon_2021.svg' },
-     { id: 'figma', name: 'Figma', url: 'https://www.figma.com', icon: 'https://upload.wikimedia.org/wikipedia/commons/3/33/Figma-logo.svg' },
+     { id: 'canva', name: 'Canva', url: 'https://www.canva.com', icon: 'https://upload.wikimedia.org/wikipedia/commons/0/08/Canva_icon_2021.svg', launchMode: 'external' },
+     { id: 'figma', name: 'Figma', url: 'https://www.figma.com', icon: 'https://upload.wikimedia.org/wikipedia/commons/3/33/Figma-logo.svg', launchMode: 'external' },
      { id: 'google-maps', name: 'Maps', url: 'https://www.google.com/maps/embed', icon: 'globe' }
    ];
 
@@ -602,7 +488,20 @@ const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId }: any
             finalIcon = uploadRes.thumbnail || uploadRes.url; 
         } catch (e) { console.error(e); }
     }
-    const updatedConfig = { ...config, installedApps: [...config.installedApps, { ...app, icon: finalIcon, type: app.url?.startsWith('internal') ? 'system' : 'webapp' }] };
+    
+    // Use app.launchMode if defined (for presets), otherwise use state (for custom)
+    const mode = app.launchMode || (app.type === 'webapp' ? launchMode : undefined);
+    
+    const updatedConfig = { 
+        ...config, 
+        installedApps: [...config.installedApps, { 
+            ...app, 
+            icon: finalIcon, 
+            type: app.url?.startsWith('internal') ? 'system' : 'webapp',
+            launchMode: mode
+        }] 
+    };
+
     try { await API.saveSystemConfig(updatedConfig); setConfig(updatedConfig); addNotification(`${app.name} berhasil ditambahkan`, "success"); } 
     catch (e) { addNotification("Gagal menyimpan konfigurasi", "error"); } finally { setIsInstalling(false); setCustomIconFile(null); }
    };
@@ -643,7 +542,29 @@ const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId }: any
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 bg-slate-800/40 p-5 rounded-2xl border border-slate-700/50 backdrop-blur-md">
           <div className="space-y-1"><label className="text-[10px] uppercase font-bold text-slate-500 ml-1">Nama Aplikasi</label><input className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-sm" placeholder="Contoh: ChatGPT" value={appName} onChange={e => setAppName(e.target.value)}/></div>
           <div className="space-y-1 lg:col-span-2"><label className="text-[10px] uppercase font-bold text-slate-500 ml-1">URL Web</label><div className="flex flex-col gap-2"><input className="w-full bg-slate-950 border border-slate-700 rounded-xl px-4 py-3 text-sm" placeholder="Contoh: chat.openai.com" value={appUrl} onChange={e => setAppUrl(e.target.value)}/><div className="flex items-center gap-2"><input type="checkbox" checked={useProxy} onChange={e => setUseProxy(e.target.checked)} className="bg-slate-900"/><label className="text-xs text-slate-400">Bypass Blokir</label></div></div></div>
-          <div className="flex items-end"><button onClick={() => { if(!appName || !appUrl) return; handleInstall({ id: 'custom-'+Date.now(), name: appName, url: appUrl, icon: 'globe', type: 'webapp' }); }} disabled={isInstalling} className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold">{isInstalling ? <Loader2 className="animate-spin"/> : 'Instal'}</button></div>
+          
+          <div className="space-y-1 lg:col-span-2">
+             <label className="text-[10px] uppercase font-bold text-slate-500 ml-1">Mode Peluncuran</label>
+             <div className="grid grid-cols-2 gap-2">
+                 <button 
+                    onClick={() => setLaunchMode('iframe')} 
+                    className={`flex items-center justify-center gap-2 p-3 rounded-xl border text-xs font-bold transition-all ${launchMode === 'iframe' ? 'bg-blue-600 border-blue-500 text-white shadow-lg' : 'bg-slate-950 border-slate-700 text-slate-400 hover:bg-slate-800'}`}
+                 >
+                    <LayoutTemplate size={16}/> Internal Window
+                 </button>
+                 <button 
+                    onClick={() => setLaunchMode('external')} 
+                    className={`flex items-center justify-center gap-2 p-3 rounded-xl border text-xs font-bold transition-all ${launchMode === 'external' ? 'bg-purple-600 border-purple-500 text-white shadow-lg' : 'bg-slate-950 border-slate-700 text-slate-400 hover:bg-slate-800'}`}
+                 >
+                    <ExternalLink size={16}/> New Tab / Window
+                 </button>
+             </div>
+             <p className="text-[10px] text-slate-500 mt-1">
+                 {launchMode === 'iframe' ? "Aplikasi dibuka dalam jendela internal OS (Iframe)." : "Aplikasi dibuka di tab baru dengan kontrol terpisah (Seperti Canva)."}
+             </p>
+          </div>
+
+          <div className="flex items-end lg:col-span-3"><button onClick={() => { if(!appName || !appUrl) return; handleInstall({ id: 'custom-'+Date.now(), name: appName, url: appUrl, icon: 'globe', type: 'webapp' }); }} disabled={isInstalling} className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white rounded-xl font-bold">{isInstalling ? <Loader2 className="animate-spin"/> : 'Instal'}</button></div>
         </div>
       </section>
       <section className="space-y-4">
@@ -655,7 +576,13 @@ const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId }: any
                         <div className="w-12 h-12 bg-slate-950 rounded-xl flex items-center justify-center border border-slate-800 overflow-hidden">
                             {app.icon.startsWith('http') ? <img src={app.icon} className="w-full h-full object-cover"/> : <Globe size={24}/>}
                         </div>
-                        <div className="font-bold text-sm">{app.name}</div>
+                        <div className="flex flex-col">
+                            <div className="font-bold text-sm">{app.name}</div>
+                            <div className="text-[10px] text-slate-500 flex items-center gap-1">
+                                {app.launchMode === 'external' ? <ExternalLink size={10}/> : <LayoutTemplate size={10}/>}
+                                {app.launchMode === 'external' ? 'External Window' : 'Internal Iframe'}
+                            </div>
+                        </div>
                     </div>
                     {app.type === 'webapp' && (
                         <button 
@@ -709,6 +636,7 @@ const FileExplorerApp = ({
     onContextMenu,
     openNotesApp
 }: any) => {
+  // ... (File Explorer content remains identical to previous version, just returning it as is)
   const [lastSelectedId, setLastSelectedId] = useState<string | null>(null);
   const [isNewDropdownOpen, setIsNewDropdownOpen] = useState(false);
   const [selectionBox, setSelectionBox] = useState<{x:number, y:number, width:number, height:number} | null>(null);
@@ -999,6 +927,7 @@ const FileExplorerApp = ({
 
 // --- SETTINGS APP COMPONENT ---
 const SettingsApp = ({ config, onSave, systemFolderId, addNotification, installPrompt, onInstallPWA }: any) => {
+  // ... (Settings app code remains unchanged, skipping for brevity)
   const [localConfig, setLocalConfig] = useState(config);
   const [isUploading, setIsUploading] = useState(false);
   const [installStatus, setInstallStatus] = useState<'hidden' | 'available' | 'installed'>('hidden');
@@ -1130,6 +1059,7 @@ const SettingsApp = ({ config, onSave, systemFolderId, addNotification, installP
 
 // --- MAIN OS SHELL APP ---
 const App = () => {
+  // ... (State setup)
   const [config, setConfig] = useState<API.SystemConfig | null>(null);
   const [windows, setWindows] = useState<any[]>([]); 
   const [activeWindowId, setActiveWindowId] = useState<string | null>(null);
@@ -1142,7 +1072,7 @@ const App = () => {
 
   // EXPLORER STATE
   const [currentFolderId, setCurrentFolderId] = useState<string>(""); 
-  const currentFolderIdRef = useRef<string>(""); // Ref to track current folder accurately during async ops
+  const currentFolderIdRef = useRef<string>(""); 
   const [folderHistory, setFolderHistory] = useState<{id:string, name:string}[]>([]);
   const [items, setItems] = useState<Item[]>([]);
   const [loading, setLoading] = useState(false); 
@@ -1159,7 +1089,7 @@ const App = () => {
   const [isSavingComments, setIsSavingComments] = useState(false);
   const [isGlobalLoading, setIsGlobalLoading] = useState(true); 
   const [globalLoadingMessage, setGlobalLoadingMessage] = useState("Booting System...");
-  const [bootProgress, setBootProgress] = useState(0); // Progress bar state
+  const [bootProgress, setBootProgress] = useState(0); 
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [uploadQueue, setUploadQueue] = useState<UploadItem[]>([]);
   const [downloadQueue, setDownloadQueue] = useState<DownloadItem[]>([]);
@@ -1236,7 +1166,8 @@ const App = () => {
             name: 'Figma', 
             url: 'https://www.figma.com', 
             icon: 'https://upload.wikimedia.org/wikipedia/commons/3/33/Figma-logo.svg', 
-            type: 'webapp' 
+            type: 'webapp',
+            launchMode: 'external' // Default Figma to external for better experience
           }); 
           configUpdated = true; 
         }
@@ -1350,6 +1281,8 @@ const App = () => {
       }
   }, [currentFolderId, isSystemInitialized]);
 
+  // ... (Other functions like triggerCloudSync, triggerCommentSync, etc. remain unchanged)
+  // Re-declare for context
   const triggerCloudSync = useCallback(() => {
     if (!dbFileId) return;
     setIsSavingDB(true);
@@ -1703,6 +1636,45 @@ const App = () => {
      }
   };
 
+  const handleAppIconUpdate = async (appId: string, file: File) => {
+    if (!config || !systemFolderId) return;
+    
+    // Notification
+    const notifId = addNotification("Uploading icon...", "loading");
+    
+    try {
+        // 1. Ensure folder exists
+        const iconFolderId = await API.ensureAppIconFolder(systemFolderId);
+        
+        // 2. Upload
+        const uploadRes = await API.uploadToDrive(file, iconFolderId);
+        const newIconUrl = uploadRes.thumbnail || uploadRes.url;
+        
+        // 3. Update Config
+        const updatedApps = config.installedApps.map(app => 
+             app.id === appId ? { ...app, icon: newIconUrl } : app
+        );
+        const updatedConfig = { ...config, installedApps: updatedApps };
+        
+        // 4. Save and Set State
+        await API.saveSystemConfig(updatedConfig);
+        setConfig(updatedConfig);
+        
+        // Update active windows if any
+        setWindows(prev => prev.map(w => w.appId === appId ? { ...w, appData: { ...w.appData, icon: newIconUrl } } : w));
+        
+        // Update modal target item to show new icon immediately
+        if (modal && modal.targetItem && modal.targetItem.id === appId) {
+             setModal(prev => prev ? { ...prev, targetItem: { ...prev.targetItem, icon: newIconUrl } as any } : null);
+        }
+
+        updateNotification(notifId, "Icon updated successfully", "success");
+    } catch (e) {
+        console.error(e);
+        updateNotification(notifId, "Failed to change icon", "error");
+    }
+  };
+
   // ... (Window manager and other helper functions remain the same) ...
   const handleWindowAction = (instanceId: string, e: React.PointerEvent, actionType: 'move' | 'resize', corner?: string) => {
     if (e.button !== 0) return;
@@ -1956,8 +1928,8 @@ const App = () => {
                 }}
               />
             )}
-            {win.appId === 'canva' && <CanvaApp onLaunch={() => setIsCanvaRunning(true)} onCloseApp={() => setIsCanvaRunning(false)} onMinimize={() => toggleMinimize(win.instanceId)} />}
-            {win.appId === 'figma' && <FigmaApp onLaunch={() => setIsFigmaRunning(true)} onCloseApp={() => setIsFigmaRunning(false)} onMinimize={() => toggleMinimize(win.instanceId)} />}
+            {win.appId === 'canva' && <GenericExternalApp app={{id:'canva', name:'Canva', icon: 'https://upload.wikimedia.org/wikipedia/commons/0/08/Canva_icon_2021.svg', type: 'webapp', url: 'https://www.canva.com'}} onLaunch={() => setIsCanvaRunning(true)} onCloseApp={() => setIsCanvaRunning(false)} onMinimize={() => toggleMinimize(win.instanceId)} />}
+            {win.appId === 'figma' && <GenericExternalApp app={{id:'figma', name:'Figma', icon: 'https://upload.wikimedia.org/wikipedia/commons/3/33/Figma-logo.svg', type: 'webapp', url: 'https://www.figma.com'}} onLaunch={() => setIsFigmaRunning(true)} onCloseApp={() => setIsFigmaRunning(false)} onMinimize={() => toggleMinimize(win.instanceId)} />}
             {win.appData.url === 'internal://gallery' && (
               <GalleryApp 
                 items={items} 
@@ -1974,15 +1946,24 @@ const App = () => {
             {win.appId === 'settings' && <SettingsApp config={config!} systemFolderId={systemFolderId} addNotification={addNotification} onSave={async (c:any)=>{ try { await API.saveSystemConfig(c); setConfig(c); addNotification("Pengaturan disimpan", "success"); } catch(e) { addNotification("Gagal menyimpan", "error"); } }} installPrompt={deferredPrompt} onInstallPWA={handleInstallClick} />}
             {(win.appId === 'app-store' || win.appId === 'store') && <AppStoreApp config={config!} setConfig={setConfig} addNotification={addNotification} systemFolderId={systemFolderId}/>}
             {(win.appData.type === 'webapp') && win.appId !== 'youtube' && win.appId !== 'canva' && win.appId !== 'figma' && (
-              <div className="h-full flex flex-col bg-white">
-                {!win.appData.hideAddressBar && (
-                    <div className="p-1 bg-slate-100 flex items-center justify-between gap-2 border-b">
-                       <div className="flex items-center gap-2 flex-1 min-w-0"><Globe size={12} className="text-slate-400 ml-2 flex-shrink-0"/><input className="flex-1 bg-white px-3 py-1 rounded-lg border-none text-[10px] outline-none text-slate-800" value={win.appData.url} readOnly /></div>
-                       <button onClick={() => window.open(win.appData.url, '_blank')} className="p-1.5 hover:bg-slate-200 rounded text-slate-500"><ExternalLink size={14}/></button>
-                    </div>
-                )}
-                <iframe src={win.appData.url} className="flex-1 w-full border-none" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation" />
-              </div>
+              win.appData.launchMode === 'external' ? (
+                  <GenericExternalApp 
+                      app={win.appData} 
+                      onLaunch={() => { /* Track active external state if needed */ }} 
+                      onCloseApp={() => closeWindow(win.instanceId)} 
+                      onMinimize={() => toggleMinimize(win.instanceId)} 
+                  />
+              ) : (
+                <div className="h-full flex flex-col bg-white">
+                    {!win.appData.hideAddressBar && (
+                        <div className="p-1 bg-slate-100 flex items-center justify-between gap-2 border-b">
+                        <div className="flex items-center gap-2 flex-1 min-w-0"><Globe size={12} className="text-slate-400 ml-2 flex-shrink-0"/><input className="flex-1 bg-white px-3 py-1 rounded-lg border-none text-[10px] outline-none text-slate-800" value={win.appData.url} readOnly /></div>
+                        <button onClick={() => window.open(win.appData.url, '_blank')} className="p-1.5 hover:bg-slate-200 rounded text-slate-500"><ExternalLink size={14}/></button>
+                        </div>
+                    )}
+                    <iframe src={win.appData.url} className="flex-1 w-full border-none" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation" />
+                </div>
+              )
             )}
           </div>
           {!win.isMaximized && (
@@ -1996,6 +1977,7 @@ const App = () => {
         </div>
       ))}
 
+      {/* ... (Rest of UI) ... */}
       {/* SYNC NOTIFICATION - FLOATING BOTTOM RIGHT */}
       {(isSavingDB || isSavingComments) && (
         <div className="fixed bottom-16 right-4 z-[200] bg-slate-800/90 border border-slate-600 p-3 rounded-xl shadow-2xl flex items-center gap-3 animate-in slide-in-from-right-10 duration-500">
@@ -2182,7 +2164,7 @@ const App = () => {
             ) : globalContextMenu.type === 'app' ? (
                 <>
                    <button onClick={() => { openApp(globalContextMenu.targetItem as API.AppDefinition); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><ExternalLink size={14}/> Open</button>
-                   {(globalContextMenu.targetItem?.type === 'webapp' || globalContextMenu.targetItem?.id === 'youtube') && (
+                   {(globalContextMenu.targetItem?.type === 'webapp' || globalContextMenu.targetItem?.id === 'youtube' || globalContextMenu.targetItem?.type === 'system') && (
                        <button onClick={() => { setModal({ type: 'properties', title: `${globalContextMenu.targetItem?.name} Properties`, targetItem: globalContextMenu.targetItem as any }); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><Settings size={14}/> Properties</button>
                    )}
                    {globalContextMenu.targetItem?.id === 'recycle-bin' && (
@@ -2252,8 +2234,42 @@ const App = () => {
               </div>
             ) : modal.type === 'properties' ? (
                 <div className="p-6">
-                   <h3 className="text-lg font-bold text-white mb-4">{modal.title}</h3>
-                   
+                   <div className="flex items-center gap-5 mb-6 bg-slate-800/50 p-4 rounded-xl border border-slate-700/50">
+                       <div className="relative group shrink-0">
+                           <div className="w-20 h-20 bg-slate-900 rounded-2xl flex items-center justify-center overflow-hidden border border-slate-700 shadow-xl">
+                               {(modal.targetItem as API.AppDefinition)?.icon?.startsWith('http') ? (
+                                   <img src={(modal.targetItem as API.AppDefinition).icon} className="w-full h-full object-cover" referrerPolicy="no-referrer"/>
+                               ) : (
+                                    (modal.targetItem as API.AppDefinition)?.icon === 'folder' ? <Folder size={32} className="text-blue-400"/> :
+                                    (modal.targetItem as API.AppDefinition)?.icon === 'settings' ? <Settings size={32} className="text-slate-300"/> :
+                                    (modal.targetItem as API.AppDefinition)?.icon === 'shopping-bag' ? <ShoppingBag size={32} className="text-pink-400"/> : 
+                                    (modal.targetItem as API.AppDefinition)?.icon === 'youtube' ? <Youtube size={32} className="text-red-500"/> :
+                                    (modal.targetItem as API.AppDefinition)?.icon === 'file-text' ? <FileText size={32} className="text-yellow-500"/> :
+                                    (modal.targetItem as API.AppDefinition)?.icon === 'trash' ? <Trash2 size={32} className="text-red-400"/> :
+                                    <Globe size={32} className="text-emerald-400"/>
+                               )}
+                           </div>
+                           <label className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer rounded-2xl backdrop-blur-[2px]">
+                               <Upload size={20} className="text-white mb-1" />
+                               <span className="text-[10px] text-white font-bold uppercase tracking-wider">Change</span>
+                               <input 
+                                   type="file" 
+                                   accept="image/*" 
+                                   className="hidden" 
+                                   onChange={(e) => {
+                                       if(e.target.files?.[0]) handleAppIconUpdate(modal.targetItem!.id, e.target.files[0]);
+                                   }}
+                               />
+                           </label>
+                       </div>
+                       <div className="flex flex-col">
+                           <h3 className="text-xl font-bold text-white">{modal.title.replace(' Properties', '')}</h3>
+                           <p className="text-xs text-slate-400 mt-1">App ID: <span className="font-mono text-slate-500">{modal.targetItem?.id}</span></p>
+                           <p className="text-xs text-slate-400">Type: <span className="font-mono text-slate-500 capitalize">{modal.targetItem?.type || 'System'}</span></p>
+                       </div>
+                   </div>
+
+                   {/* Content */}
                    {modal.targetItem?.id === 'youtube' ? (
                         <div className="space-y-4">
                             <div className="bg-slate-800 p-4 rounded-xl border border-slate-700">
@@ -2271,13 +2287,12 @@ const App = () => {
                                     <button onClick={() => { const input = document.getElementById('new-api-key-input') as HTMLInputElement; if(input.value) { handlePropertiesSave([...(config?.youtubeApiKeys || []), input.value]); input.value = ""; } }} className="px-3 bg-blue-600 rounded text-xs text-white font-bold">Add</button>
                                 </div>
                             </div>
-                            <div className="flex justify-end pt-2"><button onClick={() => setModal(null)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs font-bold text-white">Close</button></div>
                        </div>
                    ) : modal.targetItem?.type === 'webapp' ? (
                        <div className="space-y-4">
                            <div className="bg-slate-800 p-4 rounded-xl border border-slate-700">
                                <h4 className="text-xs text-slate-400 uppercase font-bold mb-3">Tampilan Aplikasi</h4>
-                               <div className="flex items-center justify-between">
+                               <div className="flex items-center justify-between mb-4">
                                    <div className="flex flex-col">
                                        <label className="text-sm text-white font-medium">Sembunyikan Address Bar</label>
                                        <span className="text-[10px] text-slate-500">Menghilangkan bar URL untuk tampilan seperti native app.</span>
@@ -2286,20 +2301,42 @@ const App = () => {
                                       <input 
                                         type="checkbox" 
                                         className="sr-only peer"
-                                        checked={!!modal.targetItem.hideAddressBar}
+                                        checked={!!(modal.targetItem as API.AppDefinition).hideAddressBar}
                                         onChange={(e) => handleWebAppPropertyChange(modal.targetItem!.id, 'hideAddressBar', e.target.checked)}
                                       />
                                       <div className="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
                                     </label>
                                </div>
-                           </div>
-                           <div className="flex justify-end pt-2">
-                               <button onClick={() => setModal(null)} className="px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs font-bold text-white">Tutup</button>
+
+                               <div className="space-y-2">
+                                  <label className="text-sm text-white font-medium">Mode Peluncuran</label>
+                                  <div className="grid grid-cols-2 gap-2">
+                                     <button 
+                                        onClick={() => handleWebAppPropertyChange(modal.targetItem!.id, 'launchMode', 'iframe')}
+                                        className={`p-2 rounded-lg border text-xs font-bold transition-all flex items-center justify-center gap-2 ${(modal.targetItem as API.AppDefinition).launchMode !== 'external' ? 'bg-blue-600 border-blue-500 text-white' : 'bg-slate-900 border-slate-600 text-slate-400 hover:bg-slate-700'}`}
+                                     >
+                                         <LayoutTemplate size={14}/> Iframe
+                                     </button>
+                                     <button 
+                                        onClick={() => handleWebAppPropertyChange(modal.targetItem!.id, 'launchMode', 'external')}
+                                        className={`p-2 rounded-lg border text-xs font-bold transition-all flex items-center justify-center gap-2 ${(modal.targetItem as API.AppDefinition).launchMode === 'external' ? 'bg-purple-600 border-purple-500 text-white' : 'bg-slate-900 border-slate-600 text-slate-400 hover:bg-slate-700'}`}
+                                     >
+                                         <ExternalLink size={14}/> New Tab
+                                     </button>
+                                  </div>
+                               </div>
                            </div>
                        </div>
                    ) : (
-                       <p className="text-slate-400 text-sm">Tidak ada pengaturan tambahan untuk item ini.</p>
+                       <div className="p-4 bg-slate-800/50 rounded-xl border border-slate-700/50 text-center">
+                            <Settings size={32} className="text-slate-600 mx-auto mb-2"/>
+                            <p className="text-sm text-slate-400">No additional settings available for this app.</p>
+                       </div>
                    )}
+
+                   <div className="flex justify-end pt-4 mt-4 border-t border-slate-800">
+                       <button onClick={() => setModal(null)} className="px-5 py-2.5 bg-slate-700 hover:bg-slate-600 rounded-xl text-xs font-bold text-white shadow-lg transition-transform active:scale-95">Close</button>
+                   </div>
                 </div>
             ) : (
               <div className="p-6">

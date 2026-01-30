@@ -17,6 +17,7 @@ export interface AppDefinition {
   type: 'system' | 'webapp';
   url?: string;
   hideAddressBar?: boolean;
+  launchMode?: 'iframe' | 'external'; // New property for launch preference
 }
 
 export interface SystemConfig {
