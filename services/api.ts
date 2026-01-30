@@ -1,4 +1,5 @@
 
+
 import { Item, FolderMap, CommentDB } from '../types';
 
 // Updated GAS Endpoint
@@ -31,6 +32,14 @@ export interface SystemConfig {
   taskbarIcon?: {
     mode: 'default' | 'custom';
     customUrl?: string;
+  };
+  display?: {
+    resolutionMode?: string;
+    width?: number;
+    height?: number;
+    scale?: number;
+    refreshRate?: number;
+    hardwareAcceleration?: boolean;
   };
 }
 

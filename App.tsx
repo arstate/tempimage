@@ -10,7 +10,7 @@ import {
   Grid, Monitor, Globe, Settings, ShoppingBag, Minus, Square, Search, Wifi,
   Maximize2, MonitorCheck, ExternalLink, Minimize2, LayoutGrid, Youtube, Play, Pause, SkipForward, Music,
   UploadCloud, RefreshCcw, Hand, Power, Focus, LayoutTemplate, PenTool, Crop, Calculator,
-  Activity, Pin, PinOff
+  Activity, Pin, PinOff, Zap, MousePointer2, Smartphone
 } from 'lucide-react';
 import * as API from './services/api';
 import * as DB from './services/db';
@@ -640,7 +640,7 @@ const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId, onReq
    );
 };
 
-// ... FileExplorerApp component ...
+// ... FileExplorerApp component ... (No Changes)
 const FileExplorerApp = ({ 
     currentFolderId, setCurrentFolderId,
     folderHistory, setFolderHistory,
@@ -1019,6 +1019,16 @@ const SettingsApp = ({ config, onSave, systemFolderId, addNotification, installP
     })();
   };
 
+  const updateDisplaySettings = (key: string, value: any) => {
+      const newDisplay = { ...localConfig.display, [key]: value };
+      if (key === 'resolutionMode' && value === 'native') {
+          newDisplay.width = undefined;
+          newDisplay.height = undefined;
+      }
+      const newConfig = { ...localConfig, display: newDisplay };
+      setLocalConfig(newConfig);
+  };
+
   return (
     <div className="h-full bg-slate-900 text-white p-6 flex flex-col gap-6 overflow-auto">
       <h2 className="text-2xl font-bold flex items-center gap-3 text-white"><Settings size={28} className="text-blue-600"/> Settings</h2>
@@ -1041,6 +1051,118 @@ const SettingsApp = ({ config, onSave, systemFolderId, addNotification, installP
                         {installStatus === 'available' ? (<><Download size={14} /><span>Install App</span></>) : installStatus === 'installed' ? (<><CheckCircle size={14} /><span>Installed</span></>) : (<span>Unavailable / Installed</span>)}
                     </button>
                 </div>
+            </div>
+        </section>
+
+        {/* --- DISPLAY SETTINGS --- */}
+        <section className="bg-slate-800 p-4 rounded-xl shadow-sm border border-slate-700">
+            <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-3">Display</h3>
+            <div className="space-y-4">
+                
+                {/* Resolution */}
+                <div>
+                    <label className="text-sm text-white font-medium flex items-center gap-2 mb-1">
+                        <MonitorCheck size={16} className="text-blue-400"/> Resolution
+                    </label>
+                    <div className="bg-slate-900 border border-slate-700 rounded-lg p-2 flex flex-col gap-2">
+                        <select 
+                            value={localConfig.display?.resolutionMode || 'native'} 
+                            onChange={(e) => updateDisplaySettings('resolutionMode', e.target.value)}
+                            className="bg-slate-800 text-white text-xs p-2 rounded outline-none border border-slate-700 focus:border-blue-500"
+                        >
+                            <option value="native">Native (Device Resolution)</option>
+                            <option value="1920x1080">1920 x 1080 (HD)</option>
+                            <option value="1366x768">1366 x 768 (Laptop)</option>
+                            <option value="1280x720">1280 x 720 (SD)</option>
+                            <option value="custom">Custom</option>
+                        </select>
+                        {localConfig.display?.resolutionMode === 'custom' && (
+                            <div className="flex gap-2">
+                                <input 
+                                    type="number" 
+                                    placeholder="Width" 
+                                    className="flex-1 bg-slate-800 text-white text-xs p-2 rounded outline-none border border-slate-700"
+                                    value={localConfig.display?.width || ''}
+                                    onChange={(e) => updateDisplaySettings('width', parseInt(e.target.value))}
+                                />
+                                <span className="text-slate-500 text-xs self-center">x</span>
+                                <input 
+                                    type="number" 
+                                    placeholder="Height" 
+                                    className="flex-1 bg-slate-800 text-white text-xs p-2 rounded outline-none border border-slate-700"
+                                    value={localConfig.display?.height || ''}
+                                    onChange={(e) => updateDisplaySettings('height', parseInt(e.target.value))}
+                                />
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                {/* Scaling (Zoom) */}
+                <div>
+                    <label className="text-sm text-white font-medium flex items-center gap-2 mb-1">
+                        <Maximize2 size={16} className="text-blue-400"/> Scale & Layout
+                    </label>
+                    <div className="flex items-center gap-2 bg-slate-900 border border-slate-700 rounded-lg p-2">
+                        <button 
+                            onClick={() => updateDisplaySettings('scale', Math.max(0.5, (localConfig.display?.scale || 1) - 0.25))}
+                            className="p-1 hover:bg-slate-700 rounded"
+                        >
+                            <Minus size={14}/>
+                        </button>
+                        <div className="flex-1 text-center text-xs font-mono font-bold text-blue-300">
+                            {Math.round((localConfig.display?.scale || 1) * 100)}%
+                        </div>
+                        <button 
+                            onClick={() => updateDisplaySettings('scale', Math.min(2, (localConfig.display?.scale || 1) + 0.25))}
+                            className="p-1 hover:bg-slate-700 rounded"
+                        >
+                            <Plus size={14}/>
+                        </button>
+                    </div>
+                    <p className="text-[10px] text-slate-500 mt-1">Change the size of text, apps, and other items.</p>
+                </div>
+
+                {/* Refresh Rate */}
+                <div>
+                    <label className="text-sm text-white font-medium flex items-center gap-2 mb-1">
+                        <RefreshCw size={16} className="text-blue-400"/> Refresh Rate
+                    </label>
+                    <select 
+                        value={localConfig.display?.refreshRate || 60}
+                        onChange={(e) => updateDisplaySettings('refreshRate', parseInt(e.target.value))}
+                        className="w-full bg-slate-900 text-white text-xs p-2 rounded outline-none border border-slate-700 focus:border-blue-500"
+                    >
+                        <option value="30">30 Hz</option>
+                        <option value="60">60 Hz</option>
+                        <option value="75">75 Hz</option>
+                        <option value="120">120 Hz</option>
+                        <option value="144">144 Hz</option>
+                    </select>
+                </div>
+
+                {/* Hardware Acceleration */}
+                <div className="flex items-center justify-between p-2 bg-slate-900 border border-slate-700 rounded-lg">
+                    <div className="flex items-center gap-3">
+                        <div className="p-2 bg-yellow-500/10 rounded-lg">
+                            <Zap size={18} className="text-yellow-500"/>
+                        </div>
+                        <div>
+                            <div className="text-xs font-bold text-white">Hardware Acceleration</div>
+                            <div className="text-[10px] text-slate-400">Use GPU for rendering</div>
+                        </div>
+                    </div>
+                    <label className="relative inline-flex items-center cursor-pointer">
+                        <input 
+                            type="checkbox" 
+                            className="sr-only peer" 
+                            checked={!!localConfig.display?.hardwareAcceleration}
+                            onChange={(e) => updateDisplaySettings('hardwareAcceleration', e.target.checked)}
+                        />
+                        <div className="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
+                    </label>
+                </div>
+
             </div>
         </section>
 
@@ -1252,6 +1374,17 @@ const App = () => {
 
         if (!osConfig.pinnedAppIds) {
             osConfig.pinnedAppIds = ['file-explorer', 'app-store', 'settings'];
+            configUpdated = true;
+        }
+
+        // --- INIT DEFAULT DISPLAY SETTINGS IF MISSING ---
+        if (!osConfig.display) {
+            osConfig.display = {
+                resolutionMode: 'native',
+                scale: 1,
+                refreshRate: 60,
+                hardwareAcceleration: true
+            };
             configUpdated = true;
         }
 
@@ -1656,6 +1789,17 @@ const App = () => {
          if (!osConfig.installedApps.some(app => app.id === 'figma')) { osConfig.installedApps.push({ id: 'figma', name: 'Figma', url: 'https://www.figma.com', icon: 'https://upload.wikimedia.org/wikipedia/commons/3/33/Figma-logo.svg', type: 'webapp' }); configUpdated = true; }
          if (!osConfig.pinnedAppIds && config?.pinnedAppIds) osConfig.pinnedAppIds = config.pinnedAppIds;
          else if (!osConfig.pinnedAppIds) osConfig.pinnedAppIds = ['file-explorer', 'app-store', 'settings'];
+         
+         // Ensure display config exists after refresh
+         if (!osConfig.display) {
+             osConfig.display = {
+                 resolutionMode: 'native',
+                 scale: 1,
+                 refreshRate: 60,
+                 hardwareAcceleration: true
+             };
+         }
+
          setConfig(osConfig);
          updateNotification(notifId, "System Refreshed", "success");
      } catch(e) { updateNotification(notifId, "Refresh Failed", "error"); }
@@ -1871,83 +2015,136 @@ const App = () => {
       );
   };
 
+  // --- DISPLAY RESOLUTION & SCALE CALCULATION ---
+  const displayConfig = config?.display;
+  const isCustomResolution = displayConfig?.resolutionMode === 'custom' || (displayConfig?.resolutionMode !== 'native' && displayConfig?.resolutionMode);
+  
+  let containerWidth = '100%';
+  let containerHeight = '100%';
+  let containerScale = displayConfig?.scale || 1;
+  let transformOrigin = 'center center';
+
+  if (isCustomResolution) {
+      if (displayConfig?.resolutionMode === 'custom') {
+          containerWidth = `${displayConfig.width || 1920}px`;
+          containerHeight = `${displayConfig.height || 1080}px`;
+      } else if (displayConfig?.resolutionMode) {
+          const [w, h] = displayConfig.resolutionMode.split('x').map(Number);
+          containerWidth = `${w}px`;
+          containerHeight = `${h}px`;
+      }
+  }
+
+  // HW Acceleration Class
+  const accelerationClass = displayConfig?.hardwareAcceleration ? 'gpu-accelerated' : '';
+
   return (
-    <div className="fixed inset-0 w-full h-[100dvh] overflow-hidden bg-slate-900 select-none font-sans touch-none" style={{ backgroundImage: `url(${config?.wallpaper})`, backgroundSize: 'cover', backgroundPosition: 'center' }} onPointerDown={() => { setGlobalContextMenu(null); setSelectedDesktopIcon(null); }} onContextMenu={(e) => { e.preventDefault(); setGlobalContextMenu({ x: e.clientX, y: e.clientY, type: 'desktop' }); }}>
-      {isInteracting && <div className="fixed inset-0 z-[9999] cursor-move bg-transparent touch-none" />}
-      {cropState && <ImageCropper imageFile={cropState.file} onCrop={(croppedFile) => { cropState.callback(croppedFile); setCropState(null); }} onCancel={() => setCropState(null)} />}
-      {!isExplorerRestarting && (
-      <div className="absolute top-0 left-0 bottom-12 w-full p-4 z-0 animate-in fade-in duration-500">
-        <div className="grid grid-cols-[repeat(auto-fill,100px)] grid-rows-[repeat(auto-fill,120px)] h-full gap-2 pointer-events-none">
-            {config?.installedApps.map((app) => {
-                const isSelected = selectedDesktopIcon === app.id;
-                return (
-                <div key={app.id} style={{ position: 'relative', pointerEvents: 'auto' }} onDoubleClick={(e) => { e.stopPropagation(); openApp(app); }} onClick={(e) => { e.stopPropagation(); setSelectedDesktopIcon(app.id); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setSelectedDesktopIcon(app.id); setGlobalContextMenu({ x: e.clientX, y: e.clientY, targetItem: app as any, type: 'app' }); }} className={`w-24 flex flex-col items-center gap-1.5 p-2 rounded-lg cursor-default group transition-all duration-200 select-none ${isSelected ? 'bg-white/20 ring-1 ring-white/30' : 'hover:bg-white/10'}`}>
-                    <div className="w-12 h-12 glass-light rounded-2xl flex items-center justify-center shadow-lg group-hover:scale-105 transition-transform text-white overflow-hidden pointer-events-none">
-                    {app.icon.startsWith('http') ? <img src={app.icon} className="w-full h-full object-cover"/> : app.icon === 'folder' ? <Folder size={28} className="text-blue-400 drop-shadow-lg"/> : app.icon === 'settings' ? <Settings size={28} className="text-slate-300 drop-shadow-lg"/> : app.icon === 'shopping-bag' ? <ShoppingBag size={28} className="text-pink-400 drop-shadow-lg"/> : app.icon === 'image' ? <ImageIcon size={28} className="text-pink-400 drop-shadow-lg" /> : app.icon === 'youtube' ? <Youtube size={28} className="text-red-500 drop-shadow-lg" /> : app.icon === 'file-text' ? <FileText size={28} className="text-yellow-500 drop-shadow-lg"/> : app.icon === 'trash' ? <Trash2 size={28} className="text-red-400 drop-shadow-lg"/> : app.icon === 'calculator' ? <Calculator size={28} className="text-orange-500 drop-shadow-lg"/> : <Globe size={28} className="text-emerald-400 drop-shadow-lg"/>}
-                    </div>
-                    <span className="text-[10px] text-white font-bold text-shadow text-center line-clamp-2 px-1 pointer-events-none">{app.name}</span>
+    <div className={`fixed inset-0 w-full h-[100dvh] bg-black select-none font-sans touch-none overflow-hidden ${accelerationClass}`} onContextMenu={(e) => e.preventDefault()}>
+        <style>{`
+            .gpu-accelerated * {
+                transform: translateZ(0);
+                backface-visibility: hidden;
+            }
+        `}</style>
+        
+        {/* DESKTOP CONTAINER WITH SCALING AND RESOLUTION */}
+        <div 
+            className={`relative overflow-hidden transition-transform duration-300 ease-in-out box-border`}
+            style={{ 
+                width: containerWidth, 
+                height: containerHeight,
+                transform: `scale(${containerScale})`,
+                transformOrigin: 'top left',
+                // Center the container if it's smaller than viewport or scaled
+                position: 'absolute',
+                left: isCustomResolution ? '50%' : '0',
+                top: isCustomResolution ? '50%' : '0',
+                marginLeft: isCustomResolution ? `calc(-1 * (${containerWidth} / 2))` : '0',
+                marginTop: isCustomResolution ? `calc(-1 * (${containerHeight} / 2))` : '0',
+                backgroundImage: `url(${config?.wallpaper})`, 
+                backgroundSize: 'cover', 
+                backgroundPosition: 'center',
+            }}
+            onPointerDown={() => { setGlobalContextMenu(null); setSelectedDesktopIcon(null); }} 
+            onContextMenu={(e) => { e.preventDefault(); setGlobalContextMenu({ x: e.clientX, y: e.clientY, type: 'desktop' }); }}
+        >
+            {isInteracting && <div className="fixed inset-0 z-[9999] cursor-move bg-transparent touch-none" />}
+            {cropState && <ImageCropper imageFile={cropState.file} onCrop={(croppedFile) => { cropState.callback(croppedFile); setCropState(null); }} onCancel={() => setCropState(null)} />}
+            {!isExplorerRestarting && (
+            <div className="absolute top-0 left-0 bottom-12 w-full p-4 z-0 animate-in fade-in duration-500">
+                <div className="grid grid-cols-[repeat(auto-fill,100px)] grid-rows-[repeat(auto-fill,120px)] h-full gap-2 pointer-events-none">
+                    {config?.installedApps.map((app) => {
+                        const isSelected = selectedDesktopIcon === app.id;
+                        return (
+                        <div key={app.id} style={{ position: 'relative', pointerEvents: 'auto' }} onDoubleClick={(e) => { e.stopPropagation(); openApp(app); }} onClick={(e) => { e.stopPropagation(); setSelectedDesktopIcon(app.id); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setSelectedDesktopIcon(app.id); setGlobalContextMenu({ x: e.clientX, y: e.clientY, targetItem: app as any, type: 'app' }); }} className={`w-24 flex flex-col items-center gap-1.5 p-2 rounded-lg cursor-default group transition-all duration-200 select-none ${isSelected ? 'bg-white/20 ring-1 ring-white/30' : 'hover:bg-white/10'}`}>
+                            <div className="w-12 h-12 glass-light rounded-2xl flex items-center justify-center shadow-lg group-hover:scale-105 transition-transform text-white overflow-hidden pointer-events-none">
+                            {app.icon.startsWith('http') ? <img src={app.icon} className="w-full h-full object-cover"/> : app.icon === 'folder' ? <Folder size={28} className="text-blue-400 drop-shadow-lg"/> : app.icon === 'settings' ? <Settings size={28} className="text-slate-300 drop-shadow-lg"/> : app.icon === 'shopping-bag' ? <ShoppingBag size={28} className="text-pink-400 drop-shadow-lg"/> : app.icon === 'image' ? <ImageIcon size={28} className="text-pink-400 drop-shadow-lg" /> : app.icon === 'youtube' ? <Youtube size={28} className="text-red-500 drop-shadow-lg" /> : app.icon === 'file-text' ? <FileText size={28} className="text-yellow-500 drop-shadow-lg"/> : app.icon === 'trash' ? <Trash2 size={28} className="text-red-400 drop-shadow-lg"/> : app.icon === 'calculator' ? <Calculator size={28} className="text-orange-500 drop-shadow-lg"/> : <Globe size={28} className="text-emerald-400 drop-shadow-lg"/>}
+                            </div>
+                            <span className="text-[10px] text-white font-bold text-shadow text-center line-clamp-2 px-1 pointer-events-none">{app.name}</span>
+                        </div>
+                        );
+                    })}
                 </div>
-                );
-            })}
-        </div>
-      </div>
-      )}
-      {windows.map(win => (
-        <div key={win.instanceId} id={`window-${win.instanceId}`} className={`absolute flex flex-col glass rounded-xl shadow-2xl overflow-hidden transition-none animate-window-open ${win.isMaximized ? 'inset-0 !top-0 !left-0 !w-full !h-[calc(100%-48px)] rounded-none' : ''} ${activeWindowId === win.instanceId ? 'z-40 ring-1 ring-white/20 shadow-[0_30px_60px_rgba(0,0,0,0.5)]' : 'z-10'} ${win.isMinimized ? 'hidden' : ''}`} style={!win.isMaximized ? { top: win.position.y, left: win.position.x, width: win.size.w, height: win.size.h } : {}} onPointerDown={() => setActiveWindowId(win.instanceId)} onContextMenu={(e) => e.stopPropagation()}>
-          <div className="h-10 bg-slate-950/40 border-b border-white/5 flex items-center justify-between px-3 select-none cursor-default touch-none" onDoubleClick={() => toggleMaximize(win.instanceId)} onPointerDown={(e) => handleWindowAction(win.instanceId, e, 'move')}>
-            <div className="flex items-center gap-2 pointer-events-none">
-               <div className="w-4 h-4 rounded flex items-center justify-center text-white overflow-hidden bg-slate-800">
-                 {win.appId === 'file-explorer' ? (win.args?.folderId === recycleBinId ? <Trash2 size={10}/> : <Folder size={10}/>) : (win.appId === 'app-store' || win.appId === 'store') ? <ShoppingBag size={10}/> : win.appId === 'settings' ? <Settings size={10}/> : win.appId === 'youtube' ? <Youtube size={10}/> : win.appId === 'notes' ? <FileText size={10}/> : win.appId === 'calculator' ? <Calculator size={10}/> : win.appId === 'task-manager' ? <Activity size={10} /> : win.appData.icon === 'image' ? <ImageIcon size={10}/> : win.appData.icon.startsWith('http') ? <img src={win.appData.icon} className="w-full h-full object-contain"/> : <Globe size={10}/>}
-               </div>
-               <span className="text-[10px] font-bold text-slate-300 tracking-wide uppercase">{win.title}</span>
             </div>
-            <div className="flex items-center" onPointerDown={e => e.stopPropagation()}><button onClick={()=>toggleMinimize(win.instanceId)} className="p-2 hover:bg-white/10 rounded-lg text-white/50"><Minus size={14}/></button><button onClick={()=>toggleMaximize(win.instanceId)} className="p-2 hover:bg-white/10 rounded-lg text-white/50"><Square size={12}/></button><button onClick={()=>closeWindow(win.instanceId)} className="p-2 hover:bg-red-600 rounded-lg text-white/80"><X size={14}/></button></div>
-          </div>
-          <div className="flex-1 overflow-hidden relative">
-            {win.appId === 'file-explorer' && (
-              <FileExplorerApp {...{
-                  currentFolderId: win.args?.folderId !== undefined ? win.args.folderId : currentFolderId, 
-                  setCurrentFolderId: (id: string) => { if(win.args?.folderId !== undefined) handleSetCurrentFolderId(id); else handleSetCurrentFolderId(id); }, 
-                  folderHistory, setFolderHistory, items, setItems, loading, setLoading, systemMap, setSystemMap, dbFileId, setDbFileId, comments, setComments, recycleBinId, setRecycleBinId, systemFolderId, setSystemFolderId, isSavingDB, setIsSavingDB, isSavingComments, setIsSavingComments, triggerCloudSync, triggerCommentSync, handleRefreshComments, addNotification, removeNotification, updateNotification, setModal, modal, setEditingNote, setViewingRawFile, setPreviewImage, handleUploadFiles, executeAction, loadFolder: (id: string) => loadFolder(id || (win.args?.folderId !== undefined ? win.args.folderId : currentFolderId)), selectedIds, setSelectedIds, onContextMenu: (e: any, item: any, isBin: boolean) => { if (item) setGlobalContextMenu({ x: e.clientX, y: e.clientY, targetItem: item, isRecycleBin: isBin, type: 'item' }); else setGlobalContextMenu({ x: e.clientX, y: e.clientY, type: 'folder-background', isRecycleBin: (win.args?.folderId === recycleBinId || currentFolderId === recycleBinId) }); }, openNotesApp: (fileId?: string, isNew?: boolean) => openNotesApp(fileId, isNew)
-              }} />
             )}
-            {win.appId === 'notes' && (<NotesApp initialFileId={win.args?.fileId} isNewNote={win.args?.isNew} initialFolderId={win.args?.folderId} currentFolderId={currentFolderId} filesInFolder={items} systemMap={systemMap} onClose={() => closeWindow(win.instanceId)} onRefresh={() => loadFolder(win.args?.folderId || currentFolderId)} onSaveToCloud={async (id: string, title: string, content: string, targetFolderId?: string) => { const res = await API.saveNoteToDrive(title, content, targetFolderId || win.args?.folderId || currentFolderId, id.startsWith('new-') ? undefined : id); return res?.id; }} />)}
-            {win.appId === 'canva' && <GenericExternalApp app={{id:'canva', name:'Canva', icon: 'https://upload.wikimedia.org/wikipedia/commons/0/08/Canva_icon_2021.svg', type: 'webapp', url: 'https://www.canva.com'}} onLaunch={() => setIsCanvaRunning(true)} onCloseApp={() => setIsCanvaRunning(false)} onMinimize={() => toggleMinimize(win.instanceId)} />}
-            {win.appId === 'figma' && <GenericExternalApp app={{id:'figma', name:'Figma', icon: 'https://upload.wikimedia.org/wikipedia/commons/3/33/Figma-logo.svg', type: 'webapp', url: 'https://www.figma.com'}} onLaunch={() => setIsFigmaRunning(true)} onCloseApp={() => setIsFigmaRunning(false)} onMinimize={() => toggleMinimize(win.instanceId)} />}
-            {win.appData.url === 'internal://gallery' && (<GalleryApp items={items} loading={loading} onUpload={(files: any) => handleUploadFiles(Array.from(files))} onDelete={async (id: string) => { const notif = addNotification("Menghapus foto...", "loading"); try { await API.deleteItems([id]); updateNotification(notif, "Foto terhapus", "success"); loadFolder(currentFolderId); } catch (e) { updateNotification(notif, "Gagal menghapus", "error"); } }} />)}
-            {win.appId === 'youtube' && <YouTubeApp customKeys={config?.youtubeApiKeys} />}
-            {win.appId === 'calculator' && <CalculatorApp />}
-            {win.appId === 'task-manager' && (<TaskManagerApp windows={windows.filter(w => w.appId !== 'task-manager')} onCloseWindow={closeWindow} onRestartTask={handleRestartTask} />)}
-            {win.appId === 'settings' && <SettingsApp config={config!} systemFolderId={systemFolderId} addNotification={addNotification} onSave={async (c:any)=>{ try { await API.saveSystemConfig(c); setConfig(c); addNotification("Pengaturan disimpan", "success"); } catch(e) { addNotification("Gagal menyimpan", "error"); } }} installPrompt={deferredPrompt} onInstallPWA={handleInstallClick} onRequestCrop={handleRequestCrop} />}
-            {(win.appId === 'app-store' || win.appId === 'store') && <AppStoreApp config={config!} setConfig={setConfig} addNotification={addNotification} systemFolderId={systemFolderId} onRequestCrop={handleRequestCrop} />}
-            {(win.appData.type === 'webapp') && win.appId !== 'youtube' && win.appId !== 'canva' && win.appId !== 'figma' && win.appId !== 'calculator' && ( win.appData.launchMode === 'external' ? (<GenericExternalApp app={win.appData} onLaunch={() => {}} onCloseApp={() => closeWindow(win.instanceId)} onMinimize={() => toggleMinimize(win.instanceId)} />) : (<div className="h-full flex flex-col bg-white"> {!win.appData.hideAddressBar && (<div className="p-1 bg-slate-100 flex items-center justify-between gap-2 border-b"><div className="flex items-center gap-2 flex-1 min-w-0"><Globe size={12} className="text-slate-400 ml-2 flex-shrink-0"/><input className="flex-1 bg-white px-3 py-1 rounded-lg border-none text-[10px] outline-none text-slate-800" value={win.appData.url} readOnly /></div><button onClick={() => window.open(win.appData.url, '_blank')} className="p-1.5 hover:bg-slate-200 rounded text-slate-500"><ExternalLink size={14}/></button></div>)}<iframe src={win.appData.url} className="flex-1 w-full border-none" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation" /></div>) )}
-          </div>
-          {!win.isMaximized && (<><div className="absolute top-0 left-0 w-1.5 h-full cursor-ew-resize hover:bg-white/10 touch-none" onPointerDown={(e) => handleWindowAction(win.instanceId, e, 'resize', 'left')} /><div className="absolute top-0 right-0 w-1.5 h-full cursor-ew-resize hover:bg-white/10 touch-none" onPointerDown={(e) => handleWindowAction(win.instanceId, e, 'resize', 'right')} /><div className="absolute bottom-0 left-0 w-full h-1.5 cursor-ns-resize hover:bg-white/10 touch-none" onPointerDown={(e) => handleWindowAction(win.instanceId, e, 'resize', 'bottom')} /><div className="absolute bottom-0 right-0 w-4 h-4 cursor-nwse-resize hover:bg-blue-400/30 z-[60] touch-none" onPointerDown={(e) => handleWindowAction(win.instanceId, e, 'resize', 'bottom-right')} /></>)}
+            {windows.map(win => (
+                <div key={win.instanceId} id={`window-${win.instanceId}`} className={`absolute flex flex-col glass rounded-xl shadow-2xl overflow-hidden transition-none animate-window-open ${win.isMaximized ? 'inset-0 !top-0 !left-0 !w-full !h-[calc(100%-48px)] rounded-none' : ''} ${activeWindowId === win.instanceId ? 'z-40 ring-1 ring-white/20 shadow-[0_30px_60px_rgba(0,0,0,0.5)]' : 'z-10'} ${win.isMinimized ? 'hidden' : ''}`} style={!win.isMaximized ? { top: win.position.y, left: win.position.x, width: win.size.w, height: win.size.h } : {}} onPointerDown={() => setActiveWindowId(win.instanceId)} onContextMenu={(e) => e.stopPropagation()}>
+                <div className="h-10 bg-slate-950/40 border-b border-white/5 flex items-center justify-between px-3 select-none cursor-default touch-none" onDoubleClick={() => toggleMaximize(win.instanceId)} onPointerDown={(e) => handleWindowAction(win.instanceId, e, 'move')}>
+                    <div className="flex items-center gap-2 pointer-events-none">
+                    <div className="w-4 h-4 rounded flex items-center justify-center text-white overflow-hidden bg-slate-800">
+                        {win.appId === 'file-explorer' ? (win.args?.folderId === recycleBinId ? <Trash2 size={10}/> : <Folder size={10}/>) : (win.appId === 'app-store' || win.appId === 'store') ? <ShoppingBag size={10}/> : win.appId === 'settings' ? <Settings size={10}/> : win.appId === 'youtube' ? <Youtube size={10}/> : win.appId === 'notes' ? <FileText size={10}/> : win.appId === 'calculator' ? <Calculator size={10}/> : win.appId === 'task-manager' ? <Activity size={10} /> : win.appData.icon === 'image' ? <ImageIcon size={10}/> : win.appData.icon.startsWith('http') ? <img src={win.appData.icon} className="w-full h-full object-contain"/> : <Globe size={10}/>}
+                    </div>
+                    <span className="text-[10px] font-bold text-slate-300 tracking-wide uppercase">{win.title}</span>
+                    </div>
+                    <div className="flex items-center" onPointerDown={e => e.stopPropagation()}><button onClick={()=>toggleMinimize(win.instanceId)} className="p-2 hover:bg-white/10 rounded-lg text-white/50"><Minus size={14}/></button><button onClick={()=>toggleMaximize(win.instanceId)} className="p-2 hover:bg-white/10 rounded-lg text-white/50"><Square size={12}/></button><button onClick={()=>closeWindow(win.instanceId)} className="p-2 hover:bg-red-600 rounded-lg text-white/80"><X size={14}/></button></div>
+                </div>
+                <div className="flex-1 overflow-hidden relative">
+                    {win.appId === 'file-explorer' && (
+                    <FileExplorerApp {...{
+                        currentFolderId: win.args?.folderId !== undefined ? win.args.folderId : currentFolderId, 
+                        setCurrentFolderId: (id: string) => { if(win.args?.folderId !== undefined) handleSetCurrentFolderId(id); else handleSetCurrentFolderId(id); }, 
+                        folderHistory, setFolderHistory, items, setItems, loading, setLoading, systemMap, setSystemMap, dbFileId, setDbFileId, comments, setComments, recycleBinId, setRecycleBinId, systemFolderId, setSystemFolderId, isSavingDB, setIsSavingDB, isSavingComments, setIsSavingComments, triggerCloudSync, triggerCommentSync, handleRefreshComments, addNotification, removeNotification, updateNotification, setModal, modal, setEditingNote, setViewingRawFile, setPreviewImage, handleUploadFiles, executeAction, loadFolder: (id: string) => loadFolder(id || (win.args?.folderId !== undefined ? win.args.folderId : currentFolderId)), selectedIds, setSelectedIds, onContextMenu: (e: any, item: any, isBin: boolean) => { if (item) setGlobalContextMenu({ x: e.clientX, y: e.clientY, targetItem: item, isRecycleBin: isBin, type: 'item' }); else setGlobalContextMenu({ x: e.clientX, y: e.clientY, type: 'folder-background', isRecycleBin: (win.args?.folderId === recycleBinId || currentFolderId === recycleBinId) }); }, openNotesApp: (fileId?: string, isNew?: boolean) => openNotesApp(fileId, isNew)
+                    }} />
+                    )}
+                    {win.appId === 'notes' && (<NotesApp initialFileId={win.args?.fileId} isNewNote={win.args?.isNew} initialFolderId={win.args?.folderId} currentFolderId={currentFolderId} filesInFolder={items} systemMap={systemMap} onClose={() => closeWindow(win.instanceId)} onRefresh={() => loadFolder(win.args?.folderId || currentFolderId)} onSaveToCloud={async (id: string, title: string, content: string, targetFolderId?: string) => { const res = await API.saveNoteToDrive(title, content, targetFolderId || win.args?.folderId || currentFolderId, id.startsWith('new-') ? undefined : id); return res?.id; }} />)}
+                    {win.appId === 'canva' && <GenericExternalApp app={{id:'canva', name:'Canva', icon: 'https://upload.wikimedia.org/wikipedia/commons/0/08/Canva_icon_2021.svg', type: 'webapp', url: 'https://www.canva.com'}} onLaunch={() => setIsCanvaRunning(true)} onCloseApp={() => setIsCanvaRunning(false)} onMinimize={() => toggleMinimize(win.instanceId)} />}
+                    {win.appId === 'figma' && <GenericExternalApp app={{id:'figma', name:'Figma', icon: 'https://upload.wikimedia.org/wikipedia/commons/3/33/Figma-logo.svg', type: 'webapp', url: 'https://www.figma.com'}} onLaunch={() => setIsFigmaRunning(true)} onCloseApp={() => setIsFigmaRunning(false)} onMinimize={() => toggleMinimize(win.instanceId)} />}
+                    {win.appData.url === 'internal://gallery' && (<GalleryApp items={items} loading={loading} onUpload={(files: any) => handleUploadFiles(Array.from(files))} onDelete={async (id: string) => { const notif = addNotification("Menghapus foto...", "loading"); try { await API.deleteItems([id]); updateNotification(notif, "Foto terhapus", "success"); loadFolder(currentFolderId); } catch (e) { updateNotification(notif, "Gagal menghapus", "error"); } }} />)}
+                    {win.appId === 'youtube' && <YouTubeApp customKeys={config?.youtubeApiKeys} />}
+                    {win.appId === 'calculator' && <CalculatorApp />}
+                    {win.appId === 'task-manager' && (<TaskManagerApp windows={windows.filter(w => w.appId !== 'task-manager')} onCloseWindow={closeWindow} onRestartTask={handleRestartTask} />)}
+                    {win.appId === 'settings' && <SettingsApp config={config!} systemFolderId={systemFolderId} addNotification={addNotification} onSave={async (c:any)=>{ try { await API.saveSystemConfig(c); setConfig(c); addNotification("Pengaturan disimpan", "success"); } catch(e) { addNotification("Gagal menyimpan", "error"); } }} installPrompt={deferredPrompt} onInstallPWA={handleInstallClick} onRequestCrop={handleRequestCrop} />}
+                    {(win.appId === 'app-store' || win.appId === 'store') && <AppStoreApp config={config!} setConfig={setConfig} addNotification={addNotification} systemFolderId={systemFolderId} onRequestCrop={handleRequestCrop} />}
+                    {(win.appData.type === 'webapp') && win.appId !== 'youtube' && win.appId !== 'canva' && win.appId !== 'figma' && win.appId !== 'calculator' && ( win.appData.launchMode === 'external' ? (<GenericExternalApp app={win.appData} onLaunch={() => {}} onCloseApp={() => closeWindow(win.instanceId)} onMinimize={() => toggleMinimize(win.instanceId)} />) : (<div className="h-full flex flex-col bg-white"> {!win.appData.hideAddressBar && (<div className="p-1 bg-slate-100 flex items-center justify-between gap-2 border-b"><div className="flex items-center gap-2 flex-1 min-w-0"><Globe size={12} className="text-slate-400 ml-2 flex-shrink-0"/><input className="flex-1 bg-white px-3 py-1 rounded-lg border-none text-[10px] outline-none text-slate-800" value={win.appData.url} readOnly /></div><button onClick={() => window.open(win.appData.url, '_blank')} className="p-1.5 hover:bg-slate-200 rounded text-slate-500"><ExternalLink size={14}/></button></div>)}<iframe src={win.appData.url} className="flex-1 w-full border-none" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation" /></div>) )}
+                </div>
+                {!win.isMaximized && (<><div className="absolute top-0 left-0 w-1.5 h-full cursor-ew-resize hover:bg-white/10 touch-none" onPointerDown={(e) => handleWindowAction(win.instanceId, e, 'resize', 'left')} /><div className="absolute top-0 right-0 w-1.5 h-full cursor-ew-resize hover:bg-white/10 touch-none" onPointerDown={(e) => handleWindowAction(win.instanceId, e, 'resize', 'right')} /><div className="absolute bottom-0 left-0 w-full h-1.5 cursor-ns-resize hover:bg-white/10 touch-none" onPointerDown={(e) => handleWindowAction(win.instanceId, e, 'resize', 'bottom')} /><div className="absolute bottom-0 right-0 w-4 h-4 cursor-nwse-resize hover:bg-blue-400/30 z-[60] touch-none" onPointerDown={(e) => handleWindowAction(win.instanceId, e, 'resize', 'bottom-right')} /></>)}
+                </div>
+            ))}
+            {(isSavingDB || isSavingComments) && (<div className="fixed bottom-16 right-4 z-[200] bg-slate-800/90 border border-slate-600 p-3 rounded-xl shadow-2xl flex items-center gap-3 animate-in slide-in-from-right-10 duration-500"><Loader2 size={20} className="animate-spin text-blue-400"/><div className="flex flex-col"><span className="text-xs font-bold text-white">Syncing Cloud Database...</span><span className="text-[10px] text-slate-400">Do not close window</span></div></div>)}
+            {startMenuOpen && !isExplorerRestarting && (<div className="absolute bottom-16 left-2 sm:left-4 w-[600px] max-w-[calc(100vw-16px)] h-[550px] max-h-[80vh] glass rounded-3xl shadow-[0_32px_64px_rgba(0,0,0,0.5)] z-[60] p-8 flex flex-col animate-in slide-in-from-bottom-5 duration-200"><div className="grid grid-cols-4 sm:grid-cols-6 gap-6 flex-1 content-start overflow-y-auto pr-2 no-scrollbar">{config?.installedApps.map(app => (<button key={app.id} onClick={()=>openApp(app)} className="flex flex-col items-center gap-2 group"><div className="w-12 h-12 bg-white/5 hover:bg-white/10 rounded-2xl flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform overflow-hidden">{app.icon.startsWith('http') ? <img src={app.icon} className="w-full h-full object-cover"/> : app.icon === 'folder' ? <Folder size={24} className="text-blue-400"/> : app.icon === 'settings' ? <Settings size={24} className="text-slate-300"/> : app.icon === 'shopping-bag' ? <ShoppingBag size={24} className="text-pink-400"/> : app.icon === 'image' ? <ImageIcon size={24} className="text-pink-400" /> : app.icon === 'youtube' ? <Youtube size={24} className="text-red-500"/> : app.icon === 'file-text' ? <FileText size={24} className="text-yellow-500"/> : app.icon === 'trash' ? <Trash2 size={24} className="text-red-400"/> : app.icon === 'calculator' ? <Calculator size={24} className="text-orange-500"/> : <Globe size={24} className="text-emerald-400"/>}</div><span className="text-[10px] text-white font-medium truncate w-full text-center group-hover:text-blue-400">{app.name}</span></button>))}</div><div className="mt-auto pt-6 border-t border-white/5 flex items-center justify-between"><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center text-xs font-bold text-white shadow-xl">ZD</div><div className="flex flex-col"><span className="text-xs font-bold text-white">Cloud User</span><span className="text-[10px] text-slate-400">Personal Account</span></div></div></div></div>)}
+            {!isExplorerRestarting && (
+            <div className="absolute bottom-0 left-0 right-0 h-12 glass border-t border-white/5 flex items-center px-4 z-[9999] animate-in slide-in-from-bottom-2" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setGlobalContextMenu({ x: e.clientX, y: e.clientY, type: 'taskbar' }); }}>
+                <button onClick={() => setStartMenuOpen(!startMenuOpen)} className={`p-2 rounded-xl hover:bg-white/10 transition-all flex-shrink-0 mr-2 flex items-center justify-center ${startMenuOpen ? 'bg-white/10 scale-90' : ''}`} style={{ width: 44, height: 44 }}>
+                {config?.taskbarIcon?.mode === 'custom' && config.taskbarIcon.customUrl ? (
+                    <img src={config.taskbarIcon.customUrl} className="w-6 h-6 object-contain" />
+                ) : (
+                    <Grid size={24} className="text-blue-400"/>
+                )}
+                </button>
+                <div className="hidden sm:flex items-center mr-2 border-r border-white/10 pr-2"><button onClick={toggleFullscreen} className="p-2 rounded-xl hover:bg-white/10 transition-all text-white/50 hover:text-white" title="Toggle Fullscreen">{isFullscreen ? <Minimize2 size={20}/> : <Maximize2 size={20}/>}</button></div> 
+                <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar flex-1 justify-start">
+                {pinnedApps.map(app => { const appWindows = windows.filter(w => w.appId === app.id); if (appWindows.length > 0) return appWindows.map(win => renderTaskbarIcon(win, app)); return renderTaskbarIcon(null, app, true); })}
+                {unpinnedWindows.map(win => renderTaskbarIcon(win, win.appData))}
+                </div>
+                <div className="flex items-center gap-2 ml-auto pl-2 flex-shrink-0">
+                    {isCanvaRunning && (<div className="px-2 sm:px-4 flex items-center gap-2 border-l border-white/10 animate-in fade-in duration-300"><span className="relative flex h-3 w-3 flex-shrink-0"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75"></span><span className="relative inline-flex rounded-full h-3 w-3 bg-purple-500"></span></span><span className="text-xs text-purple-300 font-bold whitespace-nowrap hidden md:inline">Canva Active</span><button onClick={() => alert("Gunakan task switcher untuk kembali ke Canva.")} className="text-[10px] bg-white/10 px-2 py-1 rounded hover:bg-white/20 text-white ml-1 whitespace-nowrap">Switch</button><button onClick={() => setIsCanvaRunning(false)} className="text-[10px] bg-red-500/20 px-2 py-1 rounded hover:bg-red-500/30 text-red-400 ml-1"><X size={12} /></button></div>)}
+                    {isFigmaRunning && (<div className="px-2 sm:px-4 flex items-center gap-2 border-l border-white/10 animate-in fade-in duration-300"><span className="relative flex h-3 w-3 flex-shrink-0"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span><span className="relative inline-flex rounded-full h-3 w-3 bg-orange-500"></span></span><span className="text-xs text-orange-300 font-bold whitespace-nowrap hidden md:inline">Figma Active</span><button onClick={() => alert("Gunakan task switcher untuk kembali ke Figma.")} className="text-[10px] bg-white/10 px-2 py-1 rounded hover:bg-white/20 text-white ml-1 whitespace-nowrap">Switch</button><button onClick={() => setIsFigmaRunning(false)} className="text-[10px] bg-red-500/20 px-2 py-1 rounded hover:bg-red-500/30 text-red-400 ml-1"><X size={12} /></button></div>)}
+                    <div className="flex items-center gap-3 text-white justify-end hidden sm:flex border-l border-white/10 pl-4 ml-2"><div className="flex flex-col items-end leading-none font-bold"><span className="text-[10px]">{clock.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span><span className="text-[8px] text-slate-400">{clock.toLocaleDateString([], {day:'2-digit', month:'2-digit'})}</span></div></div>
+                </div>
+            </div>
+            )}
         </div>
-      ))}
-      {(isSavingDB || isSavingComments) && (<div className="fixed bottom-16 right-4 z-[200] bg-slate-800/90 border border-slate-600 p-3 rounded-xl shadow-2xl flex items-center gap-3 animate-in slide-in-from-right-10 duration-500"><Loader2 size={20} className="animate-spin text-blue-400"/><div className="flex flex-col"><span className="text-xs font-bold text-white">Syncing Cloud Database...</span><span className="text-[10px] text-slate-400">Do not close window</span></div></div>)}
-      {startMenuOpen && !isExplorerRestarting && (<div className="absolute bottom-16 left-2 sm:left-4 w-[600px] max-w-[calc(100vw-16px)] h-[550px] max-h-[80vh] glass rounded-3xl shadow-[0_32px_64px_rgba(0,0,0,0.5)] z-[60] p-8 flex flex-col animate-in slide-in-from-bottom-5 duration-200"><div className="grid grid-cols-4 sm:grid-cols-6 gap-6 flex-1 content-start overflow-y-auto pr-2 no-scrollbar">{config?.installedApps.map(app => (<button key={app.id} onClick={()=>openApp(app)} className="flex flex-col items-center gap-2 group"><div className="w-12 h-12 bg-white/5 hover:bg-white/10 rounded-2xl flex items-center justify-center shadow-lg group-hover:scale-110 transition-transform overflow-hidden">{app.icon.startsWith('http') ? <img src={app.icon} className="w-full h-full object-cover"/> : app.icon === 'folder' ? <Folder size={24} className="text-blue-400"/> : app.icon === 'settings' ? <Settings size={24} className="text-slate-300"/> : app.icon === 'shopping-bag' ? <ShoppingBag size={24} className="text-pink-400"/> : app.icon === 'image' ? <ImageIcon size={24} className="text-pink-400" /> : app.icon === 'youtube' ? <Youtube size={24} className="text-red-500"/> : app.icon === 'file-text' ? <FileText size={24} className="text-yellow-500"/> : app.icon === 'trash' ? <Trash2 size={24} className="text-red-400"/> : app.icon === 'calculator' ? <Calculator size={24} className="text-orange-500"/> : <Globe size={24} className="text-emerald-400"/>}</div><span className="text-[10px] text-white font-medium truncate w-full text-center group-hover:text-blue-400">{app.name}</span></button>))}</div><div className="mt-auto pt-6 border-t border-white/5 flex items-center justify-between"><div className="flex items-center gap-3"><div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center text-xs font-bold text-white shadow-xl">ZD</div><div className="flex flex-col"><span className="text-xs font-bold text-white">Cloud User</span><span className="text-[10px] text-slate-400">Personal Account</span></div></div></div></div>)}
-      {!isExplorerRestarting && (
-      <div className="fixed bottom-0 left-0 right-0 h-12 glass border-t border-white/5 flex items-center px-4 z-[9999] animate-in slide-in-from-bottom-2" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); setGlobalContextMenu({ x: e.clientX, y: e.clientY, type: 'taskbar' }); }}>
-        <button onClick={() => setStartMenuOpen(!startMenuOpen)} className={`p-2 rounded-xl hover:bg-white/10 transition-all flex-shrink-0 mr-2 flex items-center justify-center ${startMenuOpen ? 'bg-white/10 scale-90' : ''}`} style={{ width: 44, height: 44 }}>
-           {config?.taskbarIcon?.mode === 'custom' && config.taskbarIcon.customUrl ? (
-              <img src={config.taskbarIcon.customUrl} className="w-6 h-6 object-contain" />
-           ) : (
-              <Grid size={24} className="text-blue-400"/>
-           )}
-        </button>
-        <div className="hidden sm:flex items-center mr-2 border-r border-white/10 pr-2"><button onClick={toggleFullscreen} className="p-2 rounded-xl hover:bg-white/10 transition-all text-white/50 hover:text-white" title="Toggle Fullscreen">{isFullscreen ? <Minimize2 size={20}/> : <Maximize2 size={20}/>}</button></div> 
-        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar flex-1 justify-start">
-           {pinnedApps.map(app => { const appWindows = windows.filter(w => w.appId === app.id); if (appWindows.length > 0) return appWindows.map(win => renderTaskbarIcon(win, app)); return renderTaskbarIcon(null, app, true); })}
-           {unpinnedWindows.map(win => renderTaskbarIcon(win, win.appData))}
-        </div>
-        <div className="flex items-center gap-2 ml-auto pl-2 flex-shrink-0">
-            {isCanvaRunning && (<div className="px-2 sm:px-4 flex items-center gap-2 border-l border-white/10 animate-in fade-in duration-300"><span className="relative flex h-3 w-3 flex-shrink-0"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75"></span><span className="relative inline-flex rounded-full h-3 w-3 bg-purple-500"></span></span><span className="text-xs text-purple-300 font-bold whitespace-nowrap hidden md:inline">Canva Active</span><button onClick={() => alert("Gunakan task switcher untuk kembali ke Canva.")} className="text-[10px] bg-white/10 px-2 py-1 rounded hover:bg-white/20 text-white ml-1 whitespace-nowrap">Switch</button><button onClick={() => setIsCanvaRunning(false)} className="text-[10px] bg-red-500/20 px-2 py-1 rounded hover:bg-red-500/30 text-red-400 ml-1"><X size={12} /></button></div>)}
-            {isFigmaRunning && (<div className="px-2 sm:px-4 flex items-center gap-2 border-l border-white/10 animate-in fade-in duration-300"><span className="relative flex h-3 w-3 flex-shrink-0"><span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span><span className="relative inline-flex rounded-full h-3 w-3 bg-orange-500"></span></span><span className="text-xs text-orange-300 font-bold whitespace-nowrap hidden md:inline">Figma Active</span><button onClick={() => alert("Gunakan task switcher untuk kembali ke Figma.")} className="text-[10px] bg-white/10 px-2 py-1 rounded hover:bg-white/20 text-white ml-1 whitespace-nowrap">Switch</button><button onClick={() => setIsFigmaRunning(false)} className="text-[10px] bg-red-500/20 px-2 py-1 rounded hover:bg-red-500/30 text-red-400 ml-1"><X size={12} /></button></div>)}
-            <div className="flex items-center gap-3 text-white justify-end hidden sm:flex border-l border-white/10 pl-4 ml-2"><div className="flex flex-col items-end leading-none font-bold"><span className="text-[10px]">{clock.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span><span className="text-[8px] text-slate-400">{clock.toLocaleDateString([], {day:'2-digit', month:'2-digit'})}</span></div></div>
-        </div>
-      </div>
-      )}
+
       {globalContextMenu && (<div className={`absolute z-[1001] bg-slate-900 border border-slate-700 rounded-lg shadow-2xl py-1 min-w-[180px] animate-in zoom-in-95 duration-100 overflow-hidden ${globalContextMenu.type?.startsWith('taskbar') ? 'origin-bottom-left' : 'origin-top-left'}`} style={{ top: globalContextMenu.type?.startsWith('taskbar') ? 'auto' : globalContextMenu.y, left: globalContextMenu.x, bottom: globalContextMenu.type?.startsWith('taskbar') ? 60 : 'auto' }} onPointerDown={(e) => e.stopPropagation()} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}> {globalContextMenu.type === 'taskbar-item' ? (<>{pinnedAppIds.includes(globalContextMenu.targetItem.id) ? (<button onClick={() => { handleUnpinApp(globalContextMenu.targetItem.id); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><PinOff size={14} className="text-slate-400"/> Unpin from taskbar</button>) : (<button onClick={() => { handlePinApp(globalContextMenu.targetItem.id); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><Pin size={14} className="text-slate-400"/> Pin to taskbar</button>)}<div className="h-px bg-slate-800 my-1"></div>{globalContextMenu.windowId && (<button onClick={() => { closeWindow(globalContextMenu.windowId!); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-500 text-xs flex items-center gap-2"><X size={14}/> Close window</button>)}{!globalContextMenu.windowId && (<button onClick={() => { openApp(globalContextMenu.targetItem); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><ExternalLink size={14}/> Open</button>)}</>) : globalContextMenu.type === 'app' ? (<><button onClick={() => { openApp(globalContextMenu.targetItem as API.AppDefinition); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><ExternalLink size={14}/> Open</button>{!pinnedAppIds.includes((globalContextMenu.targetItem as API.AppDefinition).id) && (<button onClick={() => { handlePinApp((globalContextMenu.targetItem as API.AppDefinition).id); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><Pin size={14}/> Pin to taskbar</button>)}{(globalContextMenu.targetItem?.type === 'webapp' || globalContextMenu.targetItem?.id === 'youtube' || globalContextMenu.targetItem?.type === 'system') && (<button onClick={() => { setModal({ type: 'properties', title: `${globalContextMenu.targetItem?.name} Properties`, targetItem: globalContextMenu.targetItem as any }); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><Settings size={14}/> Properties</button>)}{globalContextMenu.targetItem?.id === 'recycle-bin' && (<><div className="h-px bg-slate-800 my-1"></div><button onClick={() => { executeAction('restore_all'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-green-400"><RotateCcw size={14}/> Restore All</button><button onClick={() => { executeAction('empty_bin'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-500 text-xs flex items-center gap-2"><Trash2 size={14}/> Empty Recycle Bin</button></>)}</>) : globalContextMenu.type === 'item' && globalContextMenu.targetItem ? (<><button onClick={() => { const itm = globalContextMenu.targetItem as Item; if(itm.type === 'folder') loadFolder(itm.id); else if(itm.type === 'note') openNotesApp(itm.id); else if(itm.type === 'image') setPreviewImage(itm.url || null); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-white font-bold"><ExternalLink size={14}/> Open</button>{globalContextMenu.targetItem.id !== systemFolderId && globalContextMenu.targetItem.name !== SYSTEM_FOLDER_NAME && (<>{globalContextMenu.targetItem.id === recycleBinId || globalContextMenu.targetItem.name === RECYCLE_BIN_NAME ? (<><div className="h-px bg-slate-800 my-1"></div><button onClick={() => { executeAction('restore_all'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-green-400"><RotateCcw size={14}/> Restore All</button><button onClick={() => { executeAction('empty_bin'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-500 text-xs flex items-center gap-2"><Trash2 size={14}/> Empty Recycle Bin</button></>) : (<>{!globalContextMenu.isRecycleBin && (<><button onClick={() => { executeAction('rename', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><Edit size={14}/> Rename</button><button onClick={() => { executeAction('download', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-emerald-400"><Download size={14}/> Download</button><button onClick={() => { executeAction('comment', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><MessageSquare size={14}/> Comment</button><button onClick={() => { executeAction('move', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><Move size={14}/> Move</button></>)}{globalContextMenu.isRecycleBin ? (<><div className="h-px bg-slate-800 my-1"></div><button onClick={() => { executeAction('restore', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-green-400"><RotateCcw size={14}/> Restore</button></>) : (<div className="h-px bg-slate-800 my-1"></div>)}<button onClick={() => { executeAction('delete', [globalContextMenu.targetItem!.id]); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-500 text-xs flex items-center gap-2"><Trash2 size={14}/> {globalContextMenu.isRecycleBin ? 'Delete Permanent' : 'Delete'}</button></>)}</>)}</>) : globalContextMenu.type === 'folder-background' ? (globalContextMenu.isRecycleBin ? (<><button onClick={() => { executeAction('restore_all'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-green-400"><RotateCcw size={14}/> Restore All</button><button onClick={() => { executeAction('empty_bin'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-500 text-xs flex items-center gap-2"><Trash2 size={14}/> Empty Recycle Bin</button><div className="h-px bg-slate-800 my-1"></div><button onClick={() => { loadFolder(currentFolderId); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><RefreshCw size={14}/> Refresh</button></>) : (<><button onClick={() => { executeAction('new_folder'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><Folder size={14}/> New Folder</button><button onClick={() => { openNotesApp(undefined, true); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><FileText size={14}/> New Note</button><button onClick={() => { executeAction('native_upload'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-green-400"><Upload size={14}/> Upload File</button><div className="h-px bg-slate-800 my-1"></div><button onClick={() => { loadFolder(currentFolderId); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><RefreshCw size={14}/> Refresh</button></>)) : globalContextMenu.type === 'taskbar' ? (<><button onClick={() => { openTaskManager(); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><Activity size={14}/> Task Manager</button><div className="h-px bg-slate-800 my-1"></div><button onClick={() => { setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-400">Cancel</button></>) : (<><button onClick={() => { handleRefreshDesktop(); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><RefreshCcw size={14}/> Refresh System</button><div className="h-px bg-slate-800 my-1"></div><button onClick={() => { setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-400">Cancel</button></>)} </div>)}
       <UploadProgress uploads={uploadQueue} onClose={() => setUploadQueue([])} onRemove={(id) => setUploadQueue(prev => prev.filter(u => u.id !== id))} />
       <DownloadProgress downloads={downloadQueue} onClose={() => setDownloadQueue([])} onClearCompleted={() => setDownloadQueue(prev => prev.filter(d => d.status !== 'completed'))} />
