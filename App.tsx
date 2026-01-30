@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { 
   Folder, FileText, Image as ImageIcon, MoreVertical, 
@@ -2023,7 +2022,7 @@ const App = () => {
 
       {/* START MENU */}
       {startMenuOpen && (
-        <div className="absolute bottom-16 left-1/2 -translate-x-1/2 w-[600px] max-w-[95vw] h-[550px] max-h-[80vh] glass rounded-3xl shadow-[0_32px_64px_rgba(0,0,0,0.5)] z-[60] p-8 flex flex-col animate-in slide-in-from-bottom-5 duration-200">
+        <div className="absolute bottom-16 left-2 sm:left-4 w-[600px] max-w-[calc(100vw-16px)] h-[550px] max-h-[80vh] glass rounded-3xl shadow-[0_32px_64px_rgba(0,0,0,0.5)] z-[60] p-8 flex flex-col animate-in slide-in-from-bottom-5 duration-200">
           <div className="grid grid-cols-4 sm:grid-cols-6 gap-6 flex-1 content-start overflow-y-auto pr-2 no-scrollbar">
              {config?.installedApps.map(app => (
                <button key={app.id} onClick={()=>openApp(app)} className="flex flex-col items-center gap-2 group">
@@ -2055,17 +2054,23 @@ const App = () => {
       )}
 
       {/* TASKBAR - FIXED POSITION */}
-      <div className="fixed bottom-0 left-0 right-0 h-12 glass border-t border-white/5 flex items-center justify-between px-4 z-[9999]"
+      <div className="fixed bottom-0 left-0 right-0 h-12 glass border-t border-white/5 flex items-center px-4 z-[9999]"
            style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
-        <div className="w-24 flex items-center gap-2 hidden sm:flex">
+        
+        {/* START BUTTON */}
+        <button onClick={() => setStartMenuOpen(!startMenuOpen)} className={`p-2.5 rounded-xl hover:bg-white/10 transition-all flex-shrink-0 mr-2 ${startMenuOpen ? 'bg-white/10 scale-90' : ''}`}>
+           <Grid size={24} className="text-blue-400"/>
+        </button>
+
+        {/* FULLSCREEN TOGGLE (Desktop) */}
+        <div className="hidden sm:flex items-center mr-2 border-r border-white/10 pr-2">
             <button onClick={toggleFullscreen} className="p-2 rounded-xl hover:bg-white/10 transition-all text-white/50 hover:text-white" title="Toggle Fullscreen">
                 {isFullscreen ? <Minimize2 size={20}/> : <Maximize2 size={20}/>}
             </button>
         </div> 
 
-        <div className="flex items-center gap-1.5 mx-auto sm:mx-0 overflow-x-auto no-scrollbar max-w-full">
-           <button onClick={() => setStartMenuOpen(!startMenuOpen)} className={`p-2.5 rounded-xl hover:bg-white/10 transition-all flex-shrink-0 ${startMenuOpen ? 'bg-white/10 scale-90' : ''}`}><Grid size={24} className="text-blue-400"/></button>
-           <div className="w-px h-6 bg-white/5 mx-2 flex-shrink-0"></div>
+        {/* APP ICONS */}
+        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar flex-1 justify-start">
            {windows.map(win => (
              <button key={win.instanceId} onClick={() => { if (win.isMinimized) toggleMinimize(win.instanceId); setActiveWindowId(win.instanceId); }}
                      className={`p-2 rounded-xl hover:bg-white/10 transition-all relative group flex-shrink-0 ${activeWindowId === win.instanceId && !win.isMinimized ? 'bg-white/10' : 'opacity-60'}`}>
@@ -2084,61 +2089,40 @@ const App = () => {
            ))}
         </div>
         
-        {/* Indikator Spesial Canva - Visible on Mobile */}
-        {isCanvaRunning && (
-            <div className="px-2 sm:px-4 flex items-center gap-2 border-l border-white/10 ml-2 animate-in fade-in duration-300">
-                <span className="relative flex h-3 w-3 flex-shrink-0">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-3 w-3 bg-purple-500"></span>
-                </span>
-                <span className="text-xs text-purple-300 font-bold whitespace-nowrap hidden md:inline">Canva Active</span>
-                
-                <button 
-                onClick={() => alert("Gunakan task switcher untuk kembali ke Canva.")}
-                className="text-[10px] bg-white/10 px-2 py-1 rounded hover:bg-white/20 text-white ml-1 whitespace-nowrap"
-                >
-                Switch
-                </button>
-                <button 
-                onClick={() => setIsCanvaRunning(false)}
-                className="text-[10px] bg-red-500/20 px-2 py-1 rounded hover:bg-red-500/30 text-red-400 ml-1"
-                title="Force Close Indicator"
-                >
-                <X size={12} />
-                </button>
-            </div>
-        )}
+        {/* RIGHT SIDE: INDICATORS + CLOCK */}
+        <div className="flex items-center gap-2 ml-auto pl-2 flex-shrink-0">
+             {/* Indikator Spesial Canva */}
+            {isCanvaRunning && (
+                <div className="px-2 sm:px-4 flex items-center gap-2 border-l border-white/10 animate-in fade-in duration-300">
+                    <span className="relative flex h-3 w-3 flex-shrink-0">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-purple-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-3 w-3 bg-purple-500"></span>
+                    </span>
+                    <span className="text-xs text-purple-300 font-bold whitespace-nowrap hidden md:inline">Canva Active</span>
+                    <button onClick={() => alert("Gunakan task switcher untuk kembali ke Canva.")} className="text-[10px] bg-white/10 px-2 py-1 rounded hover:bg-white/20 text-white ml-1 whitespace-nowrap">Switch</button>
+                    <button onClick={() => setIsCanvaRunning(false)} className="text-[10px] bg-red-500/20 px-2 py-1 rounded hover:bg-red-500/30 text-red-400 ml-1"><X size={12} /></button>
+                </div>
+            )}
 
-        {/* Indikator Spesial Figma - Visible on Mobile */}
-        {isFigmaRunning && (
-            <div className="px-2 sm:px-4 flex items-center gap-2 border-l border-white/10 ml-2 animate-in fade-in duration-300">
-                <span className="relative flex h-3 w-3 flex-shrink-0">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-3 w-3 bg-orange-500"></span>
-                </span>
-                <span className="text-xs text-orange-300 font-bold whitespace-nowrap hidden md:inline">Figma Active</span>
-                
-                <button 
-                onClick={() => alert("Gunakan task switcher untuk kembali ke Figma.")}
-                className="text-[10px] bg-white/10 px-2 py-1 rounded hover:bg-white/20 text-white ml-1 whitespace-nowrap"
-                >
-                Switch
-                </button>
-                <button 
-                onClick={() => setIsFigmaRunning(false)}
-                className="text-[10px] bg-red-500/20 px-2 py-1 rounded hover:bg-red-500/30 text-red-400 ml-1"
-                title="Force Close Indicator"
-                >
-                <X size={12} />
-                </button>
-            </div>
-        )}
+            {/* Indikator Spesial Figma */}
+            {isFigmaRunning && (
+                <div className="px-2 sm:px-4 flex items-center gap-2 border-l border-white/10 animate-in fade-in duration-300">
+                    <span className="relative flex h-3 w-3 flex-shrink-0">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-orange-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-3 w-3 bg-orange-500"></span>
+                    </span>
+                    <span className="text-xs text-orange-300 font-bold whitespace-nowrap hidden md:inline">Figma Active</span>
+                    <button onClick={() => alert("Gunakan task switcher untuk kembali ke Figma.")} className="text-[10px] bg-white/10 px-2 py-1 rounded hover:bg-white/20 text-white ml-1 whitespace-nowrap">Switch</button>
+                    <button onClick={() => setIsFigmaRunning(false)} className="text-[10px] bg-red-500/20 px-2 py-1 rounded hover:bg-red-500/30 text-red-400 ml-1"><X size={12} /></button>
+                </div>
+            )}
 
-        <div className="flex items-center gap-3 text-white w-24 justify-end hidden sm:flex">
-             <div className="flex flex-col items-end leading-none font-bold">
-               <span className="text-[10px]">{clock.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
-               <span className="text-[8px] text-slate-400">{clock.toLocaleDateString([], {day:'2-digit', month:'2-digit'})}</span>
-             </div>
+            <div className="flex items-center gap-3 text-white justify-end hidden sm:flex border-l border-white/10 pl-4 ml-2">
+                 <div className="flex flex-col items-end leading-none font-bold">
+                   <span className="text-[10px]">{clock.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}</span>
+                   <span className="text-[8px] text-slate-400">{clock.toLocaleDateString([], {day:'2-digit', month:'2-digit'})}</span>
+                 </div>
+            </div>
         </div>
       </div>
 
