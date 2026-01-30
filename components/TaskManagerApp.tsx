@@ -9,6 +9,7 @@ interface TaskManagerProps {
   windows: any[];
   onCloseWindow: (id: string) => void;
   onRestartTask: (id: string, appId: string) => void;
+  refreshRate?: number; // New prop to control update speed
 }
 
 const HISTORY_LENGTH = 60; // 60 data points
@@ -16,7 +17,7 @@ const HISTORY_LENGTH = 60; // 60 data points
 // Capture boot time once when module loads (Website Load Time)
 const SYSTEM_BOOT_TIME = Date.now();
 
-export const TaskManagerApp: React.FC<TaskManagerProps> = ({ windows, onCloseWindow, onRestartTask }) => {
+export const TaskManagerApp: React.FC<TaskManagerProps> = ({ windows, onCloseWindow, onRestartTask, refreshRate = 60 }) => {
   const [activeTab, setActiveTab] = useState<'processes' | 'performance'>('processes');
   const [activePerfTab, setActivePerfTab] = useState<'cpu' | 'memory' | 'disk' | 'gpu'>('cpu');
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -62,8 +63,19 @@ export const TaskManagerApp: React.FC<TaskManagerProps> = ({ windows, onCloseWin
     return `${days}:${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // Simulation Loop
+  // Simulation Loop - SPEED DEPENDS ON REFRESH RATE
   useEffect(() => {
+    // Base interval is 1000ms (1s). 
+    // If refresh rate is higher (e.g. 144Hz), we update slightly faster to simulate "smoother" stats, 
+    // or strictly 1000ms if we want standard polling.
+    // For "Real" feel, let's make higher refresh rate = more frequent updates.
+    // 60Hz = 1000ms updates
+    // 144Hz = ~400ms updates (faster polling)
+    // 30Hz = ~2000ms updates (slow polling)
+    
+    const baseInterval = 1000;
+    const intervalMs = Math.max(100, Math.floor(baseInterval * (60 / refreshRate)));
+
     const timer = setInterval(() => {
       const now = Date.now();
       const uptimeMs = now - SYSTEM_BOOT_TIME;
@@ -102,9 +114,9 @@ export const TaskManagerApp: React.FC<TaskManagerProps> = ({ windows, onCloseWin
           uptime: formatUptime(uptimeMs)
         };
       });
-    }, 1000);
+    }, intervalMs);
     return () => clearInterval(timer);
-  }, [windows.length]);
+  }, [windows.length, refreshRate]);
 
   const handleEndTask = () => {
     if (selectedTaskId) {

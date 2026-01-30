@@ -474,7 +474,7 @@ const GenericExternalApp = ({ app, onLaunch, onCloseApp, onMinimize }: { app: AP
   );
 };
 
-// ... AppStoreApp component ...
+// ... AppStoreApp component ... (No Changes)
 const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId, onRequestCrop }: any) => {
    const [appName, setAppName] = useState('');
    const [appUrl, setAppUrl] = useState('');
@@ -1030,229 +1030,244 @@ const SettingsApp = ({ config, onSave, systemFolderId, addNotification, installP
   };
 
   return (
-    <div className="h-full bg-slate-900 text-white p-6 flex flex-col gap-6 overflow-auto">
-      <h2 className="text-2xl font-bold flex items-center gap-3 text-white"><Settings size={28} className="text-blue-600"/> Settings</h2>
-      <div className="space-y-6 max-w-lg">
-        {/* --- SYSTEM SETTINGS (PWA) --- */}
-        <section className="bg-slate-800 p-4 rounded-xl shadow-sm border border-slate-700">
-            <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-3">System</h3>
+    <div className="h-full bg-slate-900 text-white flex flex-col relative overflow-hidden">
+      <div className="flex-1 overflow-y-auto p-6 space-y-6 pb-24 scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-slate-900">
+        <h2 className="text-2xl font-bold flex items-center gap-3 text-white"><Settings size={28} className="text-blue-600"/> Settings</h2>
+        
+        <div className="max-w-lg space-y-6">
+            {/* --- SYSTEM SETTINGS (PWA) --- */}
+            <section className="bg-slate-800 p-4 rounded-xl shadow-sm border border-slate-700">
+                <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-3">System</h3>
+                <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 bg-slate-900 rounded-lg flex items-center justify-center border border-slate-700">
+                                <Monitor size={20} className="text-blue-400"/>
+                            </div>
+                            <div>
+                                <div className="text-sm font-bold text-white">Install Web App</div>
+                                <div className="text-[10px] text-slate-400">Install as PWA on Device</div>
+                            </div>
+                        </div>
+                        <button onClick={onInstallPWA} disabled={installStatus !== 'available'} className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${installStatus === 'available' ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg active:scale-95' : installStatus === 'installed' ? 'bg-green-500/20 text-green-400' : 'bg-slate-700/50 text-slate-500 cursor-not-allowed'}`}>
+                            {installStatus === 'available' ? (<><Download size={14} /><span>Install App</span></>) : installStatus === 'installed' ? (<><CheckCircle size={14} /><span>Installed</span></>) : (<span>Unavailable / Installed</span>)}
+                        </button>
+                    </div>
+                </div>
+            </section>
+
+            {/* --- DISPLAY SETTINGS --- */}
+            <section className="bg-slate-800 p-4 rounded-xl shadow-sm border border-slate-700">
+                <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-3">Display</h3>
+                <div className="space-y-4">
+                    
+                    {/* Resolution */}
+                    <div>
+                        <label className="text-sm text-white font-medium flex items-center gap-2 mb-1">
+                            <MonitorCheck size={16} className="text-blue-400"/> Resolution
+                        </label>
+                        <div className="bg-slate-900 border border-slate-700 rounded-lg p-2 flex flex-col gap-2">
+                            <select 
+                                value={localConfig.display?.resolutionMode || 'native'} 
+                                onChange={(e) => updateDisplaySettings('resolutionMode', e.target.value)}
+                                className="bg-slate-800 text-white text-xs p-2 rounded outline-none border border-slate-700 focus:border-blue-500"
+                            >
+                                <option value="native">Native (Device Resolution)</option>
+                                <option value="1920x1080">1920 x 1080 (HD)</option>
+                                <option value="1366x768">1366 x 768 (Laptop)</option>
+                                <option value="1280x720">1280 x 720 (SD)</option>
+                                <option value="custom">Custom</option>
+                            </select>
+                            {localConfig.display?.resolutionMode === 'custom' && (
+                                <div className="flex gap-2">
+                                    <input 
+                                        type="number" 
+                                        placeholder="Width" 
+                                        className="flex-1 bg-slate-800 text-white text-xs p-2 rounded outline-none border border-slate-700"
+                                        value={localConfig.display?.width || ''}
+                                        onChange={(e) => updateDisplaySettings('width', parseInt(e.target.value))}
+                                    />
+                                    <span className="text-slate-500 text-xs self-center">x</span>
+                                    <input 
+                                        type="number" 
+                                        placeholder="Height" 
+                                        className="flex-1 bg-slate-800 text-white text-xs p-2 rounded outline-none border border-slate-700"
+                                        value={localConfig.display?.height || ''}
+                                        onChange={(e) => updateDisplaySettings('height', parseInt(e.target.value))}
+                                    />
+                                </div>
+                            )}
+                        </div>
+                    </div>
+
+                    {/* Scaling (Zoom) */}
+                    <div>
+                        <label className="text-sm text-white font-medium flex items-center gap-2 mb-1">
+                            <Maximize2 size={16} className="text-blue-400"/> Scale & Layout
+                        </label>
+                        <div className="flex items-center gap-2 bg-slate-900 border border-slate-700 rounded-lg p-2">
+                            <button 
+                                onClick={() => updateDisplaySettings('scale', Math.max(0.5, (localConfig.display?.scale || 1) - 0.25))}
+                                className="p-1 hover:bg-slate-700 rounded"
+                            >
+                                <Minus size={14}/>
+                            </button>
+                            <div className="flex-1 text-center text-xs font-mono font-bold text-blue-300">
+                                {Math.round((localConfig.display?.scale || 1) * 100)}%
+                            </div>
+                            <button 
+                                onClick={() => updateDisplaySettings('scale', Math.min(2, (localConfig.display?.scale || 1) + 0.25))}
+                                className="p-1 hover:bg-slate-700 rounded"
+                            >
+                                <Plus size={14}/>
+                            </button>
+                        </div>
+                        <p className="text-[10px] text-slate-500 mt-1">Change the size of text, apps, and other items.</p>
+                    </div>
+
+                    {/* Refresh Rate */}
+                    <div>
+                        <label className="text-sm text-white font-medium flex items-center gap-2 mb-1">
+                            <RefreshCw size={16} className="text-blue-400"/> Refresh Rate
+                        </label>
+                        <select 
+                            value={localConfig.display?.refreshRate || 60}
+                            onChange={(e) => updateDisplaySettings('refreshRate', parseInt(e.target.value))}
+                            className="w-full bg-slate-900 text-white text-xs p-2 rounded outline-none border border-slate-700 focus:border-blue-500"
+                        >
+                            <option value="30">30 Hz</option>
+                            <option value="60">60 Hz</option>
+                            <option value="75">75 Hz</option>
+                            <option value="120">120 Hz</option>
+                            <option value="144">144 Hz</option>
+                        </select>
+                    </div>
+
+                    {/* Hardware Acceleration */}
+                    <div className="flex items-center justify-between p-2 bg-slate-900 border border-slate-700 rounded-lg">
+                        <div className="flex items-center gap-3">
+                            <div className="p-2 bg-yellow-500/10 rounded-lg">
+                                <Zap size={18} className="text-yellow-500"/>
+                            </div>
+                            <div>
+                                <div className="text-xs font-bold text-white">Hardware Acceleration</div>
+                                <div className="text-[10px] text-slate-400">Use GPU for rendering</div>
+                            </div>
+                        </div>
+                        <label className="relative inline-flex items-center cursor-pointer">
+                            <input 
+                                type="checkbox" 
+                                className="sr-only peer" 
+                                checked={!!localConfig.display?.hardwareAcceleration}
+                                onChange={(e) => updateDisplaySettings('hardwareAcceleration', e.target.checked)}
+                            />
+                            <div className="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
+                        </label>
+                    </div>
+
+                </div>
+            </section>
+
+            {/* --- TASKBAR CUSTOMIZATION --- */}
+            <section className="bg-slate-800 p-4 rounded-xl shadow-sm border border-slate-700">
+            <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-3">Taskbar</h3>
             <div className="space-y-4">
                 <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 bg-slate-900 rounded-lg flex items-center justify-center border border-slate-700">
-                            <Monitor size={20} className="text-blue-400"/>
-                        </div>
-                        <div>
-                            <div className="text-sm font-bold text-white">Install Web App</div>
-                            <div className="text-[10px] text-slate-400">Install as PWA on Device</div>
-                        </div>
+                    <div>
+                    <label className="text-sm text-white font-medium">Start Button Icon</label>
+                    <p className="text-[10px] text-slate-500">Pilih logo Start yang ingin digunakan.</p>
                     </div>
-                    <button onClick={onInstallPWA} disabled={installStatus !== 'available'} className={`px-4 py-2 rounded-lg text-xs font-bold transition-all flex items-center gap-2 ${installStatus === 'available' ? 'bg-blue-600 hover:bg-blue-500 text-white shadow-lg active:scale-95' : installStatus === 'installed' ? 'bg-green-500/20 text-green-400' : 'bg-slate-700/50 text-slate-500 cursor-not-allowed'}`}>
-                        {installStatus === 'available' ? (<><Download size={14} /><span>Install App</span></>) : installStatus === 'installed' ? (<><CheckCircle size={14} /><span>Installed</span></>) : (<span>Unavailable / Installed</span>)}
+                    <div className="flex bg-slate-950 p-1 rounded-lg border border-slate-700">
+                    <button 
+                        onClick={() => {
+                        const newCfg = {...localConfig, taskbarIcon: { ...localConfig.taskbarIcon, mode: 'default' }};
+                        setLocalConfig(newCfg);
+                        onSave(newCfg);
+                        }}
+                        className={`px-3 py-1 text-[10px] font-bold rounded ${localConfig.taskbarIcon?.mode !== 'custom' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                    >
+                        Default
                     </button>
+                    <button 
+                        onClick={() => {
+                        const newCfg = {...localConfig, taskbarIcon: { ...localConfig.taskbarIcon, mode: 'custom' }};
+                        setLocalConfig(newCfg);
+                        onSave(newCfg);
+                        }}
+                        className={`px-3 py-1 text-[10px] font-bold rounded ${localConfig.taskbarIcon?.mode === 'custom' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                    >
+                        Custom
+                    </button>
+                    </div>
                 </div>
-            </div>
-        </section>
 
-        {/* --- DISPLAY SETTINGS --- */}
-        <section className="bg-slate-800 p-4 rounded-xl shadow-sm border border-slate-700">
-            <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-3">Display</h3>
-            <div className="space-y-4">
-                
-                {/* Resolution */}
-                <div>
-                    <label className="text-sm text-white font-medium flex items-center gap-2 mb-1">
-                        <MonitorCheck size={16} className="text-blue-400"/> Resolution
-                    </label>
-                    <div className="bg-slate-900 border border-slate-700 rounded-lg p-2 flex flex-col gap-2">
-                        <select 
-                            value={localConfig.display?.resolutionMode || 'native'} 
-                            onChange={(e) => updateDisplaySettings('resolutionMode', e.target.value)}
-                            className="bg-slate-800 text-white text-xs p-2 rounded outline-none border border-slate-700 focus:border-blue-500"
-                        >
-                            <option value="native">Native (Device Resolution)</option>
-                            <option value="1920x1080">1920 x 1080 (HD)</option>
-                            <option value="1366x768">1366 x 768 (Laptop)</option>
-                            <option value="1280x720">1280 x 720 (SD)</option>
-                            <option value="custom">Custom</option>
-                        </select>
-                        {localConfig.display?.resolutionMode === 'custom' && (
-                            <div className="flex gap-2">
-                                <input 
-                                    type="number" 
-                                    placeholder="Width" 
-                                    className="flex-1 bg-slate-800 text-white text-xs p-2 rounded outline-none border border-slate-700"
-                                    value={localConfig.display?.width || ''}
-                                    onChange={(e) => updateDisplaySettings('width', parseInt(e.target.value))}
-                                />
-                                <span className="text-slate-500 text-xs self-center">x</span>
-                                <input 
-                                    type="number" 
-                                    placeholder="Height" 
-                                    className="flex-1 bg-slate-800 text-white text-xs p-2 rounded outline-none border border-slate-700"
-                                    value={localConfig.display?.height || ''}
-                                    onChange={(e) => updateDisplaySettings('height', parseInt(e.target.value))}
-                                />
-                            </div>
+                {localConfig.taskbarIcon?.mode === 'custom' && (
+                    <div className="flex items-center gap-4 bg-slate-900/50 p-3 rounded-lg border border-slate-700 border-dashed">
+                    <div className="w-12 h-12 bg-slate-950 rounded-xl flex items-center justify-center border border-slate-800 overflow-hidden shadow-xl">
+                        {localConfig.taskbarIcon?.customUrl ? (
+                            <img src={localConfig.taskbarIcon.customUrl} className="w-full h-full object-cover" />
+                        ) : (
+                            <ImageIcon size={24} className="text-slate-700"/>
                         )}
                     </div>
-                </div>
-
-                {/* Scaling (Zoom) */}
-                <div>
-                    <label className="text-sm text-white font-medium flex items-center gap-2 mb-1">
-                        <Maximize2 size={16} className="text-blue-400"/> Scale & Layout
-                    </label>
-                    <div className="flex items-center gap-2 bg-slate-900 border border-slate-700 rounded-lg p-2">
-                        <button 
-                            onClick={() => updateDisplaySettings('scale', Math.max(0.5, (localConfig.display?.scale || 1) - 0.25))}
-                            className="p-1 hover:bg-slate-700 rounded"
-                        >
-                            <Minus size={14}/>
-                        </button>
-                        <div className="flex-1 text-center text-xs font-mono font-bold text-blue-300">
-                            {Math.round((localConfig.display?.scale || 1) * 100)}%
-                        </div>
-                        <button 
-                            onClick={() => updateDisplaySettings('scale', Math.min(2, (localConfig.display?.scale || 1) + 0.25))}
-                            className="p-1 hover:bg-slate-700 rounded"
-                        >
-                            <Plus size={14}/>
-                        </button>
+                    <div className="flex-1">
+                        <label className="inline-block px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs font-bold text-white cursor-pointer transition-colors">
+                            <input 
+                                type="file" 
+                                accept="image/png" 
+                                className="hidden" 
+                                onChange={(e) => {
+                                if(e.target.files?.[0]) {
+                                    onRequestCrop(e.target.files[0], handleTaskbarIconChange);
+                                    e.target.value = "";
+                                }
+                                }}
+                            />
+                            Change Icon (PNG)
+                        </label>
                     </div>
-                    <p className="text-[10px] text-slate-500 mt-1">Change the size of text, apps, and other items.</p>
-                </div>
-
-                {/* Refresh Rate */}
-                <div>
-                    <label className="text-sm text-white font-medium flex items-center gap-2 mb-1">
-                        <RefreshCw size={16} className="text-blue-400"/> Refresh Rate
-                    </label>
-                    <select 
-                        value={localConfig.display?.refreshRate || 60}
-                        onChange={(e) => updateDisplaySettings('refreshRate', parseInt(e.target.value))}
-                        className="w-full bg-slate-900 text-white text-xs p-2 rounded outline-none border border-slate-700 focus:border-blue-500"
-                    >
-                        <option value="30">30 Hz</option>
-                        <option value="60">60 Hz</option>
-                        <option value="75">75 Hz</option>
-                        <option value="120">120 Hz</option>
-                        <option value="144">144 Hz</option>
-                    </select>
-                </div>
-
-                {/* Hardware Acceleration */}
-                <div className="flex items-center justify-between p-2 bg-slate-900 border border-slate-700 rounded-lg">
-                    <div className="flex items-center gap-3">
-                        <div className="p-2 bg-yellow-500/10 rounded-lg">
-                            <Zap size={18} className="text-yellow-500"/>
-                        </div>
-                        <div>
-                            <div className="text-xs font-bold text-white">Hardware Acceleration</div>
-                            <div className="text-[10px] text-slate-400">Use GPU for rendering</div>
-                        </div>
                     </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                        <input 
-                            type="checkbox" 
-                            className="sr-only peer" 
-                            checked={!!localConfig.display?.hardwareAcceleration}
-                            onChange={(e) => updateDisplaySettings('hardwareAcceleration', e.target.checked)}
-                        />
-                        <div className="w-9 h-5 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-blue-600"></div>
-                    </label>
-                </div>
-
+                )}
             </div>
-        </section>
+            </section>
 
-        {/* --- TASKBAR CUSTOMIZATION --- */}
-        <section className="bg-slate-800 p-4 rounded-xl shadow-sm border border-slate-700">
-          <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-3">Taskbar</h3>
-          <div className="space-y-4">
-             <div className="flex items-center justify-between">
+            <section className="bg-slate-800 p-4 rounded-xl shadow-sm border border-slate-700">
+            <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-3">Appearance</h3>
+            <div className="space-y-4">
                 <div>
-                   <label className="text-sm text-white font-medium">Start Button Icon</label>
-                   <p className="text-[10px] text-slate-500">Pilih logo Start yang ingin digunakan.</p>
+                <label className="block text-xs font-bold text-slate-400 mb-2">Wallpaper Image</label>
+                <div className="flex flex-col gap-3">
+                    <div className="relative aspect-video rounded-lg overflow-hidden border border-slate-700 bg-slate-950">
+                        {isUploading ? (<div className="absolute inset-0 flex items-center justify-center bg-slate-900/50"><Loader2 className="animate-spin text-blue-400"/></div>) : (<img src={localConfig.wallpaper} className="w-full h-full object-cover"/>)}
+                    </div>
+                    <div className="flex gap-2">
+                        <label className={`flex-1 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs font-bold text-white text-center cursor-pointer transition-colors ${isUploading ? 'opacity-50 pointer-events-none' : ''}`}>
+                            <input type="file" accept="image/*" className="hidden" onChange={handleWallpaperUpload} disabled={isUploading} />
+                            {isUploading ? "Uploading..." : "Upload New Image"}
+                        </label>
+                    </div>
                 </div>
-                <div className="flex bg-slate-950 p-1 rounded-lg border border-slate-700">
-                   <button 
-                    onClick={() => {
-                      const newCfg = {...localConfig, taskbarIcon: { ...localConfig.taskbarIcon, mode: 'default' }};
-                      setLocalConfig(newCfg);
-                      onSave(newCfg);
-                    }}
-                    className={`px-3 py-1 text-[10px] font-bold rounded ${localConfig.taskbarIcon?.mode !== 'custom' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}
-                   >
-                     Default
-                   </button>
-                   <button 
-                    onClick={() => {
-                      const newCfg = {...localConfig, taskbarIcon: { ...localConfig.taskbarIcon, mode: 'custom' }};
-                      setLocalConfig(newCfg);
-                      onSave(newCfg);
-                    }}
-                    className={`px-3 py-1 text-[10px] font-bold rounded ${localConfig.taskbarIcon?.mode === 'custom' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}
-                   >
-                     Custom
-                   </button>
+                <div className="mt-4">
+                    <label className="block text-[10px] font-bold text-slate-500 mb-1">OR ENTER URL</label>
+                    <input className="w-full p-2 border border-slate-700 rounded-lg text-sm bg-slate-950 text-white focus:outline-none focus:border-blue-500" value={localConfig.wallpaper} onChange={(e) => setLocalConfig({...localConfig, wallpaper: e.target.value})} placeholder="https://..."/>
                 </div>
-             </div>
-
-             {localConfig.taskbarIcon?.mode === 'custom' && (
-                <div className="flex items-center gap-4 bg-slate-900/50 p-3 rounded-lg border border-slate-700 border-dashed">
-                   <div className="w-12 h-12 bg-slate-950 rounded-xl flex items-center justify-center border border-slate-800 overflow-hidden shadow-xl">
-                      {localConfig.taskbarIcon?.customUrl ? (
-                         <img src={localConfig.taskbarIcon.customUrl} className="w-full h-full object-cover" />
-                      ) : (
-                         <ImageIcon size={24} className="text-slate-700"/>
-                      )}
-                   </div>
-                   <div className="flex-1">
-                      <label className="inline-block px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs font-bold text-white cursor-pointer transition-colors">
-                         <input 
-                            type="file" 
-                            accept="image/png" 
-                            className="hidden" 
-                            onChange={(e) => {
-                              if(e.target.files?.[0]) {
-                                onRequestCrop(e.target.files[0], handleTaskbarIconChange);
-                                e.target.value = "";
-                              }
-                            }}
-                         />
-                         Change Icon (PNG)
-                      </label>
-                   </div>
                 </div>
-             )}
-          </div>
-        </section>
-
-        <section className="bg-slate-800 p-4 rounded-xl shadow-sm border border-slate-700">
-          <h3 className="text-sm font-bold uppercase tracking-wider text-slate-400 mb-3">Appearance</h3>
-          <div className="space-y-4">
-            <div>
-              <label className="block text-xs font-bold text-slate-400 mb-2">Wallpaper Image</label>
-              <div className="flex flex-col gap-3">
-                  <div className="relative aspect-video rounded-lg overflow-hidden border border-slate-700 bg-slate-950">
-                      {isUploading ? (<div className="absolute inset-0 flex items-center justify-center bg-slate-900/50"><Loader2 className="animate-spin text-blue-400"/></div>) : (<img src={localConfig.wallpaper} className="w-full h-full object-cover"/>)}
-                  </div>
-                  <div className="flex gap-2">
-                       <label className={`flex-1 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-xs font-bold text-white text-center cursor-pointer transition-colors ${isUploading ? 'opacity-50 pointer-events-none' : ''}`}>
-                           <input type="file" accept="image/*" className="hidden" onChange={handleWallpaperUpload} disabled={isUploading} />
-                           {isUploading ? "Uploading..." : "Upload New Image"}
-                       </label>
-                  </div>
-              </div>
-              <div className="mt-4">
-                  <label className="block text-[10px] font-bold text-slate-500 mb-1">OR ENTER URL</label>
-                  <input className="w-full p-2 border border-slate-700 rounded-lg text-sm bg-slate-950 text-white focus:outline-none focus:border-blue-500" value={localConfig.wallpaper} onChange={(e) => setLocalConfig({...localConfig, wallpaper: e.target.value})} placeholder="https://..."/>
-              </div>
             </div>
+            </section>
+        </div>
+      </div>
+      
+      {/* --- STICKY SAVE BUTTON --- */}
+      <div className="sticky bottom-0 left-0 right-0 p-4 bg-slate-900/90 backdrop-blur-md border-t border-slate-800 z-50 flex items-center justify-between">
+          <div className="text-xs text-slate-400 hidden sm:block">
+              Perubahan akan langsung diterapkan.
           </div>
-        </section>
-        <button onClick={() => onSave(localConfig)} className="w-full py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl shadow-lg transition-all active:scale-95">Save Changes</button>
+          <button 
+            onClick={() => onSave(localConfig)} 
+            className="w-full sm:w-auto px-8 py-3 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl shadow-lg transition-all active:scale-95 flex items-center justify-center gap-2"
+          >
+            <CheckCircle size={18} /> Simpan Pengaturan
+          </button>
       </div>
     </div>
   );
@@ -1431,7 +1446,15 @@ const App = () => {
     boot();
   }, []);
 
-  useEffect(() => { const timer = setInterval(() => setClock(new Date()), 1000); return () => clearInterval(timer); }, []);
+  // Use refresh rate from config
+  const refreshRate = config?.display?.refreshRate || 60;
+  const updateInterval = Math.floor(1000 / refreshRate); // Simulate faster/slower ticks
+
+  useEffect(() => { 
+      // Clock updates depend on refresh rate just to simulate loop speed
+      const timer = setInterval(() => setClock(new Date()), Math.max(100, updateInterval)); 
+      return () => clearInterval(timer); 
+  }, [updateInterval]);
 
   const handleSetCurrentFolderId = (id: string) => {
       setCurrentFolderId(id);
@@ -2109,12 +2132,12 @@ const App = () => {
                     {win.appId === 'notes' && (<NotesApp initialFileId={win.args?.fileId} isNewNote={win.args?.isNew} initialFolderId={win.args?.folderId} currentFolderId={currentFolderId} filesInFolder={items} systemMap={systemMap} onClose={() => closeWindow(win.instanceId)} onRefresh={() => loadFolder(win.args?.folderId || currentFolderId)} onSaveToCloud={async (id: string, title: string, content: string, targetFolderId?: string) => { const res = await API.saveNoteToDrive(title, content, targetFolderId || win.args?.folderId || currentFolderId, id.startsWith('new-') ? undefined : id); return res?.id; }} />)}
                     {win.appId === 'canva' && <GenericExternalApp app={{id:'canva', name:'Canva', icon: 'https://upload.wikimedia.org/wikipedia/commons/0/08/Canva_icon_2021.svg', type: 'webapp', url: 'https://www.canva.com'}} onLaunch={() => setIsCanvaRunning(true)} onCloseApp={() => setIsCanvaRunning(false)} onMinimize={() => toggleMinimize(win.instanceId)} />}
                     {win.appId === 'figma' && <GenericExternalApp app={{id:'figma', name:'Figma', icon: 'https://upload.wikimedia.org/wikipedia/commons/3/33/Figma-logo.svg', type: 'webapp', url: 'https://www.figma.com'}} onLaunch={() => setIsFigmaRunning(true)} onCloseApp={() => setIsFigmaRunning(false)} onMinimize={() => toggleMinimize(win.instanceId)} />}
-                    {win.appData.url === 'internal://gallery' && (<GalleryApp items={items} loading={loading} onUpload={(files: any) => handleUploadFiles(Array.from(files))} onDelete={async (id: string) => { const notif = addNotification("Menghapus foto...", "loading"); try { await API.deleteItems([id]); updateNotification(notif, "Foto terhapus", "success"); loadFolder(currentFolderId); } catch (e) { updateNotification(notif, "Gagal menghapus", "error"); } }} />)}
-                    {win.appId === 'youtube' && <YouTubeApp customKeys={config?.youtubeApiKeys} />}
                     {win.appId === 'calculator' && <CalculatorApp />}
-                    {win.appId === 'task-manager' && (<TaskManagerApp windows={windows.filter(w => w.appId !== 'task-manager')} onCloseWindow={closeWindow} onRestartTask={handleRestartTask} />)}
+                    {win.appId === 'task-manager' && (<TaskManagerApp windows={windows.filter(w => w.appId !== 'task-manager')} onCloseWindow={closeWindow} onRestartTask={handleRestartTask} refreshRate={config?.display?.refreshRate} />)}
                     {win.appId === 'settings' && <SettingsApp config={config!} systemFolderId={systemFolderId} addNotification={addNotification} onSave={async (c:any)=>{ try { await API.saveSystemConfig(c); setConfig(c); addNotification("Pengaturan disimpan", "success"); } catch(e) { addNotification("Gagal menyimpan", "error"); } }} installPrompt={deferredPrompt} onInstallPWA={handleInstallClick} onRequestCrop={handleRequestCrop} />}
                     {(win.appId === 'app-store' || win.appId === 'store') && <AppStoreApp config={config!} setConfig={setConfig} addNotification={addNotification} systemFolderId={systemFolderId} onRequestCrop={handleRequestCrop} />}
+                    {win.appId === 'youtube' && <YouTubeApp customKeys={config?.youtubeApiKeys} />}
+                    {win.appData.url === 'internal://gallery' && (<GalleryApp items={items} loading={loading} onUpload={(files: any) => handleUploadFiles(Array.from(files))} onDelete={async (id: string) => { const notif = addNotification("Menghapus foto...", "loading"); try { await API.deleteItems([id]); updateNotification(notif, "Foto terhapus", "success"); loadFolder(currentFolderId); } catch (e) { updateNotification(notif, "Gagal menghapus", "error"); } }} />)}
                     {(win.appData.type === 'webapp') && win.appId !== 'youtube' && win.appId !== 'canva' && win.appId !== 'figma' && win.appId !== 'calculator' && ( win.appData.launchMode === 'external' ? (<GenericExternalApp app={win.appData} onLaunch={() => {}} onCloseApp={() => closeWindow(win.instanceId)} onMinimize={() => toggleMinimize(win.instanceId)} />) : (<div className="h-full flex flex-col bg-white"> {!win.appData.hideAddressBar && (<div className="p-1 bg-slate-100 flex items-center justify-between gap-2 border-b"><div className="flex items-center gap-2 flex-1 min-w-0"><Globe size={12} className="text-slate-400 ml-2 flex-shrink-0"/><input className="flex-1 bg-white px-3 py-1 rounded-lg border-none text-[10px] outline-none text-slate-800" value={win.appData.url} readOnly /></div><button onClick={() => window.open(win.appData.url, '_blank')} className="p-1.5 hover:bg-slate-200 rounded text-slate-500"><ExternalLink size={14}/></button></div>)}<iframe src={win.appData.url} className="flex-1 w-full border-none" sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation" /></div>) )}
                 </div>
                 {!win.isMaximized && (<><div className="absolute top-0 left-0 w-1.5 h-full cursor-ew-resize hover:bg-white/10 touch-none" onPointerDown={(e) => handleWindowAction(win.instanceId, e, 'resize', 'left')} /><div className="absolute top-0 right-0 w-1.5 h-full cursor-ew-resize hover:bg-white/10 touch-none" onPointerDown={(e) => handleWindowAction(win.instanceId, e, 'resize', 'right')} /><div className="absolute bottom-0 left-0 w-full h-1.5 cursor-ns-resize hover:bg-white/10 touch-none" onPointerDown={(e) => handleWindowAction(win.instanceId, e, 'resize', 'bottom')} /><div className="absolute bottom-0 right-0 w-4 h-4 cursor-nwse-resize hover:bg-blue-400/30 z-[60] touch-none" onPointerDown={(e) => handleWindowAction(win.instanceId, e, 'resize', 'bottom-right')} /></>)}
