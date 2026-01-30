@@ -7,7 +7,7 @@ import {
   Copy, Scissors, MousePointerClick
 } from 'lucide-react';
 import * as API from '../services/api';
-import { Item, FolderMap } from '../types';
+import { Item, FolderMap, FolderNode } from '../types';
 
 interface NotesAppProps {
   initialFileId?: string;
@@ -309,7 +309,7 @@ export const NotesApp: React.FC<NotesAppProps> = ({
     // Ensure systemMap exists
     if (!systemMap) return [];
 
-    return Object.values(systemMap).filter(f => 
+    return (Object.values(systemMap) as FolderNode[]).filter(f => 
       f.parentId === pid && 
       f.name !== 'System' && 
       f.name !== 'Recycle Bin' &&

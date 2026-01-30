@@ -24,6 +24,7 @@ export interface SystemConfig {
   wallpaper: string;
   theme: 'dark' | 'light';
   installedApps: AppDefinition[];
+  pinnedAppIds?: string[]; // List of app IDs pinned to taskbar
   youtubeApiKeys?: string[]; // Custom user keys
   desktopLayout?: { [appId: string]: { x: number; y: number } }; // Icon positions
 }

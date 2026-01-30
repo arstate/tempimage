@@ -10,7 +10,7 @@ import {
   Grid, Monitor, Globe, Settings, ShoppingBag, Minus, Square, Search, Wifi,
   Maximize2, MonitorCheck, ExternalLink, Minimize2, LayoutGrid, Youtube, Play, Pause, SkipForward, Music,
   UploadCloud, RefreshCcw, Hand, Power, Focus, LayoutTemplate, PenTool, Crop, Calculator,
-  Activity
+  Activity, Pin, PinOff
 } from 'lucide-react';
 import * as API from './services/api';
 import * as DB from './services/db';
@@ -1098,7 +1098,7 @@ const App = () => {
   const [activeWindowId, setActiveWindowId] = useState<string | null>(null);
   const [startMenuOpen, setStartMenuOpen] = useState(false);
   const [clock, setClock] = useState(new Date());
-  const [globalContextMenu, setGlobalContextMenu] = useState<{x:number, y:number, targetItem?: Item | API.AppDefinition, isRecycleBin?: boolean, type?: 'desktop' | 'item' | 'app' | 'folder-background' | 'taskbar'} | null>(null);
+  const [globalContextMenu, setGlobalContextMenu] = useState<{x:number, y:number, targetItem?: Item | API.AppDefinition | any, isRecycleBin?: boolean, type?: 'desktop' | 'item' | 'app' | 'folder-background' | 'taskbar' | 'taskbar-item', windowId?: string} | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isCanvaRunning, setIsCanvaRunning] = useState(false);
   const [isFigmaRunning, setIsFigmaRunning] = useState(false);
@@ -1212,6 +1212,12 @@ const App = () => {
             launchMode: 'external' // Default Figma to external for better experience
           }); 
           configUpdated = true; 
+        }
+
+        // Default pinned apps if missing
+        if (!osConfig.pinnedAppIds) {
+            osConfig.pinnedAppIds = ['file-explorer', 'app-store', 'settings'];
+            configUpdated = true;
         }
 
         setConfig(osConfig);
@@ -1431,6 +1437,41 @@ const App = () => {
      try { await API.saveSystemConfig(updatedConfig); } catch(e) { addNotification("Failed to save settings", "error"); }
   };
 
+  // --- PINNING LOGIC ---
+  const handlePinApp = async (appId: string) => {
+      if (!config) return;
+      const currentPinned = config.pinnedAppIds || [];
+      if (currentPinned.includes(appId)) return;
+
+      const updatedPinned = [...currentPinned, appId];
+      const updatedConfig = { ...config, pinnedAppIds: updatedPinned };
+      
+      setConfig(updatedConfig);
+      try {
+          await API.saveSystemConfig(updatedConfig);
+          // addNotification("App pinned to taskbar", "success"); // Optional feedback
+      } catch (e) {
+          addNotification("Failed to pin app", "error");
+      }
+  };
+
+  const handleUnpinApp = async (appId: string) => {
+      if (!config) return;
+      const currentPinned = config.pinnedAppIds || [];
+      if (!currentPinned.includes(appId)) return;
+
+      const updatedPinned = currentPinned.filter(id => id !== appId);
+      const updatedConfig = { ...config, pinnedAppIds: updatedPinned };
+
+      setConfig(updatedConfig);
+      try {
+          await API.saveSystemConfig(updatedConfig);
+          // addNotification("App unpinned from taskbar", "success"); // Optional feedback
+      } catch (e) {
+          addNotification("Failed to unpin app", "error");
+      }
+  };
+
   const executeAction = async (action: string, specificIds?: string[], targetFolderId?: string) => {
     // ... (Execute action logic unchanged) ...
     // Using the same code structure for brevity, assuming full content from previous
@@ -1609,6 +1650,13 @@ const App = () => {
          if (!osConfig.installedApps.some(app => app.id === 'recycle-bin')) { osConfig.installedApps.push({ id: 'recycle-bin', name: 'Recycle Bin', url: 'internal://recycle-bin', icon: 'trash', type: 'system' }); configUpdated = true; }
          if (!osConfig.installedApps.some(app => app.id === 'figma')) { osConfig.installedApps.push({ id: 'figma', name: 'Figma', url: 'https://www.figma.com', icon: 'https://upload.wikimedia.org/wikipedia/commons/3/33/Figma-logo.svg', type: 'webapp' }); configUpdated = true; }
          
+         // Preserve pinned state if refresh doesn't include it (safety check)
+         if (!osConfig.pinnedAppIds && config?.pinnedAppIds) {
+             osConfig.pinnedAppIds = config.pinnedAppIds;
+         } else if (!osConfig.pinnedAppIds) {
+             osConfig.pinnedAppIds = ['file-explorer', 'app-store', 'settings'];
+         }
+
          setConfig(osConfig);
          updateNotification(notifId, "System Refreshed", "success");
      } catch(e) {
@@ -1872,6 +1920,66 @@ const App = () => {
     </div>
   );
 
+  // --- TASKBAR RENDERING LOGIC ---
+  const pinnedAppIds = config?.pinnedAppIds || [];
+  const pinnedApps = pinnedAppIds.map(id => config?.installedApps.find(a => a.id === id)).filter(Boolean) as API.AppDefinition[];
+  const unpinnedWindows = windows.filter(w => !pinnedAppIds.includes(w.appId));
+
+  const renderTaskbarIcon = (win: any | null, app: API.AppDefinition, isPinnedLauncher: boolean = false) => {
+      const isActive = !!win;
+      const isWindowSelected = isActive && activeWindowId === win.instanceId && !win.isMinimized;
+      
+      return (
+        <button 
+            key={isActive ? win.instanceId : `pinned-${app.id}`}
+            onClick={() => {
+                if (isActive) {
+                    if (win.isMinimized) toggleMinimize(win.instanceId);
+                    setActiveWindowId(win.instanceId);
+                } else {
+                    openApp(app);
+                }
+            }}
+            onContextMenu={(e) => {
+                e.preventDefault(); e.stopPropagation();
+                setGlobalContextMenu({ 
+                    x: e.clientX, 
+                    y: e.clientY, 
+                    type: 'taskbar-item',
+                    targetItem: app,
+                    windowId: win?.instanceId
+                });
+            }}
+            className={`p-2 rounded-xl hover:bg-white/10 transition-all relative group flex-shrink-0 ${isWindowSelected ? 'bg-white/10' : 'opacity-80 hover:opacity-100'} ${isPinnedLauncher && !isActive ? 'opacity-60' : ''}`}
+        >
+            <div className={`w-7 h-7 rounded-xl flex items-center justify-center text-white text-[10px] font-bold shadow-lg overflow-hidden ${
+                app.id === 'file-explorer' ? (win?.args?.folderId === recycleBinId ? 'bg-red-900' : 'bg-blue-600') : 
+                (app.id === 'app-store' || app.id === 'store') ? 'bg-pink-600' : 
+                app.id === 'youtube' ? 'bg-red-600' : 
+                app.id === 'notes' ? 'bg-yellow-600' : 
+                app.id === 'calculator' ? 'bg-orange-600' : 
+                app.id === 'task-manager' ? 'bg-teal-600' : 
+                app.icon === 'image' ? 'bg-pink-500' : 
+                app.icon.startsWith('http') ? 'bg-white' : 'bg-slate-700'
+            }`}>
+               {app.id === 'file-explorer' ? (win?.args?.folderId === recycleBinId ? <Trash2 size={14}/> : <Folder size={14}/>) : 
+                (app.id === 'app-store' || app.id === 'store') ? <ShoppingBag size={14}/> : 
+                app.id === 'settings' ? <Settings size={14}/> : 
+                app.id === 'youtube' ? <Youtube size={14}/> :
+                app.id === 'notes' ? <FileText size={14}/> :
+                app.id === 'calculator' ? <Calculator size={14}/> :
+                app.id === 'task-manager' ? <Activity size={14}/> :
+                app.icon === 'image' ? <ImageIcon size={14} /> : 
+                app.icon.startsWith('http') ? <img src={app.icon} className="w-full h-full object-cover"/> :
+                app.name.charAt(0)}
+            </div>
+            {isActive && !win.isMinimized && isWindowSelected && <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-3 h-1 bg-blue-400 rounded-full"></div>}
+            {isActive && win.isMinimized && <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1.5 h-1 bg-slate-500 rounded-full"></div>}
+            {isActive && !isWindowSelected && !win.isMinimized && <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-1 h-1 bg-slate-400 rounded-full"></div>}
+        </button>
+      );
+  };
+
   return (
     <div className="fixed inset-0 w-full h-[100dvh] overflow-hidden bg-slate-900 select-none font-sans touch-none" 
          style={{ backgroundImage: `url(${config?.wallpaper})`, backgroundSize: 'cover', backgroundPosition: 'center' }}
@@ -1956,17 +2064,17 @@ const App = () => {
                onDoubleClick={() => toggleMaximize(win.instanceId)}
                onPointerDown={(e) => handleWindowAction(win.instanceId, e, 'move')}>
             <div className="flex items-center gap-2 pointer-events-none">
-               <div className="w-4 h-4 flex items-center justify-center text-white overflow-hidden">
-                 {win.appId === 'file-explorer' ? (win.args?.folderId === recycleBinId ? <Trash2 size={14}/> : <Folder size={14}/>) : 
-                  (win.appId === 'app-store' || win.appId === 'store') ? <ShoppingBag size={14}/> : 
-                  win.appId === 'settings' ? <Settings size={14}/> : 
-                  win.appId === 'youtube' ? <Youtube size={14}/> :
-                  win.appId === 'notes' ? <FileText size={14}/> :
-                  win.appId === 'calculator' ? <Calculator size={14}/> :
-                  win.appId === 'task-manager' ? <Activity size={14} /> :
-                  win.appData.icon === 'image' ? <ImageIcon size={14}/> : 
+               <div className="w-4 h-4 rounded flex items-center justify-center text-white overflow-hidden bg-slate-800">
+                 {win.appId === 'file-explorer' ? (win.args?.folderId === recycleBinId ? <Trash2 size={10}/> : <Folder size={10}/>) : 
+                  (win.appId === 'app-store' || win.appId === 'store') ? <ShoppingBag size={10}/> : 
+                  win.appId === 'settings' ? <Settings size={10}/> : 
+                  win.appId === 'youtube' ? <Youtube size={10}/> :
+                  win.appId === 'notes' ? <FileText size={10}/> :
+                  win.appId === 'calculator' ? <Calculator size={10}/> :
+                  win.appId === 'task-manager' ? <Activity size={10} /> :
+                  win.appData.icon === 'image' ? <ImageIcon size={10}/> : 
                   win.appData.icon.startsWith('http') ? <img src={win.appData.icon} className="w-full h-full object-contain"/> :
-                  <Globe size={14}/>}
+                  <Globe size={10}/>}
                </div>
                <span className="text-[10px] font-bold text-slate-300 tracking-wide uppercase">{win.title}</span>
             </div>
@@ -2141,26 +2249,26 @@ const App = () => {
             </button>
         </div> 
 
-        {/* APP ICONS */}
+        {/* APP ICONS (PINNED + RUNNING) */}
         <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar flex-1 justify-start">
-           {windows.map(win => (
-             <button key={win.instanceId} onClick={() => { if (win.isMinimized) toggleMinimize(win.instanceId); setActiveWindowId(win.instanceId); }}
-                     className={`p-2 rounded-xl hover:bg-white/10 transition-all relative group flex-shrink-0 ${activeWindowId === win.instanceId && !win.isMinimized ? 'bg-white/10' : 'opacity-60'}`}>
-                <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-white text-[10px] font-bold shadow-lg overflow-hidden ${win.appId === 'file-explorer' ? (win.args?.folderId === recycleBinId ? 'bg-red-900' : 'bg-blue-600') : (win.appId === 'app-store' || win.appId === 'store') ? 'bg-pink-600' : win.appId === 'youtube' ? 'bg-red-600' : win.appId === 'notes' ? 'bg-yellow-600' : win.appId === 'calculator' ? 'bg-orange-600' : win.appId === 'task-manager' ? 'bg-teal-600' : win.appData.icon === 'image' ? 'bg-pink-500' : win.appData.icon.startsWith('http') ? 'bg-white' : 'bg-slate-700'}`}>
-                   {win.appId === 'file-explorer' ? (win.args?.folderId === recycleBinId ? <Trash2 size={14}/> : <Folder size={14}/>) : 
-                    (win.appId === 'app-store' || win.appId === 'store') ? <ShoppingBag size={14}/> : 
-                    win.appId === 'settings' ? <Settings size={14}/> : 
-                    win.appId === 'youtube' ? <Youtube size={14}/> :
-                    win.appId === 'notes' ? <FileText size={14}/> :
-                    win.appId === 'calculator' ? <Calculator size={14}/> :
-                    win.appId === 'task-manager' ? <Activity size={14}/> :
-                    win.appData.icon === 'image' ? <ImageIcon size={14} /> : 
-                    win.appData.icon.startsWith('http') ? <img src={win.appData.icon} className="w-full h-full object-cover"/> :
-                    win.title.charAt(0)}
-                </div>
-                {!win.isMinimized && activeWindowId === win.instanceId && <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 w-3 h-1 bg-blue-400 rounded-full"></div>}
-             </button>
-           ))}
+           
+           {/* 1. Pinned Apps (Show inactive or active state) */}
+           {pinnedApps.map(app => {
+               // Find running instances of this app
+               const appWindows = windows.filter(w => w.appId === app.id);
+               
+               if (appWindows.length > 0) {
+                   // Render buttons for running instances (Ungrouped style)
+                   return appWindows.map(win => renderTaskbarIcon(win, app));
+               } else {
+                   // Render single launcher button (Inactive)
+                   return renderTaskbarIcon(null, app, true);
+               }
+           })}
+
+           {/* 2. Unpinned Running Apps */}
+           {unpinnedWindows.map(win => renderTaskbarIcon(win, win.appData))}
+
         </div>
         
         {/* RIGHT SIDE: INDICATORS + CLOCK */}
@@ -2204,18 +2312,67 @@ const App = () => {
       {/* GLOBAL CONTEXT MENU */}
       {globalContextMenu && (
         <div 
-            className={`absolute z-[1001] bg-slate-900 border border-slate-700 rounded-lg shadow-2xl py-1 min-w-[180px] animate-in zoom-in-95 duration-100 overflow-hidden ${globalContextMenu.type === 'taskbar' ? 'origin-bottom-left' : 'origin-top-left'}`}
+            className={`absolute z-[1001] bg-slate-900 border border-slate-700 rounded-lg shadow-2xl py-1 min-w-[180px] animate-in zoom-in-95 duration-100 overflow-hidden ${globalContextMenu.type?.startsWith('taskbar') ? 'origin-bottom-left' : 'origin-top-left'}`}
             style={{ 
-              top: globalContextMenu.type === 'taskbar' ? 'auto' : globalContextMenu.y, 
+              top: globalContextMenu.type?.startsWith('taskbar') ? 'auto' : globalContextMenu.y, 
               left: globalContextMenu.x,
-              bottom: globalContextMenu.type === 'taskbar' ? 60 : 'auto' 
+              bottom: globalContextMenu.type?.startsWith('taskbar') ? 60 : 'auto' 
             }}
             onPointerDown={(e) => e.stopPropagation()} 
             onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); }}
         >
-            {/* ... Context Menu Items (unchanged) ... */}
-            {/* (Reusing the existing context menu logic from previous step, ensuring consistency) */}
-            {globalContextMenu.type === 'item' && globalContextMenu.targetItem ? (
+            {/* --- TASKBAR ITEM CONTEXT MENU --- */}
+            {globalContextMenu.type === 'taskbar-item' ? (
+                <>
+                   {/* Handle Unpinning */}
+                   {pinnedAppIds.includes(globalContextMenu.targetItem.id) ? (
+                        <button onClick={() => { handleUnpinApp(globalContextMenu.targetItem.id); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200">
+                            <PinOff size={14} className="text-slate-400"/> Unpin from taskbar
+                        </button>
+                   ) : (
+                        <button onClick={() => { handlePinApp(globalContextMenu.targetItem.id); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200">
+                            <Pin size={14} className="text-slate-400"/> Pin to taskbar
+                        </button>
+                   )}
+                   
+                   <div className="h-px bg-slate-800 my-1"></div>
+
+                   {/* If it's a running window, show close option */}
+                   {globalContextMenu.windowId && (
+                       <button onClick={() => { closeWindow(globalContextMenu.windowId!); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-500 text-xs flex items-center gap-2">
+                           <X size={14}/> Close window
+                       </button>
+                   )}
+                   
+                   {!globalContextMenu.windowId && (
+                        <button onClick={() => { openApp(globalContextMenu.targetItem); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200">
+                            <ExternalLink size={14}/> Open
+                        </button>
+                   )}
+                </>
+            ) : globalContextMenu.type === 'app' ? ( // DESKTOP APP
+                <>
+                   <button onClick={() => { openApp(globalContextMenu.targetItem as API.AppDefinition); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><ExternalLink size={14}/> Open</button>
+                   
+                   {/* Pin to Taskbar Option for Desktop Apps */}
+                   {!pinnedAppIds.includes((globalContextMenu.targetItem as API.AppDefinition).id) && (
+                        <button onClick={() => { handlePinApp((globalContextMenu.targetItem as API.AppDefinition).id); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200">
+                            <Pin size={14}/> Pin to taskbar
+                        </button>
+                   )}
+
+                   {(globalContextMenu.targetItem?.type === 'webapp' || globalContextMenu.targetItem?.id === 'youtube' || globalContextMenu.targetItem?.type === 'system') && (
+                       <button onClick={() => { setModal({ type: 'properties', title: `${globalContextMenu.targetItem?.name} Properties`, targetItem: globalContextMenu.targetItem as any }); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><Settings size={14}/> Properties</button>
+                   )}
+                   {globalContextMenu.targetItem?.id === 'recycle-bin' && (
+                       <>
+                         <div className="h-px bg-slate-800 my-1"></div>
+                         <button onClick={() => { executeAction('restore_all'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-green-400"><RotateCcw size={14}/> Restore All</button>
+                         <button onClick={() => { executeAction('empty_bin'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-500 text-xs flex items-center gap-2"><Trash2 size={14}/> Empty Recycle Bin</button>
+                       </>
+                   )}
+                </>
+            ) : globalContextMenu.type === 'item' && globalContextMenu.targetItem ? (
                 <>
                   <button onClick={() => { 
                       const itm = globalContextMenu.targetItem as Item;
@@ -2255,20 +2412,6 @@ const App = () => {
                         )}
                       </>
                   )}
-                </>
-            ) : globalContextMenu.type === 'app' ? (
-                <>
-                   <button onClick={() => { openApp(globalContextMenu.targetItem as API.AppDefinition); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><ExternalLink size={14}/> Open</button>
-                   {(globalContextMenu.targetItem?.type === 'webapp' || globalContextMenu.targetItem?.id === 'youtube' || globalContextMenu.targetItem?.type === 'system') && (
-                       <button onClick={() => { setModal({ type: 'properties', title: `${globalContextMenu.targetItem?.name} Properties`, targetItem: globalContextMenu.targetItem as any }); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-slate-200"><Settings size={14}/> Properties</button>
-                   )}
-                   {globalContextMenu.targetItem?.id === 'recycle-bin' && (
-                       <>
-                         <div className="h-px bg-slate-800 my-1"></div>
-                         <button onClick={() => { executeAction('restore_all'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-slate-800 text-xs flex items-center gap-2 text-green-400"><RotateCcw size={14}/> Restore All</button>
-                         <button onClick={() => { executeAction('empty_bin'); setGlobalContextMenu(null); }} className="w-full text-left px-3 py-2 hover:bg-red-500/10 text-red-500 text-xs flex items-center gap-2"><Trash2 size={14}/> Empty Recycle Bin</button>
-                       </>
-                   )}
                 </>
             ) : globalContextMenu.type === 'folder-background' ? (
                 globalContextMenu.isRecycleBin ? (
