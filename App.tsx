@@ -9,7 +9,7 @@ import {
   CheckCheck, MessageSquare, Reply, Send, User, Clock,
   Grid, Monitor, Globe, Settings, ShoppingBag, Minus, Square, Search, Wifi,
   Maximize2, MonitorCheck, ExternalLink, Minimize2, LayoutGrid, Youtube, Play, Pause, SkipForward, Music,
-  UploadCloud, RefreshCcw, Hand, Power, Focus, LayoutTemplate, PenTool, Crop
+  UploadCloud, RefreshCcw, Hand, Power, Focus, LayoutTemplate, PenTool, Crop, Calculator
 } from 'lucide-react';
 import * as API from './services/api';
 import * as DB from './services/db';
@@ -21,6 +21,7 @@ import { UploadZone } from './components/UploadZone';
 import { ImageCard } from './components/ImageCard';
 import { NotesApp } from './components/NotesApp';
 import { ImageCropper } from './components/ImageCropper';
+import { CalculatorApp } from './components/CalculatorApp';
 
 // --- CONSTANTS ---
 const DEFAULT_YOUTUBE_KEYS = [
@@ -486,6 +487,7 @@ const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId, onReq
      { id: 'notes', name: 'Notes', url: 'internal://notes', icon: 'file-text' },
      { id: 'gallery', name: 'Gallery', url: 'internal://gallery', icon: 'image' },
      { id: 'youtube', name: 'YouTube', url: 'internal://youtube', icon: 'youtube' },
+     { id: 'calculator', name: 'Calculator', url: 'internal://calculator', icon: 'https://upload.wikimedia.org/wikipedia/commons/6/6c/Ios_calculator_icon_big.png' },
      { id: 'spotify', name: 'Spotify', url: 'https://open.spotify.com/embed', icon: 'music' },
      { id: 'canva', name: 'Canva', url: 'https://www.canva.com', icon: 'https://upload.wikimedia.org/wikipedia/commons/0/08/Canva_icon_2021.svg', launchMode: 'external' },
      { id: 'figma', name: 'Figma', url: 'https://www.figma.com', icon: 'https://upload.wikimedia.org/wikipedia/commons/3/33/Figma-logo.svg', launchMode: 'external' },
@@ -1738,6 +1740,15 @@ const App = () => {
         return;
     }
 
+    let defaultWidth = 900;
+    let defaultHeight = 600;
+
+    // Special sizing for Calculator
+    if (app.id === 'calculator') {
+        defaultWidth = 340;
+        defaultHeight = 540;
+    }
+
     const newWindow = {
       instanceId: Date.now().toString() + Math.random(), 
       appId: app.id, 
@@ -1747,7 +1758,7 @@ const App = () => {
       isMinimized: false, 
       isMaximized: false, 
       position: { x: 100 + (windows.length * 30), y: 50 + (windows.length * 30) }, 
-      size: { w: 900, h: 600 }
+      size: { w: defaultWidth, h: defaultHeight }
     };
     setWindows([...windows, newWindow]); 
     setActiveWindowId(newWindow.instanceId);
@@ -1847,6 +1858,7 @@ const App = () => {
                     app.icon === 'youtube' ? <Youtube size={28} className="text-red-500 drop-shadow-lg" /> :
                     app.icon === 'file-text' ? <FileText size={28} className="text-yellow-500 drop-shadow-lg"/> :
                     app.icon === 'trash' ? <Trash2 size={28} className="text-red-400 drop-shadow-lg"/> :
+                    app.icon === 'calculator' ? <Calculator size={28} className="text-orange-500 drop-shadow-lg"/> :
                     <Globe size={28} className="text-emerald-400 drop-shadow-lg"/>}
                     </div>
                     <span className="text-[10px] text-white font-bold text-shadow text-center line-clamp-2 px-1 pointer-events-none">{app.name}</span>
@@ -1875,6 +1887,7 @@ const App = () => {
                   win.appId === 'settings' ? <Settings size={14}/> : 
                   win.appId === 'youtube' ? <Youtube size={14}/> :
                   win.appId === 'notes' ? <FileText size={14}/> :
+                  win.appId === 'calculator' ? <Calculator size={14}/> :
                   win.appData.icon === 'image' ? <ImageIcon size={14}/> : 
                   win.appData.icon.startsWith('http') ? <img src={win.appData.icon} className="w-full h-full object-contain"/> :
                   <Globe size={14}/>}
@@ -1942,9 +1955,10 @@ const App = () => {
               />
             )}
             {win.appId === 'youtube' && <YouTubeApp customKeys={config?.youtubeApiKeys} />}
+            {win.appId === 'calculator' && <CalculatorApp />}
             {win.appId === 'settings' && <SettingsApp config={config!} systemFolderId={systemFolderId} addNotification={addNotification} onSave={async (c:any)=>{ try { await API.saveSystemConfig(c); setConfig(c); addNotification("Pengaturan disimpan", "success"); } catch(e) { addNotification("Gagal menyimpan", "error"); } }} installPrompt={deferredPrompt} onInstallPWA={handleInstallClick} />}
             {(win.appId === 'app-store' || win.appId === 'store') && <AppStoreApp config={config!} setConfig={setConfig} addNotification={addNotification} systemFolderId={systemFolderId} onRequestCrop={handleRequestCrop} />}
-            {(win.appData.type === 'webapp') && win.appId !== 'youtube' && win.appId !== 'canva' && win.appId !== 'figma' && (
+            {(win.appData.type === 'webapp') && win.appId !== 'youtube' && win.appId !== 'canva' && win.appId !== 'figma' && win.appId !== 'calculator' && (
               win.appData.launchMode === 'external' ? (
                   <GenericExternalApp 
                       app={win.appData} 
@@ -2003,6 +2017,7 @@ const App = () => {
                      app.icon === 'youtube' ? <Youtube size={24} className="text-red-500"/> :
                      app.icon === 'file-text' ? <FileText size={24} className="text-yellow-500"/> :
                      app.icon === 'trash' ? <Trash2 size={24} className="text-red-400"/> :
+                     app.icon === 'calculator' ? <Calculator size={24} className="text-orange-500"/> :
                      <Globe size={24} className="text-emerald-400"/>}
                  </div>
                  <span className="text-[10px] text-white font-medium truncate w-full text-center group-hover:text-blue-400">{app.name}</span>
@@ -2042,12 +2057,13 @@ const App = () => {
            {windows.map(win => (
              <button key={win.instanceId} onClick={() => { if (win.isMinimized) toggleMinimize(win.instanceId); setActiveWindowId(win.instanceId); }}
                      className={`p-2 rounded-xl hover:bg-white/10 transition-all relative group flex-shrink-0 ${activeWindowId === win.instanceId && !win.isMinimized ? 'bg-white/10' : 'opacity-60'}`}>
-                <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-white text-[10px] font-bold shadow-lg overflow-hidden ${win.appId === 'file-explorer' ? (win.args?.folderId === recycleBinId ? 'bg-red-900' : 'bg-blue-600') : (win.appId === 'app-store' || win.appId === 'store') ? 'bg-pink-600' : win.appId === 'youtube' ? 'bg-red-600' : win.appId === 'notes' ? 'bg-yellow-600' : win.appData.icon === 'image' ? 'bg-pink-500' : win.appData.icon.startsWith('http') ? 'bg-white' : 'bg-slate-700'}`}>
+                <div className={`w-7 h-7 rounded-lg flex items-center justify-center text-white text-[10px] font-bold shadow-lg overflow-hidden ${win.appId === 'file-explorer' ? (win.args?.folderId === recycleBinId ? 'bg-red-900' : 'bg-blue-600') : (win.appId === 'app-store' || win.appId === 'store') ? 'bg-pink-600' : win.appId === 'youtube' ? 'bg-red-600' : win.appId === 'notes' ? 'bg-yellow-600' : win.appId === 'calculator' ? 'bg-orange-600' : win.appData.icon === 'image' ? 'bg-pink-500' : win.appData.icon.startsWith('http') ? 'bg-white' : 'bg-slate-700'}`}>
                    {win.appId === 'file-explorer' ? (win.args?.folderId === recycleBinId ? <Trash2 size={14}/> : <Folder size={14}/>) : 
                     (win.appId === 'app-store' || win.appId === 'store') ? <ShoppingBag size={14}/> : 
                     win.appId === 'settings' ? <Settings size={14}/> : 
                     win.appId === 'youtube' ? <Youtube size={14}/> :
                     win.appId === 'notes' ? <FileText size={14}/> :
+                    win.appId === 'calculator' ? <Calculator size={14}/> :
                     win.appData.icon === 'image' ? <ImageIcon size={14} /> : 
                     win.appData.icon.startsWith('http') ? <img src={win.appData.icon} className="w-full h-full object-cover"/> :
                     win.title.charAt(0)}
@@ -2230,6 +2246,7 @@ const App = () => {
                                     (modal.targetItem as API.AppDefinition)?.icon === 'youtube' ? <Youtube size={32} className="text-red-500"/> :
                                     (modal.targetItem as API.AppDefinition)?.icon === 'file-text' ? <FileText size={32} className="text-yellow-500"/> :
                                     (modal.targetItem as API.AppDefinition)?.icon === 'trash' ? <Trash2 size={32} className="text-red-400"/> :
+                                    (modal.targetItem as API.AppDefinition)?.icon === 'calculator' ? <Calculator size={32} className="text-orange-500"/> :
                                     <Globe size={32} className="text-emerald-400"/>
                                )}
 
