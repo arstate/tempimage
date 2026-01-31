@@ -1349,15 +1349,57 @@ const App = () => {
   // PWA Install Prompt State
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
 
-  const toggleFullscreen = () => {
-    if (!document.fullscreenElement) { document.documentElement.requestFullscreen().catch(e => console.error(e)); } 
-    else { if (document.exitFullscreen) document.exitFullscreen(); }
+  const toggleFullscreen = async () => {
+    if (!document.fullscreenElement) {
+      try {
+        await document.documentElement.requestFullscreen();
+        // Feature: Prevent Esc from exiting fullscreen using Keyboard Lock API
+        if ('keyboard' in navigator && 'lock' in (navigator as any).keyboard) {
+           try {
+              await (navigator as any).keyboard.lock(['Escape']);
+           } catch(e) {
+              console.warn("Keyboard lock failed:", e);
+           }
+        }
+      } catch (e) {
+         console.error("Fullscreen failed:", e);
+      }
+    }
+    else {
+      if (document.exitFullscreen) {
+         // Release keyboard lock when exiting manually
+         if ('keyboard' in navigator && 'unlock' in (navigator as any).keyboard) {
+           (navigator as any).keyboard.unlock();
+         }
+         document.exitFullscreen();
+      }
+    }
   };
 
   useEffect(() => {
     const handleFsChange = () => setIsFullscreen(!!document.fullscreenElement);
     document.addEventListener('fullscreenchange', handleFsChange);
     return () => document.removeEventListener('fullscreenchange', handleFsChange);
+  }, []);
+
+  // NEW: Ctrl + L Shortcut for Pointer Unlock
+  useEffect(() => {
+    const handleGlobalShortcuts = (e: KeyboardEvent) => {
+        // Unlock Mouse: Ctrl + L
+        if (e.ctrlKey && e.key.toLowerCase() === 'l') {
+            e.preventDefault();
+            if (document.pointerLockElement) {
+                document.exitPointerLock();
+                // We add a notification for feedback, but since addNotification is defined below in scope,
+                // we can just rely on the action or move addNotification up. 
+                // For simplicity in this structure, we just perform the action.
+                console.log("Mouse Unlocked via Ctrl+L");
+            }
+        }
+    };
+
+    window.addEventListener('keydown', handleGlobalShortcuts);
+    return () => window.removeEventListener('keydown', handleGlobalShortcuts);
   }, []);
 
   // --- PWA INSTALL HANDLER ---
