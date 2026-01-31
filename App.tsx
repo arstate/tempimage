@@ -377,6 +377,7 @@ const GenericExternalApp = ({ app, onLaunch, onCloseApp, onMinimize }: { app: AP
         const screenWidth = window.screen.availWidth;
         const screenHeight = window.screen.availHeight - taskbarGap;
         
+        // --- KEY UPDATE: Add popup=yes ---
         externalWindowRef.current = window.open(
           app.url, 
           `ExternalWindow-${app.id}`, 
@@ -490,7 +491,8 @@ const AppStoreApp = ({ config, setConfig, addNotification, systemFolderId, onReq
      { id: 'gallery', name: 'Gallery', url: 'internal://gallery', icon: 'image' },
      { id: 'youtube', name: 'YouTube', url: 'internal://youtube', icon: 'youtube' },
      { id: 'calculator', name: 'Calculator', url: 'internal://calculator', icon: 'https://upload.wikimedia.org/wikipedia/commons/6/6c/Ios_calculator_icon_big.png' },
-     { id: 'spotify', name: 'Spotify', url: 'https://open.spotify.com/embed', icon: 'music' },
+     // UPDATE: Configure Spotify to open externally by default
+     { id: 'spotify', name: 'Spotify', url: 'https://open.spotify.com', icon: 'music', launchMode: 'external' },
      { id: 'canva', name: 'Canva', url: 'https://www.canva.com', icon: 'https://upload.wikimedia.org/wikipedia/commons/0/08/Canva_icon_2021.svg', launchMode: 'external' },
      { id: 'figma', name: 'Figma', url: 'https://www.figma.com', icon: 'https://upload.wikimedia.org/wikipedia/commons/3/33/Figma-logo.svg', launchMode: 'external' },
      { id: 'google-maps', name: 'Maps', url: 'https://www.google.com/maps/embed', icon: 'globe' }
