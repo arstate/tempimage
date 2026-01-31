@@ -380,7 +380,7 @@ const GenericExternalApp = ({ app, onLaunch, onCloseApp, onMinimize }: { app: AP
         externalWindowRef.current = window.open(
           app.url, 
           `ExternalWindow-${app.id}`, 
-          `width=${screenWidth},height=${screenHeight},top=0,left=0,toolbar=no,menubar=no,location=no,status=no,resizable=yes,scrollbars=yes`
+          `popup=yes,width=${screenWidth},height=${screenHeight},top=0,left=0,toolbar=no,menubar=no,location=no,status=no,resizable=yes,scrollbars=yes`
         );
     }
 
