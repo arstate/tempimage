@@ -40,6 +40,7 @@ export interface SystemConfig {
     scale?: number;
     refreshRate?: number;
     hardwareAcceleration?: boolean;
+    orientation?: 'landscape' | 'portrait' | 'landscape-flipped' | 'portrait-flipped';
   };
 }
 

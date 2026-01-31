@@ -1,4 +1,5 @@
 
+
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { 
   Folder, FileText, Image as ImageIcon, MoreVertical, 
@@ -10,7 +11,7 @@ import {
   Grid, Monitor, Globe, Settings, ShoppingBag, Minus, Square, Search, Wifi,
   Maximize2, MonitorCheck, ExternalLink, Minimize2, LayoutGrid, Youtube, Play, Pause, SkipForward, Music,
   UploadCloud, RefreshCcw, Hand, Power, Focus, LayoutTemplate, PenTool, Crop, Calculator,
-  Activity, Pin, PinOff, Zap, MousePointer2, Smartphone
+  Activity, Pin, PinOff, Zap, MousePointer2, Smartphone, RotateCw
 } from 'lucide-react';
 import * as API from './services/api';
 import * as DB from './services/db';
@@ -1100,6 +1101,24 @@ const SettingsApp = ({ config, onSave, systemFolderId, addNotification, installP
                         </div>
                     </div>
 
+                    {/* Display Orientation */}
+                    <div>
+                        <label className="text-sm text-white font-medium flex items-center gap-2 mb-1">
+                            <RotateCw size={16} className="text-blue-400"/> Display Orientation
+                        </label>
+                        <select 
+                            value={localConfig.display?.orientation || 'landscape'}
+                            onChange={(e) => updateDisplaySettings('orientation', e.target.value)}
+                            className="w-full bg-slate-900 text-white text-xs p-2 rounded outline-none border border-slate-700 focus:border-blue-500"
+                        >
+                            <option value="landscape">Landscape</option>
+                            <option value="portrait">Portrait</option>
+                            <option value="landscape-flipped">Landscape (flipped)</option>
+                            <option value="portrait-flipped">Portrait (flipped)</option>
+                        </select>
+                        <p className="text-[10px] text-slate-500 mt-1">Mengunci rotasi desktop.</p>
+                    </div>
+
                     {/* Scaling (Zoom) */}
                     <div>
                         <label className="text-sm text-white font-medium flex items-center gap-2 mb-1">
@@ -1398,7 +1417,8 @@ const App = () => {
                 resolutionMode: 'native',
                 scale: 1,
                 refreshRate: 60,
-                hardwareAcceleration: true
+                hardwareAcceleration: true,
+                orientation: 'landscape'
             };
             configUpdated = true;
         }
@@ -1819,7 +1839,8 @@ const App = () => {
                  resolutionMode: 'native',
                  scale: 1,
                  refreshRate: 60,
-                 hardwareAcceleration: true
+                 hardwareAcceleration: true,
+                 orientation: 'landscape'
              };
          }
 
@@ -1900,9 +1921,32 @@ const App = () => {
     winEl.style.willChange = actionType === 'move' ? 'left, top' : 'width, height, left, top';
     winEl.style.transform = 'translateZ(0)';
     let currentX = initialPos.x; let currentY = initialPos.y; let currentW = initialSize.w; let currentH = initialSize.h;
+    
+    // Get scale and orientation for coordinate mapping
+    const containerScale = config?.display?.scale || 1;
+    const orientation = config?.display?.orientation || 'landscape';
+
     const onPointerMove = (moveEvent: PointerEvent) => {
         requestAnimationFrame(() => {
-          const dx = moveEvent.pageX - startX; const dy = moveEvent.pageY - startY;
+          // Calculate raw delta in scaled coordinate space
+          const rawDx = (moveEvent.pageX - startX) / containerScale;
+          const rawDy = (moveEvent.pageY - startY) / containerScale;
+          
+          let dx = rawDx;
+          let dy = rawDy;
+
+          // Map mouse movement to local coordinate system based on rotation
+          if (orientation === 'portrait') { // 90 deg clockwise
+              dx = rawDy;
+              dy = -rawDx;
+          } else if (orientation === 'landscape-flipped') { // 180 deg
+              dx = -rawDx;
+              dy = -rawDy;
+          } else if (orientation === 'portrait-flipped') { // 270 deg clockwise
+              dx = -rawDy;
+              dy = rawDx;
+          }
+
           if (actionType === 'move') {
               currentX = initialPos.x + dx; currentY = initialPos.y + dy;
               winEl.style.left = `${currentX}px`; winEl.style.top = `${currentY}px`;
@@ -2046,6 +2090,13 @@ const App = () => {
   let containerHeight = '100%';
   let containerScale = displayConfig?.scale || 1;
   let transformOrigin = 'center center';
+  
+  // Rotation Logic
+  const orientation = displayConfig?.orientation || 'landscape';
+  let rotationDeg = 0;
+  if (orientation === 'portrait') rotationDeg = 90;
+  else if (orientation === 'landscape-flipped') rotationDeg = 180;
+  else if (orientation === 'portrait-flipped') rotationDeg = 270;
 
   if (isCustomResolution) {
       if (displayConfig?.resolutionMode === 'custom') {
@@ -2072,12 +2123,12 @@ const App = () => {
         
         {/* DESKTOP CONTAINER WITH SCALING AND RESOLUTION */}
         <div 
-            className={`relative overflow-hidden transition-transform duration-300 ease-in-out box-border`}
+            className={`relative overflow-hidden transition-transform duration-500 ease-in-out box-border`}
             style={{ 
                 width: containerWidth, 
                 height: containerHeight,
-                transform: `scale(${containerScale})`,
-                transformOrigin: 'top left',
+                transform: `scale(${containerScale}) rotate(${rotationDeg}deg)`,
+                transformOrigin: 'center center',
                 // Center the container if it's smaller than viewport or scaled
                 position: 'absolute',
                 left: isCustomResolution ? '50%' : '0',
